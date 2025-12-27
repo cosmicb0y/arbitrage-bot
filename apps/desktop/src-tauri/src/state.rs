@@ -50,11 +50,14 @@ impl Default for BotStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpportunityData {
     pub id: u64,
+    pub symbol: String,
     pub source_exchange: String,
     pub target_exchange: String,
     pub premium_bps: i32,
     pub source_price: f64,
     pub target_price: f64,
+    pub net_profit_bps: i32,
+    pub confidence_score: u8,
     pub timestamp: u64,
 }
 
@@ -87,6 +90,23 @@ pub struct ExchangeRateData {
     pub timestamp: u64,
 }
 
+/// Market info for a single exchange.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketInfo {
+    pub base: String,
+    pub symbol: String,
+    pub exchange: String,
+}
+
+/// Common markets data from CLI server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommonMarketsData {
+    pub common_bases: Vec<String>,
+    pub markets: std::collections::HashMap<String, Vec<MarketInfo>>,
+    pub exchanges: Vec<String>,
+    pub timestamp: u64,
+}
+
 /// WebSocket message types from CLI server.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -101,8 +121,14 @@ pub enum WsServerMessage {
     Stats(BotStats),
     #[serde(rename = "opportunity")]
     Opportunity(OpportunityData),
+    /// Batch of opportunities (for initial sync)
+    #[serde(rename = "opportunities")]
+    Opportunities(Vec<OpportunityData>),
     #[serde(rename = "exchange_rate")]
     ExchangeRate(ExchangeRateData),
+    /// Common markets across exchanges
+    #[serde(rename = "common_markets")]
+    CommonMarkets(CommonMarketsData),
 }
 
 /// Application state shared across commands.
@@ -121,6 +147,8 @@ pub struct AppState {
     config: std::sync::RwLock<ExecutionConfig>,
     /// Exchange rate
     exchange_rate: std::sync::RwLock<Option<ExchangeRateData>>,
+    /// Common markets
+    common_markets: std::sync::RwLock<Option<CommonMarketsData>>,
 }
 
 impl AppState {
@@ -133,6 +161,7 @@ impl AppState {
             opportunities: std::sync::RwLock::new(Vec::new()),
             config: std::sync::RwLock::new(ExecutionConfig::default()),
             exchange_rate: std::sync::RwLock::new(None),
+            common_markets: std::sync::RwLock::new(None),
         }
     }
 
@@ -177,11 +206,25 @@ impl AppState {
 
     pub fn add_opportunity(&self, opp: OpportunityData) {
         let mut opps = self.opportunities.write().unwrap();
-        opps.insert(0, opp);
-        // Keep only last 50
-        if opps.len() > 50 {
-            opps.truncate(50);
+        // Deduplicate by exchange pair
+        let exists = opps.iter().position(|o| {
+            o.symbol == opp.symbol
+                && o.source_exchange == opp.source_exchange
+                && o.target_exchange == opp.target_exchange
+        });
+        if let Some(idx) = exists {
+            opps[idx] = opp;
+        } else {
+            opps.insert(0, opp);
+            // Keep only last 50
+            if opps.len() > 50 {
+                opps.truncate(50);
+            }
         }
+    }
+
+    pub fn set_opportunities(&self, opportunities: Vec<OpportunityData>) {
+        *self.opportunities.write().unwrap() = opportunities;
     }
 
     pub fn get_opportunities(&self) -> Vec<OpportunityData> {
@@ -202,6 +245,14 @@ impl AppState {
 
     pub fn get_exchange_rate(&self) -> Option<ExchangeRateData> {
         self.exchange_rate.read().unwrap().clone()
+    }
+
+    pub fn update_common_markets(&self, markets: CommonMarketsData) {
+        *self.common_markets.write().unwrap() = Some(markets);
+    }
+
+    pub fn get_common_markets(&self) -> Option<CommonMarketsData> {
+        self.common_markets.read().unwrap().clone()
     }
 }
 
@@ -272,9 +323,18 @@ async fn connect_to_server(
                             state.add_opportunity(opp.clone());
                             let _ = app.emit("new_opportunity", opp);
                         }
+                        WsServerMessage::Opportunities(opps) => {
+                            // Batch opportunities (initial sync)
+                            state.set_opportunities(opps.clone());
+                            let _ = app.emit("opportunities", opps);
+                        }
                         WsServerMessage::ExchangeRate(rate) => {
                             state.update_exchange_rate(rate.clone());
                             let _ = app.emit("exchange_rate", rate);
+                        }
+                        WsServerMessage::CommonMarkets(markets) => {
+                            state.update_common_markets(markets.clone());
+                            let _ = app.emit("common_markets", markets);
                         }
                     }
                 }

@@ -56,6 +56,7 @@ fn main() {
             commands::set_server_url,
             commands::is_connected,
             commands::get_exchange_rate,
+            commands::get_common_markets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

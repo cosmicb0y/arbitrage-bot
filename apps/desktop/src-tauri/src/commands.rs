@@ -1,6 +1,6 @@
 //! Tauri IPC commands.
 
-use crate::state::{AppState, BotStats, ExchangeRateData, ExecutionConfig, OpportunityData, PriceData};
+use crate::state::{AppState, BotStats, CommonMarketsData, ExchangeRateData, ExecutionConfig, OpportunityData, PriceData};
 use std::sync::Arc;
 use tauri::State;
 use tracing::info;
@@ -86,6 +86,12 @@ pub fn is_connected(state: State<'_, Arc<AppState>>) -> bool {
 #[tauri::command]
 pub fn get_exchange_rate(state: State<'_, Arc<AppState>>) -> Option<ExchangeRateData> {
     state.get_exchange_rate()
+}
+
+/// Get common markets across exchanges.
+#[tauri::command]
+pub fn get_common_markets(state: State<'_, Arc<AppState>>) -> Option<CommonMarketsData> {
+    state.get_common_markets()
 }
 
 #[cfg(test)]
