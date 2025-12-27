@@ -1,13 +1,18 @@
 import { useState } from "react";
 import Dashboard from "./components/Dashboard";
 import Opportunities from "./components/Opportunities";
+import Markets from "./components/Markets";
 import Settings from "./components/Settings";
 import Header from "./components/Header";
+import { useCommonMarkets } from "./hooks/useTauri";
 
-type Tab = "dashboard" | "opportunities" | "settings";
+type Tab = "dashboard" | "opportunities" | "markets" | "settings";
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
+
+  // Subscribe to common markets at app level to ensure we don't miss initial data
+  useCommonMarkets();
 
   return (
     <div className="min-h-screen bg-dark-900 text-white">
@@ -16,6 +21,7 @@ function App() {
       <main className="p-4">
         {activeTab === "dashboard" && <Dashboard />}
         {activeTab === "opportunities" && <Opportunities />}
+        {activeTab === "markets" && <Markets />}
         {activeTab === "settings" && <Settings />}
       </main>
     </div>

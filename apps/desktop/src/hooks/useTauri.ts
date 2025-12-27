@@ -7,6 +7,7 @@ import type {
   BotStats,
   ExecutionConfig,
   ExchangeRate,
+  CommonMarkets,
 } from "../types";
 
 // Check if running inside Tauri
@@ -19,8 +20,8 @@ const WS_SERVER_URL = "ws://127.0.0.1:9001/ws";
 
 // WebSocket message types from CLI server
 interface WsServerMessage {
-  type: "price" | "prices" | "stats" | "opportunity" | "exchange_rate";
-  data: PriceData | PriceData[] | BotStats | ArbitrageOpportunity | ExchangeRate;
+  type: "price" | "prices" | "stats" | "opportunity" | "opportunities" | "exchange_rate" | "common_markets";
+  data: PriceData | PriceData[] | BotStats | ArbitrageOpportunity | ArbitrageOpportunity[] | ExchangeRate | CommonMarkets;
 }
 
 // Shared WebSocket connection for browser mode
@@ -52,6 +53,7 @@ class WebSocketManager {
     ws.onmessage = (event) => {
       try {
         const msg: WsServerMessage = JSON.parse(event.data);
+        console.log("WS message:", msg.type);
         this.handlers.forEach((handler) => handler(msg));
       } catch (e) {
         // Ignore parse errors
@@ -188,9 +190,29 @@ export function useOpportunities() {
         if (msg.type === "opportunity") {
           const opp = msg.data as ArbitrageOpportunity;
           setOpportunities((prev) => {
+            // Deduplicate by exchange pair
+            const exists = prev.some(
+              (p) =>
+                p.symbol === opp.symbol &&
+                p.source_exchange === opp.source_exchange &&
+                p.target_exchange === opp.target_exchange
+            );
+            if (exists) {
+              return prev.map((p) =>
+                p.symbol === opp.symbol &&
+                p.source_exchange === opp.source_exchange &&
+                p.target_exchange === opp.target_exchange
+                  ? opp
+                  : p
+              );
+            }
             const updated = [opp, ...prev];
             return updated.slice(0, 50);
           });
+        } else if (msg.type === "opportunities") {
+          // Initial batch of opportunities
+          const opps = msg.data as ArbitrageOpportunity[];
+          setOpportunities(opps);
         }
       });
 
@@ -198,16 +220,43 @@ export function useOpportunities() {
     }
 
     // Tauri mode
-    let unlisten: UnlistenFn | undefined;
+    let unlistenNew: UnlistenFn | undefined;
+    let unlistenBatch: UnlistenFn | undefined;
 
     const setup = async () => {
-      unlisten = await listen<ArbitrageOpportunity>(
+      // Listen for single new opportunity
+      unlistenNew = await listen<ArbitrageOpportunity>(
         "new_opportunity",
         (event) => {
+          const opp = event.payload;
           setOpportunities((prev) => {
-            const updated = [event.payload, ...prev];
+            // Deduplicate by exchange pair
+            const exists = prev.some(
+              (p) =>
+                p.symbol === opp.symbol &&
+                p.source_exchange === opp.source_exchange &&
+                p.target_exchange === opp.target_exchange
+            );
+            if (exists) {
+              return prev.map((p) =>
+                p.symbol === opp.symbol &&
+                p.source_exchange === opp.source_exchange &&
+                p.target_exchange === opp.target_exchange
+                  ? opp
+                  : p
+              );
+            }
+            const updated = [opp, ...prev];
             return updated.slice(0, 50);
           });
+        }
+      );
+
+      // Listen for batch opportunities (initial sync)
+      unlistenBatch = await listen<ArbitrageOpportunity[]>(
+        "opportunities",
+        (event) => {
+          setOpportunities(event.payload);
         }
       );
 
@@ -222,7 +271,8 @@ export function useOpportunities() {
     setup();
 
     return () => {
-      if (unlisten) unlisten();
+      if (unlistenNew) unlistenNew();
+      if (unlistenBatch) unlistenBatch();
     };
   }, []);
 
@@ -385,4 +435,53 @@ export function useExchangeRate() {
   }, []);
 
   return exchangeRate;
+}
+
+// Cache for common markets (persists across component remounts)
+let cachedCommonMarkets: CommonMarkets | null = null;
+
+export function useCommonMarkets() {
+  const [commonMarkets, setCommonMarkets] = useState<CommonMarkets | null>(cachedCommonMarkets);
+
+  useEffect(() => {
+    // Browser fallback
+    if (!isTauri()) {
+      const unsubscribe = wsManager.subscribe((msg) => {
+        if (msg.type === "common_markets") {
+          cachedCommonMarkets = msg.data as CommonMarkets;
+          setCommonMarkets(cachedCommonMarkets);
+        }
+      });
+
+      return unsubscribe;
+    }
+
+    // Tauri mode
+    let unlisten: UnlistenFn | undefined;
+
+    const setup = async () => {
+      unlisten = await listen<CommonMarkets>("common_markets", (event) => {
+        cachedCommonMarkets = event.payload;
+        setCommonMarkets(cachedCommonMarkets);
+      });
+
+      try {
+        const data = await invoke<CommonMarkets>("get_common_markets");
+        if (data && data.common_bases.length > 0) {
+          cachedCommonMarkets = data;
+          setCommonMarkets(cachedCommonMarkets);
+        }
+      } catch (e) {
+        console.error("Failed to fetch initial common markets:", e);
+      }
+    };
+
+    setup();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  return commonMarkets;
 }

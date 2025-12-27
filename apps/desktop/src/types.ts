@@ -12,11 +12,14 @@ export interface PriceData {
 
 export interface ArbitrageOpportunity {
   id: number;
+  symbol: string;
   source_exchange: string;
   target_exchange: string;
   source_price: number;
   target_price: number;
   premium_bps: number;
+  net_profit_bps: number;
+  confidence_score: number;
   timestamp: number;
 }
 
@@ -38,5 +41,18 @@ export interface ExecutionConfig {
 export interface ExchangeRate {
   usd_krw: number;
   api_rate?: number;
+  timestamp: number;
+}
+
+export interface MarketInfo {
+  base: string;
+  symbol: string;
+  exchange: string;
+}
+
+export interface CommonMarkets {
+  common_bases: string[];
+  markets: Record<string, MarketInfo[]>;
+  exchanges: string[];
   timestamp: number;
 }

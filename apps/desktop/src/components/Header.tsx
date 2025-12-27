@@ -2,7 +2,7 @@ import { useStats, useBotControl } from "../hooks/useTauri";
 
 interface HeaderProps {
   activeTab: string;
-  onTabChange: (tab: "dashboard" | "opportunities" | "settings") => void;
+  onTabChange: (tab: "dashboard" | "opportunities" | "markets" | "settings") => void;
 }
 
 function Header({ activeTab, onTabChange }: HeaderProps) {
@@ -23,7 +23,7 @@ function Header({ activeTab, onTabChange }: HeaderProps) {
           <h1 className="text-xl font-bold text-primary-500">Arbitrage Bot</h1>
 
           <nav className="flex space-x-1">
-            {(["dashboard", "opportunities", "settings"] as const).map(
+            {(["dashboard", "opportunities", "markets", "settings"] as const).map(
               (tab) => (
                 <button
                   key={tab}

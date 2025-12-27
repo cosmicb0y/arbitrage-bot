@@ -3,6 +3,20 @@ export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
+      animation: {
+        "row-flash": "row-flash 0.5s ease-out",
+        "live-dot": "live-dot 0.6s ease-in-out infinite",
+      },
+      keyframes: {
+        "row-flash": {
+          "0%": { backgroundColor: "rgba(59, 130, 246, 0.3)" },
+          "100%": { backgroundColor: "transparent" },
+        },
+        "live-dot": {
+          "0%, 100%": { opacity: "1", transform: "scale(1)" },
+          "50%": { opacity: "0.4", transform: "scale(0.7)" },
+        },
+      },
       colors: {
         primary: {
           50: "#eff6ff",
