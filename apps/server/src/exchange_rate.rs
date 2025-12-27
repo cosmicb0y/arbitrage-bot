@@ -33,21 +33,6 @@ pub fn get_usd_krw_rate() -> Option<f64> {
     Some(rate as f64 / 100.0)
 }
 
-/// Get current USD/KRW exchange rate, with fallback for internal use.
-pub fn get_usd_krw_rate_or_default() -> f64 {
-    let rate = EXCHANGE_RATE.load(Ordering::Relaxed);
-    if rate == 0 {
-        1350.0 // Default fallback
-    } else {
-        rate as f64 / 100.0
-    }
-}
-
-/// Convert KRW to USD using current exchange rate.
-pub fn krw_to_usd(krw: f64) -> f64 {
-    krw / get_usd_krw_rate_or_default()
-}
-
 /// Get API-based USD/KRW rate (from exchange rate API).
 /// Returns None if not yet fetched.
 pub fn get_api_rate() -> Option<f64> {
@@ -126,16 +111,6 @@ pub async fn run_exchange_rate_updater(broadcast_tx: BroadcastSender) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_krw_to_usd() {
-        // Set a known rate for testing
-        EXCHANGE_RATE.store(1350_00, Ordering::Relaxed);
-        RATE_LOADED.store(true, Ordering::Relaxed);
-
-        let usd = krw_to_usd(135_000_000.0); // 135M KRW
-        assert!((usd - 100_000.0).abs() < 0.01); // Should be ~$100,000
-    }
 
     #[test]
     fn test_get_usd_krw_rate() {

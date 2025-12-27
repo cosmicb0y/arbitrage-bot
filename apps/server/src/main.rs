@@ -195,28 +195,25 @@ async fn run_stats_reporter(state: SharedState, broadcast_tx: BroadcastSender) {
 }
 
 /// Convert Upbit KRW price to USD using USDT/KRW rate from Upbit.
-/// Falls back to exchange rate API if USDT/KRW not available.
-fn convert_krw_to_usd(krw_price: FixedPoint, state: &SharedState) -> FixedPoint {
-    // Try to use USDT/KRW price from Upbit first
-    if let Some(usdt_krw) = state.get_usdt_krw_price() {
-        let rate = usdt_krw.to_f64();
-        if rate > 0.0 {
-            return FixedPoint::from_f64(krw_price.to_f64() / rate);
-        }
+/// Returns None if USDT/KRW rate is not available yet.
+fn convert_krw_to_usd(krw_price: FixedPoint, state: &SharedState) -> Option<FixedPoint> {
+    let usdt_krw = state.get_usdt_krw_price()?;
+    let rate = usdt_krw.to_f64();
+    if rate > 0.0 {
+        Some(FixedPoint::from_f64(krw_price.to_f64() / rate))
+    } else {
+        None
     }
-
-    // Fallback to exchange rate API
-    let rate = exchange_rate::get_usd_krw_rate_or_default();
-    FixedPoint::from_f64(krw_price.to_f64() / rate)
 }
 
 /// Convert Upbit KRW price tick to USD.
-fn convert_upbit_tick_to_usd(tick: &PriceTick, state: &SharedState) -> PriceTick {
-    let price_usd = convert_krw_to_usd(tick.price(), state);
-    let bid_usd = convert_krw_to_usd(tick.bid(), state);
-    let ask_usd = convert_krw_to_usd(tick.ask(), state);
+/// Returns None if USDT/KRW rate is not available yet.
+fn convert_upbit_tick_to_usd(tick: &PriceTick, state: &SharedState) -> Option<PriceTick> {
+    let price_usd = convert_krw_to_usd(tick.price(), state)?;
+    let bid_usd = convert_krw_to_usd(tick.bid(), state)?;
+    let ask_usd = convert_krw_to_usd(tick.ask(), state)?;
 
-    PriceTick::new(tick.exchange(), tick.pair_id(), price_usd, bid_usd, ask_usd)
+    Some(PriceTick::new(tick.exchange(), tick.pair_id(), price_usd, bid_usd, ask_usd))
 }
 
 /// Process Upbit ticker data by market code.
@@ -237,16 +234,18 @@ fn process_upbit_ticker(
         }
         "KRW-BTC" => {
             // Convert BTC/KRW to BTC/USD and broadcast
-            let price_usd = convert_krw_to_usd(price, state);
-            let tick_usd = PriceTick::new(Exchange::Upbit, 1, price_usd, price_usd, price_usd);
+            // Skip if USDT/KRW rate is not available yet
+            if let Some(price_usd) = convert_krw_to_usd(price, state) {
+                let tick_usd = PriceTick::new(Exchange::Upbit, 1, price_usd, price_usd, price_usd);
 
-            // Update state asynchronously (fire and forget for now)
-            let state_clone = state.clone();
-            tokio::spawn(async move {
-                state_clone.update_price(Exchange::Upbit, 1, price_usd).await;
-            });
+                // Update state asynchronously (fire and forget for now)
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    state_clone.update_price(Exchange::Upbit, 1, price_usd).await;
+                });
 
-            ws_server::broadcast_price(broadcast_tx, Exchange::Upbit, 1, &tick_usd);
+                ws_server::broadcast_price(broadcast_tx, Exchange::Upbit, 1, &tick_usd);
+            }
         }
         _ => {
             // Ignore other markets for now
