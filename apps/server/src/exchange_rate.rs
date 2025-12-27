@@ -1,8 +1,9 @@
 //! USD/KRW exchange rate fetching.
 //!
-//! Fetches real-time exchange rate from public API for converting Upbit KRW prices to USD.
+//! Fetches real-time exchange rate from Stockplus API (하나은행 기준).
 
 use crate::ws_server::{self, BroadcastSender};
+use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tracing::{info, warn};
@@ -58,34 +59,38 @@ pub fn get_api_rate() -> Option<f64> {
     }
 }
 
-/// Exchange rate response from API.
-#[derive(Debug, serde::Deserialize)]
-struct ExchangeRateResponse {
-    rates: Rates,
+/// Stockplus API response structure.
+#[derive(Debug, Deserialize)]
+struct StockplusResponse {
+    assets: Vec<ForexAsset>,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct Rates {
-    #[serde(rename = "KRW")]
-    krw: f64,
+/// Individual forex asset from Stockplus API.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForexAsset {
+    id: String,
+    base_price: f64,
 }
 
-/// Fetch exchange rate from API and update the global rate.
+/// Fetch exchange rate from Stockplus API (하나은행 기준).
 pub async fn fetch_exchange_rate() -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
-    // Using exchangerate-api.com free tier (or alternative)
-    // Alternative: https://open.er-api.com/v6/latest/USD
-    let url = "https://open.er-api.com/v6/latest/USD";
+    let url = "https://mweb-api.stockplus.com/api/assets.json?ids=FOREX-KRWUSD";
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    let response: serde_json::Value = client.get(url).send().await?.json().await?;
+    let response: StockplusResponse = client.get(url).send().await?.json().await?;
 
-    // Parse rate from response
-    let rate = response["rates"]["KRW"]
-        .as_f64()
-        .ok_or("KRW rate not found in response")?;
+    // Find USD/KRW rate from response
+    let usd_asset = response
+        .assets
+        .iter()
+        .find(|a| a.id == "FOREX-KRWUSD")
+        .ok_or("FOREX-KRWUSD not found in response")?;
+
+    let rate = usd_asset.base_price;
 
     // Store as integer (rate * 100)
     let rate_int = (rate * 100.0) as u64;
