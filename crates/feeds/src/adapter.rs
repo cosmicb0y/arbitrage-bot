@@ -3,7 +3,7 @@
 //! Each exchange has its own WebSocket message format.
 //! Adapters normalize these into our internal PriceTick format.
 
-use arbitrage_core::{Exchange, FixedPoint, PriceTick};
+use arbitrage_core::{symbol_to_pair_id, Exchange, FixedPoint, PriceTick};
 use serde::Deserialize;
 
 use crate::FeedError;
@@ -42,6 +42,34 @@ struct BinanceBookTicker {
 }
 
 impl BinanceAdapter {
+    /// Map symbol to pair_id.
+    /// Extracts base asset from trading pair (e.g., BTCUSDT -> BTC) and generates pair_id.
+    pub fn symbol_to_pair_id(symbol: &str) -> Option<u32> {
+        let symbol = symbol.to_uppercase();
+        // Extract base asset from USDT/BUSD pairs
+        let base = if symbol.ends_with("USDT") {
+            symbol.strip_suffix("USDT")
+        } else if symbol.ends_with("BUSD") {
+            symbol.strip_suffix("BUSD")
+        } else {
+            None
+        }?;
+
+        Some(symbol_to_pair_id(base))
+    }
+
+    /// Extract base symbol from trading pair (e.g., BTCUSDT -> BTC).
+    pub fn extract_base_symbol(symbol: &str) -> Option<String> {
+        let symbol = symbol.to_uppercase();
+        if symbol.ends_with("USDT") {
+            symbol.strip_suffix("USDT").map(|s| s.to_string())
+        } else if symbol.ends_with("BUSD") {
+            symbol.strip_suffix("BUSD").map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
     /// Parse a 24hr ticker message from Binance.
     pub fn parse_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
         let ticker: BinanceTicker = serde_json::from_str(json)?;
@@ -62,9 +90,61 @@ impl BinanceAdapter {
         ))
     }
 
+    /// Parse a 24hr ticker message and auto-detect pair_id from symbol.
+    pub fn parse_ticker_auto(json: &str) -> Result<PriceTick, FeedError> {
+        let (tick, _) = Self::parse_ticker_with_symbol(json)?;
+        Ok(tick)
+    }
+
+    /// Parse a 24hr ticker message, returning both the tick and the base symbol.
+    pub fn parse_ticker_with_symbol(json: &str) -> Result<(PriceTick, String), FeedError> {
+        let ticker: BinanceTicker = serde_json::from_str(json)?;
+
+        let symbol = Self::extract_base_symbol(&ticker.symbol)
+            .ok_or_else(|| FeedError::ParseError(format!("Unknown symbol: {}", ticker.symbol)))?;
+        let pair_id = symbol_to_pair_id(&symbol);
+
+        let price = ticker.close.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let bid = ticker.bid.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let ask = ticker.ask.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+
+        Ok((PriceTick::new(
+            Exchange::Binance,
+            pair_id,
+            FixedPoint::from_f64(price),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+        ), symbol))
+    }
+
     /// Parse a book ticker message from Binance (best bid/ask only).
     pub fn parse_book_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
         let ticker: BinanceBookTicker = serde_json::from_str(json)?;
+
+        let bid = ticker.bid.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let ask = ticker.ask.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let mid = (bid + ask) / 2.0;
+
+        Ok(PriceTick::new(
+            Exchange::Binance,
+            pair_id,
+            FixedPoint::from_f64(mid),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+        ))
+    }
+
+    /// Parse a book ticker message and auto-detect pair_id from symbol.
+    pub fn parse_book_ticker_auto(json: &str) -> Result<PriceTick, FeedError> {
+        let ticker: BinanceBookTicker = serde_json::from_str(json)?;
+
+        let pair_id = Self::symbol_to_pair_id(&ticker.symbol)
+            .ok_or_else(|| FeedError::ParseError(format!("Unknown symbol: {}", ticker.symbol)))?;
 
         let bid = ticker.bid.parse::<f64>()
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
@@ -130,6 +210,33 @@ struct UpbitTicker {
 }
 
 impl UpbitAdapter {
+    /// Map market code to pair_id.
+    /// Extracts base asset from market code (e.g., KRW-BTC -> BTC) and generates pair_id.
+    pub fn market_to_pair_id(code: &str) -> Option<u32> {
+        let code = code.to_uppercase();
+        if code == "KRW-USDT" {
+            return None; // Special case: used for exchange rate, not trading
+        }
+
+        let base = Self::extract_base_symbol(&code)?;
+        Some(symbol_to_pair_id(&base))
+    }
+
+    /// Extract base symbol from market code (e.g., KRW-BTC -> BTC).
+    pub fn extract_base_symbol(code: &str) -> Option<String> {
+        let code = code.to_uppercase();
+        if code.starts_with("KRW-") {
+            code.strip_prefix("KRW-").map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Check if market code is for USDT (exchange rate).
+    pub fn is_usdt_market(code: &str) -> bool {
+        code.to_uppercase() == "KRW-USDT"
+    }
+
     /// Parse a ticker message from Upbit (JSON format).
     pub fn parse_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
         let ticker: UpbitTicker = serde_json::from_str(json)?;
@@ -277,6 +384,25 @@ struct CoinbaseTicker {
 }
 
 impl CoinbaseAdapter {
+    /// Map product_id to pair_id.
+    /// Extracts base asset from product_id (e.g., BTC-USD -> BTC) and generates pair_id.
+    pub fn product_to_pair_id(product_id: &str) -> Option<u32> {
+        let base = Self::extract_base_symbol(product_id)?;
+        Some(symbol_to_pair_id(&base))
+    }
+
+    /// Extract base symbol from product_id (e.g., BTC-USD -> BTC).
+    pub fn extract_base_symbol(product_id: &str) -> Option<String> {
+        let product_id = product_id.to_uppercase();
+        if product_id.ends_with("-USD") {
+            product_id.strip_suffix("-USD").map(|s| s.to_string())
+        } else if product_id.ends_with("-USDT") {
+            product_id.strip_suffix("-USDT").map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
     /// Parse a ticker message from Coinbase.
     pub fn parse_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
         let ticker: CoinbaseTicker = serde_json::from_str(json)?;
@@ -295,6 +421,41 @@ impl CoinbaseAdapter {
             FixedPoint::from_f64(bid),
             FixedPoint::from_f64(ask),
         ))
+    }
+
+    /// Parse a ticker message and auto-detect pair_id from product_id.
+    pub fn parse_ticker_auto(json: &str) -> Result<PriceTick, FeedError> {
+        let (tick, _) = Self::parse_ticker_with_symbol(json)?;
+        Ok(tick)
+    }
+
+    /// Parse a ticker message, returning both the tick and the base symbol.
+    pub fn parse_ticker_with_symbol(json: &str) -> Result<(PriceTick, String), FeedError> {
+        let ticker: CoinbaseTicker = serde_json::from_str(json)?;
+
+        // Skip non-ticker messages
+        if ticker.msg_type != "ticker" {
+            return Err(FeedError::ParseError("Not a ticker message".to_string()));
+        }
+
+        let symbol = Self::extract_base_symbol(&ticker.product_id)
+            .ok_or_else(|| FeedError::ParseError(format!("Unknown product: {}", ticker.product_id)))?;
+        let pair_id = symbol_to_pair_id(&symbol);
+
+        let price = ticker.price.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let bid = ticker.best_bid.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let ask = ticker.best_ask.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+
+        Ok((PriceTick::new(
+            Exchange::Coinbase,
+            pair_id,
+            FixedPoint::from_f64(price),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+        ), symbol))
     }
 
     /// Generate a subscription message for Coinbase WebSocket.
