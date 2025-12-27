@@ -1,0 +1,44 @@
+[package]
+name = "arbitrage-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "arbitrage-bot"
+path = "src/main.rs"
+
+[dependencies]
+arbitrage-core = { path = "../../crates/core" }
+arbitrage-feeds = { path = "../../crates/feeds" }
+arbitrage-engine = { path = "../../crates/engine" }
+arbitrage-executor = { path = "../../crates/executor" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Concurrency
+dashmap = { workspace = true }
+crossbeam = { workspace = true }
+
+# Utilities
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# WebSocket Server
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors"] }
+futures-util = "0.3"
+
+# HTTP client for exchange rate API
+reqwest = { version = "0.12", features = ["json"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
