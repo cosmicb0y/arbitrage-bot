@@ -59,6 +59,27 @@ impl Asset {
     pub fn sol() -> Self {
         Self::native("SOL", Chain::Solana, 9)
     }
+
+    /// Create an asset from a symbol string (for dynamic markets).
+    /// Uses Ethereum chain as default for CEX assets.
+    pub fn from_symbol(symbol: &str) -> Self {
+        // Common known assets
+        match symbol {
+            "BTC" => Self::btc(),
+            "ETH" => Self::eth(),
+            "SOL" => Self::sol(),
+            _ => Self::native(symbol, Chain::Ethereum, 18), // Default to 18 decimals
+        }
+    }
+}
+
+/// Generate a consistent pair_id from a symbol string.
+/// This allows dynamic symbols to work with the pair_id based system.
+pub fn symbol_to_pair_id(symbol: &str) -> u32 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    symbol.hash(&mut hasher);
+    hasher.finish() as u32
 }
 
 /// Trading pair representing base/quote assets on an exchange.
