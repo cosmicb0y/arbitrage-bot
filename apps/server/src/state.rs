@@ -1,9 +1,9 @@
 //! Application state management.
 
 use crate::config::AppConfig;
-use arbitrage_core::{ArbitrageOpportunity, Exchange, FixedPoint};
+use arbitrage_core::{symbol_to_pair_id, ArbitrageOpportunity, Exchange, FixedPoint};
 use arbitrage_engine::{DetectorConfig, OpportunityDetector, PremiumMatrix};
-use arbitrage_feeds::PriceAggregator;
+use arbitrage_feeds::{CommonMarkets, PriceAggregator};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -101,6 +101,8 @@ pub struct AppState {
     /// USDT/KRW price from Upbit (for KRW to USD conversion).
     /// Stored as FixedPoint (e.g., 1438.5 KRW per USDT).
     usdt_krw_price: AtomicU64,
+    /// Common markets across exchanges.
+    pub common_markets: RwLock<Option<CommonMarkets>>,
 }
 
 impl AppState {
@@ -117,6 +119,7 @@ impl AppState {
             stats: BotStats::new(),
             running: AtomicBool::new(false),
             usdt_krw_price: AtomicU64::new(0), // 0 means not yet received
+            common_markets: RwLock::new(None),
         }
     }
 
@@ -133,6 +136,17 @@ impl AppState {
         } else {
             Some(FixedPoint(price))
         }
+    }
+
+    /// Update common markets.
+    pub async fn update_common_markets(&self, markets: CommonMarkets) {
+        let mut stored = self.common_markets.write().await;
+        *stored = Some(markets);
+    }
+
+    /// Get common markets.
+    pub async fn get_common_markets(&self) -> Option<CommonMarkets> {
+        self.common_markets.read().await.clone()
     }
 
     /// Start the bot.
@@ -165,19 +179,71 @@ impl AppState {
         self.stats.record_price_update();
     }
 
+    /// Update price for a symbol (dynamic markets).
+    pub async fn update_price_for_symbol(
+        &self,
+        exchange: Exchange,
+        symbol: &str,
+        price: FixedPoint,
+    ) {
+        let pair_id = symbol_to_pair_id(symbol);
+
+        // Update price aggregator
+        let tick = arbitrage_core::PriceTick::new(exchange, pair_id, price, price, price);
+        self.prices.update(tick);
+
+        // Update detector (registers symbol if needed)
+        {
+            let mut detector = self.detector.write().await;
+            detector.get_or_register_pair_id(symbol);
+            detector.update_price(exchange, pair_id, price);
+        }
+
+        self.stats.record_price_update();
+    }
+
+    /// Register symbols from common markets for opportunity detection.
+    pub async fn register_common_markets(&self, markets: &CommonMarkets) {
+        let mut detector = self.detector.write().await;
+        for symbol in markets.common_bases() {
+            detector.register_symbol(&symbol);
+        }
+    }
+
+    /// Get all registered pair_ids for opportunity detection.
+    pub async fn get_registered_pair_ids(&self) -> Vec<u32> {
+        let detector = self.detector.read().await;
+        detector.registered_pair_ids()
+    }
+
     /// Detect opportunities for a pair.
+    /// Returns all detected opportunities (both new and updated).
     pub async fn detect_opportunities(&self, pair_id: u32) -> Vec<ArbitrageOpportunity> {
         let mut detector = self.detector.write().await;
         let opps = detector.detect(pair_id);
 
         if !opps.is_empty() {
-            self.stats.record_opportunity();
-
-            // Store recent opportunities
+            // Store recent opportunities (deduplicate by exchange pair)
             let mut stored = self.opportunities.write().await;
+
             for opp in &opps {
-                stored.push(opp.clone());
+                // Check if we already have this exchange pair for this asset
+                let existing_idx = stored.iter().position(|existing| {
+                    existing.asset.symbol == opp.asset.symbol
+                        && existing.source_exchange == opp.source_exchange
+                        && existing.target_exchange == opp.target_exchange
+                });
+
+                if let Some(idx) = existing_idx {
+                    // Update existing opportunity
+                    stored[idx] = opp.clone();
+                } else {
+                    // New opportunity
+                    stored.push(opp.clone());
+                    self.stats.record_opportunity();
+                }
             }
+
             // Keep only last 100
             if stored.len() > 100 {
                 let drain_count = stored.len() - 100;
@@ -185,6 +251,7 @@ impl AppState {
             }
         }
 
+        // Return all detected opportunities for broadcasting
         opps
     }
 

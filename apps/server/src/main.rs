@@ -16,7 +16,7 @@ use tracing_subscriber::FmtSubscriber;
 
 use arbitrage_core::{Exchange, FixedPoint, PriceTick};
 use arbitrage_feeds::{
-    BinanceAdapter, CoinbaseAdapter, FeedConfig, UpbitAdapter, WsClient, WsMessage,
+    BinanceAdapter, CoinbaseAdapter, FeedConfig, MarketDiscovery, UpbitAdapter, WsClient, WsMessage,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -90,17 +90,28 @@ fn parse_mode(mode: &str) -> ExecutionMode {
 async fn run_detector_loop(state: SharedState, broadcast_tx: BroadcastSender) {
     info!("Starting detector loop");
 
-    // Simulated pair IDs
-    let pair_ids = vec![1u32, 2, 3]; // BTC, ETH, SOL
+    // Legacy hardcoded pair IDs for backwards compatibility
+    let legacy_pair_ids = vec![1u32, 2, 3]; // BTC, ETH, SOL
 
     while state.is_running() {
+        // Get all registered pair_ids (includes dynamic markets from discovery)
+        let mut pair_ids = state.get_registered_pair_ids().await;
+
+        // Add legacy pair_ids if not already present
+        for &legacy_id in &legacy_pair_ids {
+            if !pair_ids.contains(&legacy_id) {
+                pair_ids.push(legacy_id);
+            }
+        }
+
         for &pair_id in &pair_ids {
             let opps = state.detect_opportunities(pair_id).await;
 
             for opp in opps {
                 if opp.premium_bps >= 30 {
-                    info!(
-                        "🎯 Opportunity: {:?} -> {:?} | Premium: {} bps | Buy: {} | Sell: {}",
+                    tracing::debug!(
+                        "🎯 Opportunity: {} {:?} -> {:?} | Premium: {} bps | Buy: {} | Sell: {}",
+                        opp.asset.symbol,
                         opp.source_exchange,
                         opp.target_exchange,
                         opp.premium_bps,
@@ -131,12 +142,14 @@ async fn run_price_simulator(state: SharedState, broadcast_tx: BroadcastSender) 
         Exchange::Upbit,
     ];
 
+    let symbols = ["BTC", "ETH", "SOL"];
     let mut base_prices = vec![50000.0, 3000.0, 100.0]; // BTC, ETH, SOL
     let mut counter = 0u64;
 
     while state.is_running() {
-        for (pair_id, base_price) in base_prices.iter_mut().enumerate() {
-            let pair_id = (pair_id + 1) as u32;
+        for (idx, base_price) in base_prices.iter_mut().enumerate() {
+            let pair_id = (idx + 1) as u32;
+            let symbol = symbols[idx];
 
             for (i, &exchange) in exchanges.iter().enumerate() {
                 // Add some variance per exchange
@@ -154,7 +167,7 @@ async fn run_price_simulator(state: SharedState, broadcast_tx: BroadcastSender) 
 
                 // Broadcast price update to clients
                 let tick = PriceTick::new(exchange, pair_id, fp_price, fp_price, fp_price);
-                ws_server::broadcast_price(&broadcast_tx, exchange, pair_id, &tick);
+                ws_server::broadcast_price(&broadcast_tx, exchange, pair_id, symbol, &tick);
             }
 
             // Drift base price slightly
@@ -222,32 +235,31 @@ fn process_upbit_ticker(
     state: &SharedState,
     broadcast_tx: &BroadcastSender,
 ) {
-    match code {
-        "KRW-USDT" => {
-            // Update USDT/KRW rate for currency conversion
-            state.update_usdt_krw_price(price);
-            // Also broadcast the exchange rate to clients
-            let rate = price.to_f64();
-            ws_server::broadcast_exchange_rate(broadcast_tx, rate);
-            tracing::debug!("Updated USDT/KRW rate: {:.2}", rate);
-        }
-        "KRW-BTC" => {
-            // Convert BTC/KRW to BTC/USD and broadcast
-            // Skip if exchange rate is not available yet
-            if let Some(price_usd) = convert_krw_to_usd(price) {
-                let tick_usd = PriceTick::new(Exchange::Upbit, 1, price_usd, price_usd, price_usd);
+    // Handle USDT/KRW for exchange rate
+    if UpbitAdapter::is_usdt_market(code) {
+        state.update_usdt_krw_price(price);
+        let rate = price.to_f64();
+        ws_server::broadcast_exchange_rate(broadcast_tx, rate);
+        tracing::debug!("Updated USDT/KRW rate: {:.2}", rate);
+        return;
+    }
 
-                // Update state asynchronously (fire and forget for now)
-                let state_clone = state.clone();
-                tokio::spawn(async move {
-                    state_clone.update_price(Exchange::Upbit, 1, price_usd).await;
-                });
+    // Handle trading pairs - extract symbol from code (e.g., "KRW-BTC" -> "BTC")
+    if let Some(symbol) = UpbitAdapter::extract_base_symbol(code) {
+        let pair_id = arbitrage_core::symbol_to_pair_id(&symbol);
 
-                ws_server::broadcast_price(broadcast_tx, Exchange::Upbit, 1, &tick_usd);
-            }
-        }
-        _ => {
-            // Ignore other markets for now
+        // Convert KRW to USD and broadcast
+        // Skip if exchange rate is not available yet
+        if let Some(price_usd) = convert_krw_to_usd(price) {
+            let tick_usd = PriceTick::new(Exchange::Upbit, pair_id, price_usd, price_usd, price_usd);
+
+            // Update state asynchronously (fire and forget for now)
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                state_clone.update_price(Exchange::Upbit, pair_id, price_usd).await;
+            });
+
+            ws_server::broadcast_price(broadcast_tx, Exchange::Upbit, pair_id, &symbol, &tick_usd);
         }
     }
 }
@@ -315,10 +327,11 @@ async fn run_binance_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Try to parse as book ticker (has bid/ask)
-                if let Ok(tick) = BinanceAdapter::parse_book_ticker(&text, 1) {
-                    state.update_price(Exchange::Binance, 1, tick.price()).await;
-                    ws_server::broadcast_price(&broadcast_tx, Exchange::Binance, 1, &tick);
+                // Auto-detect symbol and pair_id from message
+                if let Ok((tick, symbol)) = BinanceAdapter::parse_ticker_with_symbol(&text) {
+                    let pair_id = tick.pair_id();
+                    state.update_price(Exchange::Binance, pair_id, tick.price()).await;
+                    ws_server::broadcast_price(&broadcast_tx, Exchange::Binance, pair_id, &symbol, &tick);
                 }
             }
             WsMessage::Connected => {
@@ -352,9 +365,11 @@ async fn run_coinbase_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                if let Ok(tick) = CoinbaseAdapter::parse_ticker(&text, 1) {
-                    state.update_price(Exchange::Coinbase, 1, tick.price()).await;
-                    ws_server::broadcast_price(&broadcast_tx, Exchange::Coinbase, 1, &tick);
+                // Auto-detect product and pair_id from message
+                if let Ok((tick, symbol)) = CoinbaseAdapter::parse_ticker_with_symbol(&text) {
+                    let pair_id = tick.pair_id();
+                    state.update_price(Exchange::Coinbase, pair_id, tick.price()).await;
+                    ws_server::broadcast_price(&broadcast_tx, Exchange::Coinbase, pair_id, &symbol, &tick);
                 }
             }
             WsMessage::Connected => {
@@ -380,64 +395,174 @@ async fn spawn_live_feeds(
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::new();
 
-    // Binance BTC/USDT
-    let binance_config = FeedConfig::for_exchange(Exchange::Binance);
-    let (binance_tx, binance_rx) = mpsc::channel(1000);
-    let binance_subscribe = BinanceAdapter::subscribe_message(&["btcusdt".to_string()]);
+    // First, do an initial market discovery to get common symbols
+    let discovery = MarketDiscovery::new();
+    let all_markets = discovery.fetch_all().await;
 
-    let binance_client = WsClient::new(binance_config.clone(), binance_tx);
-    handles.push(tokio::spawn(async move {
-        if let Err(e) = binance_client.run(Some(binance_subscribe)).await {
-            warn!("Binance WebSocket error: {}", e);
+    // Find common markets across exchanges we support for live feeds
+    let exchanges = ["Binance", "Coinbase", "Upbit"];
+    let common = MarketDiscovery::find_markets_on_n_exchanges(&all_markets, &exchanges, 2);
+
+    // Get symbols for each exchange from common markets
+    let mut binance_symbols: Vec<String> = Vec::new();
+    let mut coinbase_symbols: Vec<String> = Vec::new();
+    let mut upbit_symbols: Vec<String> = vec!["KRW-USDT".to_string()]; // Always include for exchange rate
+
+    for (base, exchange_markets) in &common.common {
+        for (exchange, market_info) in exchange_markets {
+            match exchange.as_str() {
+                "Binance" => binance_symbols.push(market_info.symbol.to_lowercase()),
+                "Coinbase" => coinbase_symbols.push(market_info.symbol.clone()),
+                "Upbit" => upbit_symbols.push(market_info.symbol.clone()),
+                _ => {}
+            }
         }
-    }));
+    }
 
-    let binance_state = state.clone();
-    let binance_broadcast = broadcast_tx.clone();
-    handles.push(tokio::spawn(async move {
-        run_binance_feed(binance_state, binance_broadcast, binance_rx).await;
-    }));
+    // Limit symbols if too many (WebSocket connection limits)
+    let max_symbols = 50;
+    binance_symbols.truncate(max_symbols);
+    coinbase_symbols.truncate(max_symbols);
+    upbit_symbols.truncate(max_symbols);
 
-    // Coinbase BTC-USD
-    let coinbase_config = FeedConfig::for_exchange(Exchange::Coinbase);
-    let (coinbase_tx, coinbase_rx) = mpsc::channel(1000);
-    let coinbase_subscribe = CoinbaseAdapter::subscribe_message(&["BTC-USD".to_string()]);
+    info!(
+        "📡 Subscribing to live feeds: Binance={}, Coinbase={}, Upbit={}",
+        binance_symbols.len(),
+        coinbase_symbols.len(),
+        upbit_symbols.len()
+    );
 
-    let coinbase_client = WsClient::new(coinbase_config.clone(), coinbase_tx);
-    handles.push(tokio::spawn(async move {
-        if let Err(e) = coinbase_client.run(Some(coinbase_subscribe)).await {
-            warn!("Coinbase WebSocket error: {}", e);
-        }
-    }));
+    // Register all symbols for opportunity detection
+    state.register_common_markets(&common).await;
 
-    let coinbase_state = state.clone();
-    let coinbase_broadcast = broadcast_tx.clone();
-    handles.push(tokio::spawn(async move {
-        run_coinbase_feed(coinbase_state, coinbase_broadcast, coinbase_rx).await;
-    }));
+    // Binance
+    if !binance_symbols.is_empty() {
+        let binance_config = FeedConfig::for_exchange(Exchange::Binance);
+        let (binance_tx, binance_rx) = mpsc::channel(1000);
+        let binance_subscribe = BinanceAdapter::subscribe_message(&binance_symbols);
 
-    // Upbit KRW-BTC and KRW-USDT (for exchange rate)
-    let upbit_config = FeedConfig::for_exchange(Exchange::Upbit);
-    let (upbit_tx, upbit_rx) = mpsc::channel(1000);
-    let upbit_subscribe = UpbitAdapter::subscribe_message(&[
-        "KRW-USDT".to_string(), // For KRW to USD conversion
-        "KRW-BTC".to_string(),
-    ]);
+        let binance_client = WsClient::new(binance_config.clone(), binance_tx);
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = binance_client.run(Some(binance_subscribe)).await {
+                warn!("Binance WebSocket error: {}", e);
+            }
+        }));
 
-    let upbit_client = WsClient::new(upbit_config.clone(), upbit_tx);
-    handles.push(tokio::spawn(async move {
-        if let Err(e) = upbit_client.run(Some(upbit_subscribe)).await {
-            warn!("Upbit WebSocket error: {}", e);
-        }
-    }));
+        let binance_state = state.clone();
+        let binance_broadcast = broadcast_tx.clone();
+        handles.push(tokio::spawn(async move {
+            run_binance_feed(binance_state, binance_broadcast, binance_rx).await;
+        }));
+    }
 
-    let upbit_state = state.clone();
-    let upbit_broadcast = broadcast_tx.clone();
-    handles.push(tokio::spawn(async move {
-        run_upbit_feed(upbit_state, upbit_broadcast, upbit_rx).await;
-    }));
+    // Coinbase
+    if !coinbase_symbols.is_empty() {
+        let coinbase_config = FeedConfig::for_exchange(Exchange::Coinbase);
+        let (coinbase_tx, coinbase_rx) = mpsc::channel(1000);
+        let coinbase_subscribe = CoinbaseAdapter::subscribe_message(&coinbase_symbols);
+
+        let coinbase_client = WsClient::new(coinbase_config.clone(), coinbase_tx);
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = coinbase_client.run(Some(coinbase_subscribe)).await {
+                warn!("Coinbase WebSocket error: {}", e);
+            }
+        }));
+
+        let coinbase_state = state.clone();
+        let coinbase_broadcast = broadcast_tx.clone();
+        handles.push(tokio::spawn(async move {
+            run_coinbase_feed(coinbase_state, coinbase_broadcast, coinbase_rx).await;
+        }));
+    }
+
+    // Upbit
+    if !upbit_symbols.is_empty() {
+        let upbit_config = FeedConfig::for_exchange(Exchange::Upbit);
+        let (upbit_tx, upbit_rx) = mpsc::channel(1000);
+        let upbit_subscribe = UpbitAdapter::subscribe_message(&upbit_symbols);
+
+        let upbit_client = WsClient::new(upbit_config.clone(), upbit_tx);
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = upbit_client.run(Some(upbit_subscribe)).await {
+                warn!("Upbit WebSocket error: {}", e);
+            }
+        }));
+
+        let upbit_state = state.clone();
+        let upbit_broadcast = broadcast_tx.clone();
+        handles.push(tokio::spawn(async move {
+            run_upbit_feed(upbit_state, upbit_broadcast, upbit_rx).await;
+        }));
+    }
 
     handles
+}
+
+/// Run market discovery loop - periodically fetches markets from exchanges
+/// and broadcasts common markets to clients.
+async fn run_market_discovery(state: SharedState, broadcast_tx: BroadcastSender) {
+    info!("Starting market discovery loop");
+
+    let discovery = MarketDiscovery::new();
+    let exchanges = ["Binance", "Coinbase", "Upbit"];
+
+    loop {
+        info!("🔍 Fetching markets from exchanges...");
+
+        let all_markets = discovery.fetch_all().await;
+
+        if all_markets.len() >= 2 {
+            // Find markets available on 2+ exchanges (not just all exchanges)
+            let common = MarketDiscovery::find_markets_on_n_exchanges(&all_markets, &exchanges, 2);
+
+            // Count markets by availability
+            let on_all = common.common.values().filter(|v| v.len() == exchanges.len()).count();
+            let on_partial = common.common.len() - on_all;
+
+            info!(
+                "📊 Found {} tradable markets: {} on all {} exchanges, {} on 2+ exchanges",
+                common.common.len(),
+                on_all,
+                exchanges.len(),
+                on_partial
+            );
+
+            // Log top 10 markets (sorted by exchange count descending, then alphabetically)
+            let mut bases: Vec<_> = common.common.iter()
+                .map(|(base, markets)| (base.clone(), markets.len()))
+                .collect();
+            bases.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+            for (base, count) in bases.iter().take(10) {
+                info!("  - {} ({}/{} exchanges)", base, count, exchanges.len());
+            }
+
+            if bases.len() > 10 {
+                info!("  ... and {} more", bases.len() - 10);
+            }
+
+            // Register all common markets for opportunity detection
+            state.register_common_markets(&common).await;
+            info!(
+                "📈 Registered {} symbols for opportunity detection",
+                common.common.len()
+            );
+
+            // Store in state for initial sync
+            state.update_common_markets(common.clone()).await;
+
+            // Broadcast to connected clients
+            ws_server::broadcast_common_markets(&broadcast_tx, &common);
+        } else {
+            warn!(
+                "Only {} exchanges responded, need at least 2 for comparison",
+                all_markets.len()
+            );
+        }
+
+        // Refresh every 5 minutes
+        tokio::time::sleep(Duration::from_secs(300)).await;
+    }
 }
 
 #[tokio::main]
@@ -501,6 +626,13 @@ async fn main() {
     let rate_broadcast = broadcast_tx.clone();
     tokio::spawn(async move {
         exchange_rate::run_exchange_rate_updater(rate_broadcast).await;
+    });
+
+    // Start market discovery loop
+    let discovery_state = state.clone();
+    let discovery_broadcast = broadcast_tx.clone();
+    tokio::spawn(async move {
+        run_market_discovery(discovery_state, discovery_broadcast).await;
     });
 
     // Spawn price source (live or simulated)

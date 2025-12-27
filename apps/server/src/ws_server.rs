@@ -47,11 +47,14 @@ pub struct WsStatsData {
 #[derive(Debug, Clone, Serialize)]
 pub struct WsOpportunityData {
     pub id: u64,
+    pub symbol: String,
     pub source_exchange: String,
     pub target_exchange: String,
     pub premium_bps: i32,
     pub source_price: f64,
     pub target_price: f64,
+    pub net_profit_bps: i32,
+    pub confidence_score: u8,
     pub timestamp: u64,
 }
 
@@ -63,6 +66,26 @@ pub struct WsExchangeRateData {
     /// USD/KRW rate from exchange rate API (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_rate: Option<f64>,
+    pub timestamp: u64,
+}
+
+/// Market info for WebSocket broadcast.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsMarketInfo {
+    pub base: String,
+    pub symbol: String,
+    pub exchange: String,
+}
+
+/// Common markets data for WebSocket broadcast.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsCommonMarketsData {
+    /// List of common base assets
+    pub common_bases: Vec<String>,
+    /// Markets by base asset
+    pub markets: std::collections::HashMap<String, Vec<WsMarketInfo>>,
+    /// Exchanges that were compared
+    pub exchanges: Vec<String>,
     pub timestamp: u64,
 }
 
@@ -80,8 +103,14 @@ pub enum WsServerMessage {
     Stats(WsStatsData),
     #[serde(rename = "opportunity")]
     Opportunity(WsOpportunityData),
+    /// Batch of opportunities (for initial sync)
+    #[serde(rename = "opportunities")]
+    Opportunities(Vec<WsOpportunityData>),
     #[serde(rename = "exchange_rate")]
     ExchangeRate(WsExchangeRateData),
+    /// Common markets across exchanges
+    #[serde(rename = "common_markets")]
+    CommonMarkets(WsCommonMarketsData),
 }
 
 /// Broadcast channel sender.
@@ -133,6 +162,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
     let initial_prices = collect_prices(&state.app_state).await;
     let initial_stats = collect_stats(&state.app_state);
     let initial_rate = collect_exchange_rate();
+    let initial_opportunities = collect_opportunities(&state.app_state).await;
+    let initial_common_markets = collect_common_markets(&state.app_state).await;
 
     if let Ok(json) = serde_json::to_string(&WsServerMessage::Prices(initial_prices)) {
         let _ = sender.send(Message::Text(json)).await;
@@ -142,6 +173,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
     }
     if let Some(rate) = initial_rate {
         if let Ok(json) = serde_json::to_string(&WsServerMessage::ExchangeRate(rate)) {
+            let _ = sender.send(Message::Text(json)).await;
+        }
+    }
+    if !initial_opportunities.is_empty() {
+        if let Ok(json) = serde_json::to_string(&WsServerMessage::Opportunities(initial_opportunities)) {
+            let _ = sender.send(Message::Text(json)).await;
+        }
+    }
+    if let Some(common_markets) = initial_common_markets {
+        if let Ok(json) = serde_json::to_string(&WsServerMessage::CommonMarkets(common_markets)) {
             let _ = sender.send(Message::Text(json)).await;
         }
     }
@@ -249,11 +290,59 @@ fn collect_exchange_rate() -> Option<WsExchangeRateData> {
     })
 }
 
-/// Broadcast a single price update (event-driven).
-pub fn broadcast_price(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, tick: &PriceTick) {
-    let symbols = ["BTC", "ETH", "SOL"];
-    let symbol = symbols.get(pair_id as usize - 1).unwrap_or(&"UNKNOWN");
+/// Collect current opportunities from state.
+async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
+    let opps = state.opportunities.read().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
 
+    opps.iter().map(|opp| WsOpportunityData {
+        id: opp.id,
+        symbol: opp.asset.symbol.to_string(),
+        source_exchange: format!("{:?}", opp.source_exchange),
+        target_exchange: format!("{:?}", opp.target_exchange),
+        premium_bps: opp.premium_bps,
+        source_price: FixedPoint(opp.source_price).to_f64(),
+        target_price: FixedPoint(opp.target_price).to_f64(),
+        net_profit_bps: (opp.net_profit_estimate / 100) as i32,
+        confidence_score: opp.confidence_score,
+        timestamp: now,
+    }).collect()
+}
+
+/// Collect current common markets from state.
+async fn collect_common_markets(state: &SharedState) -> Option<WsCommonMarketsData> {
+    let common = state.get_common_markets().await?;
+
+    let mut markets_map = std::collections::HashMap::new();
+
+    for (base, exchange_markets) in &common.common {
+        let ws_markets: Vec<WsMarketInfo> = exchange_markets
+            .iter()
+            .map(|(ex, info)| WsMarketInfo {
+                base: info.base.clone(),
+                symbol: info.symbol.clone(),
+                exchange: ex.clone(),
+            })
+            .collect();
+        markets_map.insert(base.clone(), ws_markets);
+    }
+
+    Some(WsCommonMarketsData {
+        common_bases: common.common_bases(),
+        markets: markets_map,
+        exchanges: common.exchanges.clone(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    })
+}
+
+/// Broadcast a single price update (event-driven).
+pub fn broadcast_price(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, symbol: &str, tick: &PriceTick) {
     let price_data = WsPriceData {
         exchange: format!("{:?}", exchange),
         symbol: symbol.to_string(),
@@ -280,11 +369,14 @@ pub fn broadcast_stats(tx: &BroadcastSender, state: &SharedState) {
 pub fn broadcast_opportunity(tx: &BroadcastSender, opp: &arbitrage_core::ArbitrageOpportunity) {
     let ws_opp = WsOpportunityData {
         id: opp.id,
+        symbol: opp.asset.symbol.to_string(),
         source_exchange: format!("{:?}", opp.source_exchange),
         target_exchange: format!("{:?}", opp.target_exchange),
         premium_bps: opp.premium_bps,
         source_price: FixedPoint(opp.source_price).to_f64(),
         target_price: FixedPoint(opp.target_price).to_f64(),
+        net_profit_bps: (opp.net_profit_estimate / 100) as i32, // Convert to bps approximation
+        confidence_score: opp.confidence_score,
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -306,6 +398,38 @@ pub fn broadcast_exchange_rate(tx: &BroadcastSender, usd_krw: f64) {
     };
 
     let _ = tx.send(WsServerMessage::ExchangeRate(rate_data));
+}
+
+/// Broadcast common markets to all clients.
+pub fn broadcast_common_markets(
+    tx: &BroadcastSender,
+    common: &arbitrage_feeds::CommonMarkets,
+) {
+    let mut markets_map = std::collections::HashMap::new();
+
+    for (base, exchange_markets) in &common.common {
+        let ws_markets: Vec<WsMarketInfo> = exchange_markets
+            .iter()
+            .map(|(ex, info)| WsMarketInfo {
+                base: info.base.clone(),
+                symbol: info.symbol.clone(),
+                exchange: ex.clone(),
+            })
+            .collect();
+        markets_map.insert(base.clone(), ws_markets);
+    }
+
+    let data = WsCommonMarketsData {
+        common_bases: common.common_bases(),
+        markets: markets_map,
+        exchanges: common.exchanges.clone(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    };
+
+    let _ = tx.send(WsServerMessage::CommonMarkets(data));
 }
 
 /// Create WebSocket server and return the broadcast sender for event-driven updates.
