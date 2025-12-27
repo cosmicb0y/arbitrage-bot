@@ -18,8 +18,6 @@ pub struct DetectorConfig {
     pub max_staleness_ms: u64,
     /// Enabled exchanges.
     pub enabled_exchanges: Vec<Exchange>,
-    /// Default asset for opportunities.
-    pub default_asset: Asset,
 }
 
 impl Default for DetectorConfig {
@@ -34,8 +32,23 @@ impl Default for DetectorConfig {
                 Exchange::Okx,
                 Exchange::Bybit,
             ],
-            default_asset: Asset::native("BTC", Chain::Ethereum, 8),
         }
+    }
+}
+
+/// Get asset for a pair_id using the symbol registry.
+fn asset_for_pair_id(pair_id: u32, symbol_registry: &HashMap<u32, String>) -> Asset {
+    // First check the dynamic symbol registry
+    if let Some(symbol) = symbol_registry.get(&pair_id) {
+        return Asset::from_symbol(symbol);
+    }
+
+    // Fallback to legacy hardcoded pair_ids for backwards compatibility
+    match pair_id {
+        1 => Asset::btc(),
+        2 => Asset::eth(),
+        3 => Asset::sol(),
+        _ => Asset::native("UNKNOWN", Chain::Ethereum, 18),
     }
 }
 
@@ -45,6 +58,8 @@ pub struct OpportunityDetector {
     config: DetectorConfig,
     matrices: HashMap<u32, PremiumMatrix>,
     detected: Vec<ArbitrageOpportunity>,
+    /// Maps pair_id -> symbol for dynamic markets
+    symbol_registry: HashMap<u32, String>,
 }
 
 impl OpportunityDetector {
@@ -54,7 +69,37 @@ impl OpportunityDetector {
             config,
             matrices: HashMap::new(),
             detected: Vec::new(),
+            symbol_registry: HashMap::new(),
         }
+    }
+
+    /// Register a symbol with its pair_id.
+    /// This enables opportunity detection for dynamic markets.
+    pub fn register_symbol(&mut self, symbol: &str) -> u32 {
+        let pair_id = arbitrage_core::symbol_to_pair_id(symbol);
+        self.symbol_registry.insert(pair_id, symbol.to_string());
+        pair_id
+    }
+
+    /// Get the pair_id for a symbol, registering it if needed.
+    pub fn get_or_register_pair_id(&mut self, symbol: &str) -> u32 {
+        let pair_id = arbitrage_core::symbol_to_pair_id(symbol);
+        if !self.symbol_registry.contains_key(&pair_id) {
+            self.symbol_registry.insert(pair_id, symbol.to_string());
+        }
+        pair_id
+    }
+
+    /// Get all registered pair_ids (from both symbol registry and matrices).
+    pub fn registered_pair_ids(&self) -> Vec<u32> {
+        let mut pair_ids: Vec<u32> = self.symbol_registry.keys().copied().collect();
+        // Also include matrices pair_ids that might not be in symbol_registry
+        for &pair_id in self.matrices.keys() {
+            if !pair_ids.contains(&pair_id) {
+                pair_ids.push(pair_id);
+            }
+        }
+        pair_ids
     }
 
     /// Get detected opportunities.
@@ -77,6 +122,7 @@ impl OpportunityDetector {
         };
 
         let mut opportunities = Vec::new();
+        let asset = asset_for_pair_id(pair_id, &self.symbol_registry);
 
         // Get all profitable pairs
         let premiums = matrix.all_premiums();
@@ -89,7 +135,7 @@ impl OpportunityDetector {
                     OPPORTUNITY_ID.fetch_add(1, Ordering::SeqCst),
                     buy_ex,
                     sell_ex,
-                    self.config.default_asset.clone(),
+                    asset.clone(),
                     buy_price,
                     sell_price,
                 );
@@ -223,5 +269,46 @@ mod tests {
 
         assert!(!btc_opps.is_empty());
         assert!(!eth_opps.is_empty());
+    }
+
+    #[test]
+    fn test_detector_dynamic_symbol_registration() {
+        let config = DetectorConfig {
+            min_premium_bps: 50,
+            ..Default::default()
+        };
+        let mut detector = OpportunityDetector::new(config);
+
+        // Register a dynamic symbol
+        let pair_id = detector.register_symbol("DOGE");
+        assert!(pair_id > 0);
+
+        // Update prices for the dynamic symbol
+        detector.update_price(Exchange::Binance, pair_id, FixedPoint::from_f64(0.10));
+        detector.update_price(Exchange::Coinbase, pair_id, FixedPoint::from_f64(0.102));
+
+        let opps = detector.detect(pair_id);
+        assert!(!opps.is_empty());
+
+        // Verify the asset symbol is correct
+        assert_eq!(opps[0].asset.symbol.as_str(), "DOGE");
+    }
+
+    #[test]
+    fn test_detector_get_or_register_pair_id() {
+        let config = DetectorConfig::default();
+        let mut detector = OpportunityDetector::new(config);
+
+        // First call should register
+        let pair_id1 = detector.get_or_register_pair_id("XRP");
+
+        // Second call should return same pair_id
+        let pair_id2 = detector.get_or_register_pair_id("XRP");
+
+        assert_eq!(pair_id1, pair_id2);
+
+        // Different symbol should get different pair_id
+        let pair_id3 = detector.get_or_register_pair_id("ADA");
+        assert_ne!(pair_id1, pair_id3);
     }
 }
