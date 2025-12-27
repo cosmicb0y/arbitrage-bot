@@ -1,0 +1,27 @@
+[package]
+name = "arbitrage-executor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+arbitrage-core = { path = "../core" }
+arbitrage-engine = { path = "../engine" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = "0.1"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Concurrency
+dashmap = { workspace = true }
+
+# Utilities
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+pretty_assertions = { workspace = true }
