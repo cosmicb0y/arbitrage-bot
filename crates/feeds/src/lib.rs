@@ -5,6 +5,7 @@
 
 pub mod adapter;
 pub mod aggregator;
+pub mod discovery;
 pub mod error;
 pub mod feed;
 pub mod manager;
@@ -12,6 +13,7 @@ pub mod websocket;
 
 pub use adapter::*;
 pub use aggregator::*;
+pub use discovery::*;
 pub use error::*;
 pub use feed::*;
 pub use manager::*;
