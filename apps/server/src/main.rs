@@ -194,11 +194,10 @@ async fn run_stats_reporter(state: SharedState, broadcast_tx: BroadcastSender) {
     }
 }
 
-/// Convert Upbit KRW price to USD using USDT/KRW rate from Upbit.
-/// Returns None if USDT/KRW rate is not available yet.
-fn convert_krw_to_usd(krw_price: FixedPoint, state: &SharedState) -> Option<FixedPoint> {
-    let usdt_krw = state.get_usdt_krw_price()?;
-    let rate = usdt_krw.to_f64();
+/// Convert Upbit KRW price to USD using exchange rate API.
+/// Returns None if exchange rate is not available yet.
+fn convert_krw_to_usd(krw_price: FixedPoint) -> Option<FixedPoint> {
+    let rate = exchange_rate::get_api_rate()?;
     if rate > 0.0 {
         Some(FixedPoint::from_f64(krw_price.to_f64() / rate))
     } else {
@@ -207,11 +206,11 @@ fn convert_krw_to_usd(krw_price: FixedPoint, state: &SharedState) -> Option<Fixe
 }
 
 /// Convert Upbit KRW price tick to USD.
-/// Returns None if USDT/KRW rate is not available yet.
-fn convert_upbit_tick_to_usd(tick: &PriceTick, state: &SharedState) -> Option<PriceTick> {
-    let price_usd = convert_krw_to_usd(tick.price(), state)?;
-    let bid_usd = convert_krw_to_usd(tick.bid(), state)?;
-    let ask_usd = convert_krw_to_usd(tick.ask(), state)?;
+/// Returns None if exchange rate is not available yet.
+fn convert_upbit_tick_to_usd(tick: &PriceTick) -> Option<PriceTick> {
+    let price_usd = convert_krw_to_usd(tick.price())?;
+    let bid_usd = convert_krw_to_usd(tick.bid())?;
+    let ask_usd = convert_krw_to_usd(tick.ask())?;
 
     Some(PriceTick::new(tick.exchange(), tick.pair_id(), price_usd, bid_usd, ask_usd))
 }
@@ -234,8 +233,8 @@ fn process_upbit_ticker(
         }
         "KRW-BTC" => {
             // Convert BTC/KRW to BTC/USD and broadcast
-            // Skip if USDT/KRW rate is not available yet
-            if let Some(price_usd) = convert_krw_to_usd(price, state) {
+            // Skip if exchange rate is not available yet
+            if let Some(price_usd) = convert_krw_to_usd(price) {
                 let tick_usd = PriceTick::new(Exchange::Upbit, 1, price_usd, price_usd, price_usd);
 
                 // Update state asynchronously (fire and forget for now)
