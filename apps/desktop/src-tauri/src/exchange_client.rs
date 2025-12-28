@@ -420,23 +420,156 @@ fn generate_upbit_token(
 }
 
 // ============================================================================
-// Coinbase Client (placeholder - requires OAuth or API key v2)
+// Coinbase Client
 // ============================================================================
 
-pub async fn fetch_coinbase_wallet() -> Result<ExchangeWalletInfo, String> {
-    let creds = credentials::load_credentials();
-    if creds.coinbase.api_key.is_empty() || creds.coinbase.secret_key.is_empty() {
-        return Err("Coinbase API credentials not configured".to_string());
+/// Coinbase Exchange API currency response
+#[derive(Debug, Deserialize)]
+struct CoinbaseCurrency {
+    id: String,
+    name: String,
+    status: String,
+    #[serde(default)]
+    supported_networks: Vec<CoinbaseNetwork>,
+    #[serde(default)]
+    details: Option<CoinbaseCurrencyDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoinbaseCurrencyDetails {
+    #[serde(rename = "type")]
+    currency_type: Option<String>,
+    #[serde(default)]
+    min_withdrawal_amount: Option<f64>,
+    #[serde(default)]
+    max_withdrawal_amount: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoinbaseNetwork {
+    id: String,
+    name: String,
+    status: String,
+    #[serde(default)]
+    min_withdrawal_amount: Option<f64>,
+    #[serde(default)]
+    max_withdrawal_amount: Option<f64>,
+    #[serde(default)]
+    network_confirmations: Option<u32>,
+}
+
+/// Fetch Coinbase wallet status (public Exchange API - no auth required)
+pub async fn fetch_coinbase_wallet_status() -> Result<Vec<AssetWalletStatus>, String> {
+    let client = Client::new();
+
+    // Use public Exchange API endpoint (no auth required)
+    let resp = client
+        .get("https://api.exchange.coinbase.com/currencies")
+        .header("User-Agent", "arbitrage-bot")
+        .send()
+        .await
+        .map_err(|e| format!("Coinbase currencies request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let error_text = resp.text().await.unwrap_or_default();
+        return Err(format!("Coinbase currencies API error: {}", error_text));
     }
 
-    // Coinbase Advanced Trade API requires different auth
-    // For now, return placeholder
-    warn!("Coinbase wallet fetch not fully implemented yet");
+    let currencies: Vec<CoinbaseCurrency> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Coinbase currencies: {}", e))?;
+
+    // Filter to crypto only and build wallet status
+    let wallet_status: Vec<AssetWalletStatus> = currencies
+        .into_iter()
+        .filter(|c| {
+            // Filter to crypto currencies only (those with supported_networks)
+            !c.supported_networks.is_empty()
+                || c.details
+                    .as_ref()
+                    .and_then(|d| d.currency_type.as_ref())
+                    .map(|t| t == "crypto")
+                    .unwrap_or(false)
+        })
+        .map(|c| {
+            let network_statuses: Vec<NetworkStatus> = if c.supported_networks.is_empty() {
+                // Single network (legacy format)
+                let is_online = c.status == "online";
+                vec![NetworkStatus {
+                    network: c.id.clone(),
+                    name: c.name.clone(),
+                    deposit_enabled: is_online,
+                    withdraw_enabled: is_online,
+                    min_withdraw: c
+                        .details
+                        .as_ref()
+                        .and_then(|d| d.min_withdrawal_amount)
+                        .unwrap_or(0.0),
+                    withdraw_fee: 0.0,
+                    confirms_required: 0,
+                }]
+            } else {
+                // Multiple networks
+                c.supported_networks
+                    .iter()
+                    .map(|n| {
+                        let is_online = n.status == "online";
+                        NetworkStatus {
+                            network: n.id.clone(),
+                            name: n.name.clone(),
+                            deposit_enabled: is_online,
+                            withdraw_enabled: is_online,
+                            min_withdraw: n.min_withdrawal_amount.unwrap_or(0.0),
+                            withdraw_fee: 0.0,
+                            confirms_required: n.network_confirmations.unwrap_or(0),
+                        }
+                    })
+                    .collect()
+            };
+
+            let can_deposit = network_statuses.iter().any(|n| n.deposit_enabled);
+            let can_withdraw = network_statuses.iter().any(|n| n.withdraw_enabled);
+
+            AssetWalletStatus {
+                asset: c.id,
+                name: c.name,
+                networks: network_statuses,
+                can_deposit,
+                can_withdraw,
+            }
+        })
+        .collect();
+
+    info!(
+        "Fetched Coinbase wallet status: {} assets",
+        wallet_status.len()
+    );
+    Ok(wallet_status)
+}
+
+/// Fetch Coinbase wallet (status only - balances require OAuth)
+pub async fn fetch_coinbase_wallet() -> Result<ExchangeWalletInfo, String> {
+    // Fetch wallet status (public API - no auth required)
+    let wallet_status = fetch_coinbase_wallet_status().await.unwrap_or_else(|e| {
+        warn!("Failed to fetch Coinbase wallet status: {}", e);
+        Vec::new()
+    });
+
+    // Note: Balances require OAuth authentication which is complex to implement
+    // For now, we only return wallet status (deposit/withdraw availability)
+    let balances = Vec::new();
+
+    info!(
+        "Fetched Coinbase wallet: {} balances, {} assets with status",
+        balances.len(),
+        wallet_status.len()
+    );
 
     Ok(ExchangeWalletInfo {
         exchange: "Coinbase".to_string(),
-        balances: Vec::new(),
-        wallet_status: Vec::new(),
+        balances,
+        wallet_status,
         last_updated: timestamp_ms(),
     })
 }
