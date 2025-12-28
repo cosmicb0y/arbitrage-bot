@@ -1,8 +1,40 @@
 import { useState, useEffect, useMemo } from "react";
 import { useCommonMarkets, useWalletInfo } from "../hooks/useTauri";
-import type { AssetWalletStatus } from "../types";
+import type { AssetWalletStatus, NetworkStatus } from "../types";
 
 type FilterMode = "all" | "common" | "partial";
+type WalletStatusType = "normal" | "partial" | "suspended" | "unknown";
+
+// Calculate wallet status based on all networks
+function getWalletStatus(status: AssetWalletStatus | undefined): {
+  type: WalletStatusType;
+  depositNetworks: NetworkStatus[];
+  withdrawNetworks: NetworkStatus[];
+} {
+  if (!status || status.networks.length === 0) {
+    return { type: "unknown", depositNetworks: [], withdrawNetworks: [] };
+  }
+
+  const depositNetworks = status.networks.filter((n) => n.deposit_enabled);
+  const withdrawNetworks = status.networks.filter((n) => n.withdraw_enabled);
+  const totalNetworks = status.networks.length;
+
+  const allDeposit = depositNetworks.length === totalNetworks;
+  const allWithdraw = withdrawNetworks.length === totalNetworks;
+  const noDeposit = depositNetworks.length === 0;
+  const noWithdraw = withdrawNetworks.length === 0;
+
+  let type: WalletStatusType;
+  if (allDeposit && allWithdraw) {
+    type = "normal";
+  } else if (noDeposit && noWithdraw) {
+    type = "suspended";
+  } else {
+    type = "partial";
+  }
+
+  return { type, depositNetworks, withdrawNetworks };
+}
 
 function Markets() {
   const commonMarkets = useCommonMarkets();
@@ -170,30 +202,66 @@ function Markets() {
                     {commonMarkets.exchanges.map((exchange) => {
                       const market = markets.find((m) => m.exchange === exchange);
                       const status = walletStatusMap[exchange]?.[base];
+                      const walletInfo = getWalletStatus(status);
+
+                      const statusConfig = {
+                        normal: {
+                          label: "Normal",
+                          className: "bg-success-500/20 text-success-400 border-success-500/30",
+                        },
+                        partial: {
+                          label: "Partial",
+                          className: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+                        },
+                        suspended: {
+                          label: "Suspended",
+                          className: "bg-danger-500/20 text-danger-400 border-danger-500/30",
+                        },
+                        unknown: {
+                          label: "-",
+                          className: "bg-gray-500/20 text-gray-500 border-gray-500/30",
+                        },
+                      };
+
+                      const config = statusConfig[walletInfo.type];
+                      const totalNetworks = status?.networks.length || 0;
+
+                      // Build tooltip with network details
+                      const tooltipLines: string[] = [];
+                      if (status && status.networks.length > 0) {
+                        tooltipLines.push(`Networks (${totalNetworks}):`);
+                        status.networks.forEach((n) => {
+                          const d = n.deposit_enabled ? "D" : "-";
+                          const w = n.withdraw_enabled ? "W" : "-";
+                          tooltipLines.push(`  ${n.name}: ${d}/${w}`);
+                        });
+                        tooltipLines.push("");
+                        tooltipLines.push(
+                          `Deposit: ${walletInfo.depositNetworks.length}/${totalNetworks}`
+                        );
+                        tooltipLines.push(
+                          `Withdraw: ${walletInfo.withdrawNetworks.length}/${totalNetworks}`
+                        );
+                      }
+
                       return (
                         <td key={exchange} className="p-4">
                           {market ? (
-                            <div className="flex items-center space-x-2">
+                            <div className="flex flex-col gap-1">
                               <span className="text-gray-300 font-mono text-sm">
                                 {market.symbol}
                               </span>
-                              {status && (
-                                <span className="flex items-center space-x-0.5 text-xs">
-                                  <span
-                                    className={status.can_deposit ? "text-success-500" : "text-danger-500"}
-                                    title={status.can_deposit ? "Deposit OK" : "Deposit Disabled"}
-                                  >
-                                    D
+                              <span
+                                className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs border ${config.className}`}
+                                title={tooltipLines.join("\n")}
+                              >
+                                {walletInfo.type !== "unknown" && (
+                                  <span className="mr-1 opacity-70">
+                                    {walletInfo.depositNetworks.length}/{totalNetworks}
                                   </span>
-                                  <span className="text-gray-600">/</span>
-                                  <span
-                                    className={status.can_withdraw ? "text-success-500" : "text-danger-500"}
-                                    title={status.can_withdraw ? "Withdraw OK" : "Withdraw Disabled"}
-                                  >
-                                    W
-                                  </span>
-                                </span>
-                              )}
+                                )}
+                                {config.label}
+                              </span>
                             </div>
                           ) : (
                             <span className="text-gray-600">-</span>
@@ -220,10 +288,18 @@ function Markets() {
 
       <div className="text-sm text-gray-500 space-y-1">
         <div>Markets available on 2 or more exchanges. Green badge = available on all exchanges.</div>
-        <div>
-          <span className="text-success-500">D</span>/<span className="text-success-500">W</span> = Deposit/Withdraw enabled,{" "}
-          <span className="text-danger-500">D</span>/<span className="text-danger-500">W</span> = disabled
+        <div className="flex items-center gap-4">
+          <span>
+            <span className="text-success-400">Normal</span> = All networks OK
+          </span>
+          <span>
+            <span className="text-yellow-400">Partial</span> = Some networks suspended
+          </span>
+          <span>
+            <span className="text-danger-400">Suspended</span> = All networks suspended
+          </span>
         </div>
+        <div className="text-gray-600">Hover over status badge to see network details</div>
       </div>
     </div>
   );
