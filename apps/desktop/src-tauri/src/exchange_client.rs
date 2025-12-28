@@ -233,114 +233,150 @@ struct UpbitAccount {
     locked: String,
 }
 
+/// Upbit public network/wallet status (no auth required)
 #[derive(Debug, Deserialize)]
-struct UpbitWalletStatus {
+struct UpbitNetworkStatus {
     currency: String,
     wallet_state: String,
-    block_state: String,
-    block_height: Option<u64>,
-    block_updated_at: Option<String>,
-    block_elapsed_minutes: Option<i64>,
+    net_type: String,
+    network_name: String,
 }
 
-pub async fn fetch_upbit_wallet() -> Result<ExchangeWalletInfo, String> {
-    let creds = credentials::load_credentials();
-    if creds.upbit.api_key.is_empty() || creds.upbit.secret_key.is_empty() {
-        return Err("Upbit API credentials not configured".to_string());
-    }
-
+/// Fetch Upbit wallet status (public API - no auth required)
+pub async fn fetch_upbit_wallet_status() -> Result<Vec<AssetWalletStatus>, String> {
     let client = Client::new();
 
-    // Generate JWT token for Upbit
-    let token = generate_upbit_token(&creds.upbit.api_key, &creds.upbit.secret_key, None)?;
-
-    // Fetch account balances
-    let accounts_resp = client
-        .get("https://api.upbit.com/v1/accounts")
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Upbit accounts request failed: {}", e))?;
-
-    if !accounts_resp.status().is_success() {
-        let error_text = accounts_resp.text().await.unwrap_or_default();
-        return Err(format!("Upbit accounts API error: {}", error_text));
-    }
-
-    let accounts: Vec<UpbitAccount> = accounts_resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Upbit accounts: {}", e))?;
-
-    // Fetch wallet status
-    let token = generate_upbit_token(&creds.upbit.api_key, &creds.upbit.secret_key, None)?;
+    // Use public API endpoint (no auth required)
     let status_resp = client
-        .get("https://api.upbit.com/v1/status/wallet")
-        .header("Authorization", format!("Bearer {}", token))
+        .get("https://ccx.upbit.com/api/v1/status/network/wallet")
         .send()
         .await
         .map_err(|e| format!("Upbit wallet status request failed: {}", e))?;
 
-    let wallet_status = if status_resp.status().is_success() {
-        let statuses: Vec<UpbitWalletStatus> = status_resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse Upbit wallet status: {}", e))?;
+    if !status_resp.status().is_success() {
+        let error_text = status_resp.text().await.unwrap_or_default();
+        return Err(format!("Upbit wallet status API error: {}", error_text));
+    }
 
-        statuses
-            .into_iter()
-            .map(|s| {
-                let (can_deposit, can_withdraw) = match s.wallet_state.as_str() {
-                    "working" => (true, true),
-                    "withdraw_only" => (false, true),
-                    "deposit_only" => (true, false),
-                    _ => (false, false),
-                };
+    let statuses: Vec<UpbitNetworkStatus> = status_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Upbit wallet status: {}", e))?;
 
-                AssetWalletStatus {
-                    asset: s.currency.clone(),
-                    name: s.currency,
-                    networks: vec![NetworkStatus {
-                        network: "default".to_string(),
-                        name: "Default".to_string(),
-                        deposit_enabled: can_deposit,
-                        withdraw_enabled: can_withdraw,
+    // Group by currency
+    use std::collections::HashMap;
+    let mut currency_map: HashMap<String, Vec<UpbitNetworkStatus>> = HashMap::new();
+    for status in statuses {
+        currency_map
+            .entry(status.currency.clone())
+            .or_default()
+            .push(status);
+    }
+
+    let wallet_status: Vec<AssetWalletStatus> = currency_map
+        .into_iter()
+        .map(|(currency, networks)| {
+            let network_statuses: Vec<NetworkStatus> = networks
+                .iter()
+                .map(|n| {
+                    let (deposit_enabled, withdraw_enabled) = match n.wallet_state.as_str() {
+                        "working" => (true, true),
+                        "withdraw_only" => (false, true),
+                        "deposit_only" => (true, false),
+                        _ => (false, false), // paused, suspended, etc.
+                    };
+
+                    NetworkStatus {
+                        network: n.net_type.clone(),
+                        name: n.network_name.clone(),
+                        deposit_enabled,
+                        withdraw_enabled,
                         min_withdraw: 0.0,
                         withdraw_fee: 0.0,
                         confirms_required: 0,
-                    }],
-                    can_deposit,
-                    can_withdraw,
-                }
-            })
-            .collect()
-    } else {
-        warn!("Failed to fetch Upbit wallet status");
-        Vec::new()
-    };
-
-    let balances: Vec<AssetBalance> = accounts
-        .into_iter()
-        .filter_map(|a| {
-            let free: f64 = a.balance.parse().unwrap_or(0.0);
-            let locked: f64 = a.locked.parse().unwrap_or(0.0);
-            let total = free + locked;
-            if total > 0.0 {
-                Some(AssetBalance {
-                    asset: a.currency,
-                    free,
-                    locked,
-                    total,
-                    usd_value: None,
+                    }
                 })
-            } else {
-                None
+                .collect();
+
+            // Asset can_deposit/can_withdraw = true if ANY network supports it
+            let can_deposit = network_statuses.iter().any(|n| n.deposit_enabled);
+            let can_withdraw = network_statuses.iter().any(|n| n.withdraw_enabled);
+
+            AssetWalletStatus {
+                asset: currency.clone(),
+                name: currency,
+                networks: network_statuses,
+                can_deposit,
+                can_withdraw,
             }
         })
         .collect();
 
-    info!("Fetched Upbit wallet: {} balances, {} assets with status",
-          balances.len(), wallet_status.len());
+    info!("Fetched Upbit wallet status: {} assets", wallet_status.len());
+    Ok(wallet_status)
+}
+
+/// Fetch Upbit wallet with balances (requires auth) and status (public)
+pub async fn fetch_upbit_wallet() -> Result<ExchangeWalletInfo, String> {
+    let creds = credentials::load_credentials();
+    let client = Client::new();
+
+    // Always fetch wallet status first (public API - no auth required)
+    let wallet_status = fetch_upbit_wallet_status().await.unwrap_or_else(|e| {
+        warn!("Failed to fetch Upbit wallet status: {}", e);
+        Vec::new()
+    });
+
+    // Try to fetch balances if credentials are available
+    let balances = if !creds.upbit.api_key.is_empty() && !creds.upbit.secret_key.is_empty() {
+        let token = generate_upbit_token(&creds.upbit.api_key, &creds.upbit.secret_key, None)?;
+
+        let accounts_resp = client
+            .get("https://api.upbit.com/v1/accounts")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .map_err(|e| format!("Upbit accounts request failed: {}", e))?;
+
+        if accounts_resp.status().is_success() {
+            let accounts: Vec<UpbitAccount> = accounts_resp
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse Upbit accounts: {}", e))?;
+
+            accounts
+                .into_iter()
+                .filter_map(|a| {
+                    let free: f64 = a.balance.parse().unwrap_or(0.0);
+                    let locked: f64 = a.locked.parse().unwrap_or(0.0);
+                    let total = free + locked;
+                    if total > 0.0 {
+                        Some(AssetBalance {
+                            asset: a.currency,
+                            free,
+                            locked,
+                            total,
+                            usd_value: None,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            warn!("Failed to fetch Upbit balances");
+            Vec::new()
+        }
+    } else {
+        // No credentials - return empty balances but still have wallet status
+        Vec::new()
+    };
+
+    info!(
+        "Fetched Upbit wallet: {} balances, {} assets with status",
+        balances.len(),
+        wallet_status.len()
+    );
 
     Ok(ExchangeWalletInfo {
         exchange: "Upbit".to_string(),
@@ -350,7 +386,11 @@ pub async fn fetch_upbit_wallet() -> Result<ExchangeWalletInfo, String> {
     })
 }
 
-fn generate_upbit_token(access_key: &str, secret_key: &str, _query: Option<&str>) -> Result<String, String> {
+fn generate_upbit_token(
+    access_key: &str,
+    secret_key: &str,
+    _query: Option<&str>,
+) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
     let now = SystemTime::now()
