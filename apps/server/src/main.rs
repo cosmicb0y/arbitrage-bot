@@ -5,6 +5,7 @@
 mod config;
 mod exchange_rate;
 mod state;
+mod wallet_status;
 mod ws_server;
 
 use clap::Parser;
@@ -419,11 +420,10 @@ async fn spawn_live_feeds(
         }
     }
 
-    // Limit symbols if too many (WebSocket connection limits)
-    let max_symbols = 50;
-    binance_symbols.truncate(max_symbols);
-    coinbase_symbols.truncate(max_symbols);
-    upbit_symbols.truncate(max_symbols);
+    // Subscribe to all common markets
+    // - Binance: supports up to 1024 streams per connection
+    // - Coinbase: supports many subscriptions per connection
+    // - Upbit: supports many codes per connection
 
     info!(
         "📡 Subscribing to live feeds: Binance={}, Coinbase={}, Upbit={}",
@@ -567,6 +567,9 @@ async fn run_market_discovery(state: SharedState, broadcast_tx: BroadcastSender)
 
 #[tokio::main]
 async fn main() {
+    // Load .env file if present
+    let _ = dotenvy::dotenv();
+
     let args = Args::parse();
 
     init_logging(&args.log_level);
@@ -609,6 +612,18 @@ async fn main() {
         }
     }
 
+    // Fetch initial wallet status so it's cached for new clients
+    {
+        let statuses = wallet_status::fetch_all_wallet_status().await;
+        if !statuses.is_empty() {
+            info!("Initial wallet status fetched for {} exchanges", statuses.len());
+            // Update cache first so new clients can get it
+            wallet_status::update_cache(statuses.clone());
+            // Then broadcast to any already-connected clients
+            ws_server::broadcast_wallet_status(&broadcast_tx, statuses);
+        }
+    }
+
     // Spawn background tasks with broadcast sender
     let detector_state = state.clone();
     let detector_broadcast = broadcast_tx.clone();
@@ -626,6 +641,12 @@ async fn main() {
     let rate_broadcast = broadcast_tx.clone();
     tokio::spawn(async move {
         exchange_rate::run_exchange_rate_updater(rate_broadcast).await;
+    });
+
+    // Start wallet status updater for deposit/withdraw availability
+    let wallet_broadcast = broadcast_tx.clone();
+    tokio::spawn(async move {
+        wallet_status::run_wallet_status_updater(wallet_broadcast).await;
     });
 
     // Start market discovery loop

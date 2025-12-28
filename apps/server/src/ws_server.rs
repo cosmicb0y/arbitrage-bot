@@ -4,6 +4,7 @@
 
 use crate::exchange_rate;
 use crate::state::SharedState;
+use crate::wallet_status;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -90,6 +91,43 @@ pub struct WsCommonMarketsData {
     pub timestamp: u64,
 }
 
+/// Network status for WebSocket broadcast.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsNetworkStatus {
+    pub network: String,
+    pub name: String,
+    pub deposit_enabled: bool,
+    pub withdraw_enabled: bool,
+    pub min_withdraw: f64,
+    pub withdraw_fee: f64,
+    pub confirms_required: u32,
+}
+
+/// Asset wallet status for WebSocket broadcast.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsAssetWalletStatus {
+    pub asset: String,
+    pub name: String,
+    pub networks: Vec<WsNetworkStatus>,
+    pub can_deposit: bool,
+    pub can_withdraw: bool,
+}
+
+/// Exchange wallet status for WebSocket broadcast.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsExchangeWalletStatus {
+    pub exchange: String,
+    pub wallet_status: Vec<WsAssetWalletStatus>,
+    pub last_updated: u64,
+}
+
+/// Wallet status data for WebSocket broadcast.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsWalletStatusData {
+    pub exchanges: Vec<WsExchangeWalletStatus>,
+    pub timestamp: u64,
+}
+
 /// WebSocket message types.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", content = "data")]
@@ -112,6 +150,9 @@ pub enum WsServerMessage {
     /// Common markets across exchanges
     #[serde(rename = "common_markets")]
     CommonMarkets(WsCommonMarketsData),
+    /// Wallet status for deposit/withdraw
+    #[serde(rename = "wallet_status")]
+    WalletStatus(WsWalletStatusData),
 }
 
 /// Broadcast channel sender.
@@ -165,6 +206,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
     let initial_rate = collect_exchange_rate();
     let initial_opportunities = collect_opportunities(&state.app_state).await;
     let initial_common_markets = collect_common_markets(&state.app_state).await;
+    let initial_wallet_status = collect_wallet_status();
 
     if let Ok(json) = serde_json::to_string(&WsServerMessage::Prices(initial_prices)) {
         let _ = sender.send(Message::Text(json)).await;
@@ -184,6 +226,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
     }
     if let Some(common_markets) = initial_common_markets {
         if let Ok(json) = serde_json::to_string(&WsServerMessage::CommonMarkets(common_markets)) {
+            let _ = sender.send(Message::Text(json)).await;
+        }
+    }
+    if let Some(wallet_status) = initial_wallet_status {
+        if let Ok(json) = serde_json::to_string(&WsServerMessage::WalletStatus(wallet_status)) {
             let _ = sender.send(Message::Text(json)).await;
         }
     }
@@ -285,6 +332,51 @@ fn collect_exchange_rate() -> Option<WsExchangeRateData> {
     exchange_rate::get_usd_krw_rate().map(|usd_krw| WsExchangeRateData {
         usd_krw,
         api_rate: exchange_rate::get_api_rate(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    })
+}
+
+/// Collect cached wallet status for initial sync.
+fn collect_wallet_status() -> Option<WsWalletStatusData> {
+    let cached = wallet_status::get_cached_wallet_status();
+    if cached.is_empty() {
+        return None;
+    }
+
+    let exchanges: Vec<WsExchangeWalletStatus> = cached
+        .into_iter()
+        .map(|s| WsExchangeWalletStatus {
+            exchange: s.exchange,
+            wallet_status: s.wallet_status
+                .into_iter()
+                .map(|ws| WsAssetWalletStatus {
+                    asset: ws.asset,
+                    name: ws.name,
+                    networks: ws.networks
+                        .into_iter()
+                        .map(|n| WsNetworkStatus {
+                            network: n.network,
+                            name: n.name,
+                            deposit_enabled: n.deposit_enabled,
+                            withdraw_enabled: n.withdraw_enabled,
+                            min_withdraw: n.min_withdraw,
+                            withdraw_fee: n.withdraw_fee,
+                            confirms_required: n.confirms_required,
+                        })
+                        .collect(),
+                    can_deposit: ws.can_deposit,
+                    can_withdraw: ws.can_withdraw,
+                })
+                .collect(),
+            last_updated: s.last_updated,
+        })
+        .collect();
+
+    Some(WsWalletStatusData {
+        exchanges,
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -433,6 +525,51 @@ pub fn broadcast_common_markets(
     };
 
     let _ = tx.send(WsServerMessage::CommonMarkets(data));
+}
+
+/// Broadcast wallet status to all clients.
+pub fn broadcast_wallet_status(
+    tx: &BroadcastSender,
+    statuses: Vec<wallet_status::ExchangeWalletStatus>,
+) {
+    let exchanges: Vec<WsExchangeWalletStatus> = statuses
+        .into_iter()
+        .map(|s| WsExchangeWalletStatus {
+            exchange: s.exchange,
+            wallet_status: s.wallet_status
+                .into_iter()
+                .map(|ws| WsAssetWalletStatus {
+                    asset: ws.asset,
+                    name: ws.name,
+                    networks: ws.networks
+                        .into_iter()
+                        .map(|n| WsNetworkStatus {
+                            network: n.network,
+                            name: n.name,
+                            deposit_enabled: n.deposit_enabled,
+                            withdraw_enabled: n.withdraw_enabled,
+                            min_withdraw: n.min_withdraw,
+                            withdraw_fee: n.withdraw_fee,
+                            confirms_required: n.confirms_required,
+                        })
+                        .collect(),
+                    can_deposit: ws.can_deposit,
+                    can_withdraw: ws.can_withdraw,
+                })
+                .collect(),
+            last_updated: s.last_updated,
+        })
+        .collect();
+
+    let data = WsWalletStatusData {
+        exchanges,
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    };
+
+    let _ = tx.send(WsServerMessage::WalletStatus(data));
 }
 
 /// Create WebSocket server and return the broadcast sender for event-driven updates.
