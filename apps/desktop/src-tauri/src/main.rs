@@ -6,6 +6,7 @@
 
 mod commands;
 mod credentials;
+mod exchange_client;
 mod state;
 
 use state::AppState;
@@ -60,6 +61,8 @@ fn main() {
             commands::get_common_markets,
             commands::get_credentials,
             commands::save_credentials,
+            commands::get_wallet_info,
+            commands::get_all_wallets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

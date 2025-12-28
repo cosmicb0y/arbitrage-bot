@@ -68,3 +68,39 @@ export interface Credentials {
   coinbase: ExchangeCredentials;
   upbit: ExchangeCredentials;
 }
+
+// Wallet and deposit/withdraw status
+export type WalletStatus = "working" | "withdraw_only" | "deposit_only" | "suspended";
+
+export interface NetworkStatus {
+  network: string;
+  name: string;
+  deposit_enabled: boolean;
+  withdraw_enabled: boolean;
+  min_withdraw: number;
+  withdraw_fee: number;
+  confirms_required: number;
+}
+
+export interface AssetWalletStatus {
+  asset: string;
+  name: string;
+  networks: NetworkStatus[];
+  can_deposit: boolean;
+  can_withdraw: boolean;
+}
+
+export interface AssetBalance {
+  asset: string;
+  free: number;
+  locked: number;
+  total: number;
+  usd_value?: number;
+}
+
+export interface ExchangeWalletInfo {
+  exchange: string;
+  balances: AssetBalance[];
+  wallet_status: AssetWalletStatus[];
+  last_updated: number;
+}

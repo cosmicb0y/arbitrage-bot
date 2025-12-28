@@ -109,6 +109,25 @@ pub fn save_credentials(creds: Credentials) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Get wallet info for a specific exchange.
+#[tauri::command]
+pub async fn get_wallet_info(exchange: String) -> Result<crate::exchange_client::ExchangeWalletInfo, String> {
+    info!("Fetching wallet info for {}", exchange);
+    match exchange.to_lowercase().as_str() {
+        "binance" => crate::exchange_client::fetch_binance_wallet().await,
+        "upbit" => crate::exchange_client::fetch_upbit_wallet().await,
+        "coinbase" => crate::exchange_client::fetch_coinbase_wallet().await,
+        _ => Err(format!("Unknown exchange: {}", exchange)),
+    }
+}
+
+/// Get wallet info for all configured exchanges.
+#[tauri::command]
+pub async fn get_all_wallets() -> Vec<crate::exchange_client::ExchangeWalletInfo> {
+    info!("Fetching wallet info for all exchanges");
+    crate::exchange_client::fetch_all_wallets().await
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

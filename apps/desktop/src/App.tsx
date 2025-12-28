@@ -2,11 +2,12 @@ import { useState } from "react";
 import Dashboard from "./components/Dashboard";
 import Opportunities from "./components/Opportunities";
 import Markets from "./components/Markets";
+import Wallets from "./components/Wallets";
 import Settings from "./components/Settings";
 import Header from "./components/Header";
 import { useCommonMarkets } from "./hooks/useTauri";
 
-type Tab = "dashboard" | "opportunities" | "markets" | "settings";
+type Tab = "dashboard" | "opportunities" | "markets" | "wallets" | "settings";
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
@@ -22,6 +23,7 @@ function App() {
         {activeTab === "dashboard" && <Dashboard />}
         {activeTab === "opportunities" && <Opportunities />}
         {activeTab === "markets" && <Markets />}
+        {activeTab === "wallets" && <Wallets />}
         {activeTab === "settings" && <Settings />}
       </main>
     </div>

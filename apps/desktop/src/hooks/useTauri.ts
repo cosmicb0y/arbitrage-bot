@@ -9,6 +9,7 @@ import type {
   ExchangeRate,
   CommonMarkets,
   Credentials,
+  ExchangeWalletInfo,
 } from "../types";
 
 // Check if running inside Tauri
@@ -532,4 +533,34 @@ export function useCredentials() {
   }, []);
 
   return { credentials, saveCredentials, loading };
+}
+
+export function useWalletInfo(exchange?: string) {
+  const [wallets, setWallets] = useState<ExchangeWalletInfo[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchWallets = useCallback(async () => {
+    if (!isTauri()) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      if (exchange) {
+        const data = await invoke<ExchangeWalletInfo>("get_wallet_info", { exchange });
+        setWallets([data]);
+      } else {
+        const data = await invoke<ExchangeWalletInfo[]>("get_all_wallets");
+        setWallets(data);
+      }
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
+      console.error("Failed to fetch wallet info:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [exchange]);
+
+  return { wallets, loading, error, fetchWallets };
 }
