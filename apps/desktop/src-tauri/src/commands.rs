@@ -1,7 +1,7 @@
 //! Tauri IPC commands.
 
 use crate::credentials::{self, Credentials};
-use crate::state::{AppState, BotStats, CommonMarketsData, ExchangeRateData, ExecutionConfig, OpportunityData, PriceData};
+use crate::state::{AppState, BotStats, CommonMarketsData, ExchangeRateData, ExecutionConfig, OpportunityData, PriceData, WalletStatusData};
 use std::sync::Arc;
 use tauri::State;
 use tracing::info;
@@ -95,6 +95,12 @@ pub fn get_common_markets(state: State<'_, Arc<AppState>>) -> Option<CommonMarke
     state.get_common_markets()
 }
 
+/// Get wallet status (deposit/withdraw availability) from server.
+#[tauri::command]
+pub fn get_wallet_status(state: State<'_, Arc<AppState>>) -> Option<WalletStatusData> {
+    state.get_wallet_status()
+}
+
 /// Get credentials (masked for display).
 #[tauri::command]
 pub fn get_credentials() -> Credentials {
@@ -126,6 +132,29 @@ pub async fn get_wallet_info(exchange: String) -> Result<crate::exchange_client:
 pub async fn get_all_wallets() -> Vec<crate::exchange_client::ExchangeWalletInfo> {
     info!("Fetching wallet info for all exchanges");
     crate::exchange_client::fetch_all_wallets().await
+}
+
+/// Debug stats for memory leak investigation.
+#[derive(serde::Serialize)]
+pub struct DebugStats {
+    pub prices_count: usize,
+    pub opportunities_count: usize,
+    pub message_count: u64,
+    pub has_common_markets: bool,
+    pub has_wallet_status: bool,
+}
+
+/// Get debug stats for investigating memory usage.
+#[tauri::command]
+pub fn get_debug_stats(state: State<'_, Arc<AppState>>) -> DebugStats {
+    state.log_debug_stats();
+    DebugStats {
+        prices_count: state.get_prices().len(),
+        opportunities_count: state.get_opportunities().len(),
+        message_count: state.get_message_count(),
+        has_common_markets: state.get_common_markets().is_some(),
+        has_wallet_status: state.get_wallet_status().is_some(),
+    }
 }
 
 #[cfg(test)]

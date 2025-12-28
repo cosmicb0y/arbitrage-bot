@@ -59,10 +59,12 @@ fn main() {
             commands::is_connected,
             commands::get_exchange_rate,
             commands::get_common_markets,
+            commands::get_wallet_status,
             commands::get_credentials,
             commands::save_credentials,
             commands::get_wallet_info,
             commands::get_all_wallets,
+            commands::get_debug_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
