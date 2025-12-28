@@ -1,12 +1,31 @@
-import { useState } from "react";
-import { useCommonMarkets } from "../hooks/useTauri";
+import { useState, useEffect, useMemo } from "react";
+import { useCommonMarkets, useWalletInfo } from "../hooks/useTauri";
+import type { AssetWalletStatus } from "../types";
 
 type FilterMode = "all" | "common" | "partial";
 
 function Markets() {
   const commonMarkets = useCommonMarkets();
+  const { wallets, fetchWallets } = useWalletInfo();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+
+  // Fetch wallet status on mount
+  useEffect(() => {
+    fetchWallets();
+  }, [fetchWallets]);
+
+  // Build lookup map: exchange -> asset -> status
+  const walletStatusMap = useMemo(() => {
+    const map: Record<string, Record<string, AssetWalletStatus>> = {};
+    for (const wallet of wallets) {
+      map[wallet.exchange] = {};
+      for (const status of wallet.wallet_status) {
+        map[wallet.exchange][status.asset] = status;
+      }
+    }
+    return map;
+  }, [wallets]);
 
   if (!commonMarkets) {
     return (
@@ -150,12 +169,32 @@ function Markets() {
                     </td>
                     {commonMarkets.exchanges.map((exchange) => {
                       const market = markets.find((m) => m.exchange === exchange);
+                      const status = walletStatusMap[exchange]?.[base];
                       return (
                         <td key={exchange} className="p-4">
                           {market ? (
-                            <span className="text-gray-300 font-mono text-sm">
-                              {market.symbol}
-                            </span>
+                            <div className="flex items-center space-x-2">
+                              <span className="text-gray-300 font-mono text-sm">
+                                {market.symbol}
+                              </span>
+                              {status && (
+                                <span className="flex items-center space-x-0.5 text-xs">
+                                  <span
+                                    className={status.can_deposit ? "text-success-500" : "text-danger-500"}
+                                    title={status.can_deposit ? "Deposit OK" : "Deposit Disabled"}
+                                  >
+                                    D
+                                  </span>
+                                  <span className="text-gray-600">/</span>
+                                  <span
+                                    className={status.can_withdraw ? "text-success-500" : "text-danger-500"}
+                                    title={status.can_withdraw ? "Withdraw OK" : "Withdraw Disabled"}
+                                  >
+                                    W
+                                  </span>
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-gray-600">-</span>
                           )}
@@ -179,8 +218,12 @@ function Markets() {
         </table>
       </div>
 
-      <div className="text-sm text-gray-500">
-        Markets available on 2 or more exchanges. Green badge = available on all exchanges.
+      <div className="text-sm text-gray-500 space-y-1">
+        <div>Markets available on 2 or more exchanges. Green badge = available on all exchanges.</div>
+        <div>
+          <span className="text-success-500">D</span>/<span className="text-success-500">W</span> = Deposit/Withdraw enabled,{" "}
+          <span className="text-danger-500">D</span>/<span className="text-danger-500">W</span> = disabled
+        </div>
       </div>
     </div>
   );
