@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import type {
   PriceData,
   ArbitrageOpportunity,
@@ -10,6 +10,9 @@ import type {
   CommonMarkets,
   Credentials,
   ExchangeWalletInfo,
+  WsWalletStatusData,
+  ExchangeWalletStatus,
+  DebugStats,
 } from "../types";
 
 // Check if running inside Tauri
@@ -22,8 +25,8 @@ const WS_SERVER_URL = "ws://127.0.0.1:9001/ws";
 
 // WebSocket message types from CLI server
 interface WsServerMessage {
-  type: "price" | "prices" | "stats" | "opportunity" | "opportunities" | "exchange_rate" | "common_markets";
-  data: PriceData | PriceData[] | BotStats | ArbitrageOpportunity | ArbitrageOpportunity[] | ExchangeRate | CommonMarkets;
+  type: "price" | "prices" | "stats" | "opportunity" | "opportunities" | "exchange_rate" | "common_markets" | "wallet_status";
+  data: PriceData | PriceData[] | BotStats | ArbitrageOpportunity | ArbitrageOpportunity[] | ExchangeRate | CommonMarkets | WsWalletStatusData;
 }
 
 // Shared WebSocket connection for browser mode
@@ -35,6 +38,8 @@ class WebSocketManager {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private isConnecting = false;
   private isClosed = false;
+  // Cache for initial sync messages - new subscribers get these immediately
+  private messageCache: Map<WsServerMessage['type'], WsServerMessage> = new Map();
 
   connect() {
     if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) {
@@ -47,7 +52,6 @@ class WebSocketManager {
     const ws = new WebSocket(WS_SERVER_URL);
 
     ws.onopen = () => {
-      console.log("Connected to CLI server WebSocket");
       this.ws = ws;
       this.isConnecting = false;
     };
@@ -55,7 +59,8 @@ class WebSocketManager {
     ws.onmessage = (event) => {
       try {
         const msg: WsServerMessage = JSON.parse(event.data);
-        console.log("WS message:", msg.type);
+        // Cache messages for late subscribers
+        this.messageCache.set(msg.type, msg);
         this.handlers.forEach((handler) => handler(msg));
       } catch (e) {
         // Ignore parse errors
@@ -82,6 +87,10 @@ class WebSocketManager {
     if (this.handlers.size === 1) {
       this.connect();
     }
+    // Replay cached messages to new subscriber
+    this.messageCache.forEach((msg) => {
+      handler(msg);
+    });
     return () => {
       this.handlers.delete(handler);
       if (this.handlers.size === 0) {
@@ -100,6 +109,8 @@ class WebSocketManager {
       this.ws.close();
       this.ws = null;
     }
+    // Clear cache on close
+    this.messageCache.clear();
   }
 }
 
@@ -108,31 +119,41 @@ const wsManager = new WebSocketManager();
 
 export function usePrices() {
   const [prices, setPrices] = useState<PriceData[]>([]);
+  // Use Map for O(1) lookups and batch updates
+  const priceMapRef = useRef<Map<string, PriceData>>(new Map());
+  const pendingUpdateRef = useRef<boolean>(false);
 
   useEffect(() => {
+    // Flush pending updates at 10 FPS (every 100ms) to reduce React re-renders
+    const flushUpdates = () => {
+      if (pendingUpdateRef.current) {
+        pendingUpdateRef.current = false;
+        setPrices(Array.from(priceMapRef.current.values()));
+      }
+    };
+    const flushInterval = setInterval(flushUpdates, 100);
+
     // Browser fallback: use shared WebSocket
     if (!isTauri()) {
       const unsubscribe = wsManager.subscribe((msg) => {
         if (msg.type === "prices") {
-          setPrices(msg.data as PriceData[]);
+          const newPrices = msg.data as PriceData[];
+          priceMapRef.current.clear();
+          for (const p of newPrices) {
+            priceMapRef.current.set(`${p.exchange}-${p.pair_id}`, p);
+          }
+          pendingUpdateRef.current = true;
         } else if (msg.type === "price") {
           const price = msg.data as PriceData;
-          setPrices((prev) => {
-            const key = `${price.exchange}-${price.pair_id}`;
-            const existing = prev.findIndex(
-              (p) => `${p.exchange}-${p.pair_id}` === key
-            );
-            if (existing >= 0) {
-              const updated = [...prev];
-              updated[existing] = price;
-              return updated;
-            }
-            return [...prev, price];
-          });
+          priceMapRef.current.set(`${price.exchange}-${price.pair_id}`, price);
+          pendingUpdateRef.current = true;
         }
       });
 
-      return unsubscribe;
+      return () => {
+        clearInterval(flushInterval);
+        unsubscribe();
+      };
     }
 
     // Tauri mode: use IPC events
@@ -141,28 +162,26 @@ export function usePrices() {
 
     const setup = async () => {
       unlistenBatch = await listen<PriceData[]>("price_update", (event) => {
-        setPrices(event.payload);
+        priceMapRef.current.clear();
+        for (const p of event.payload) {
+          priceMapRef.current.set(`${p.exchange}-${p.pair_id}`, p);
+        }
+        pendingUpdateRef.current = true;
       });
 
       unlistenSingle = await listen<PriceData>("price", (event) => {
-        setPrices((prev) => {
-          const key = `${event.payload.exchange}-${event.payload.pair_id}`;
-          const existing = prev.findIndex(
-            (p) => `${p.exchange}-${p.pair_id}` === key
-          );
-          if (existing >= 0) {
-            const updated = [...prev];
-            updated[existing] = event.payload;
-            return updated;
-          }
-          return [...prev, event.payload];
-        });
+        const p = event.payload;
+        priceMapRef.current.set(`${p.exchange}-${p.pair_id}`, p);
+        pendingUpdateRef.current = true;
       });
 
       try {
         const data = await invoke<PriceData[]>("get_prices");
         if (data.length > 0) {
-          setPrices(data);
+          for (const p of data) {
+            priceMapRef.current.set(`${p.exchange}-${p.pair_id}`, p);
+          }
+          pendingUpdateRef.current = true;
         }
       } catch (e) {
         console.error("Failed to fetch initial prices:", e);
@@ -172,6 +191,7 @@ export function usePrices() {
     setup();
 
     return () => {
+      clearInterval(flushInterval);
       if (unlistenBatch) unlistenBatch();
       if (unlistenSingle) unlistenSingle();
     };
@@ -184,41 +204,58 @@ export function useOpportunities() {
   const [opportunities, setOpportunities] = useState<ArbitrageOpportunity[]>(
     []
   );
+  // Use Map for O(1) lookups and batch updates
+  const oppMapRef = useRef<Map<string, ArbitrageOpportunity>>(new Map());
+  const pendingUpdateRef = useRef<boolean>(false);
 
   useEffect(() => {
+    const getOppKey = (opp: ArbitrageOpportunity) =>
+      `${opp.symbol}-${opp.source_exchange}-${opp.target_exchange}`;
+
+    // Max age for opportunities (10 seconds)
+    const MAX_AGE_MS = 10_000;
+
+    // Flush pending updates at 10 FPS (every 100ms)
+    const flushUpdates = () => {
+      if (pendingUpdateRef.current) {
+        pendingUpdateRef.current = false;
+        const now = Date.now();
+        // Remove stale opportunities
+        for (const [key, opp] of oppMapRef.current) {
+          if (now - opp.timestamp > MAX_AGE_MS) {
+            oppMapRef.current.delete(key);
+          }
+        }
+        // Sort by premium_bps descending, limit to 50
+        const sorted = Array.from(oppMapRef.current.values())
+          .sort((a, b) => b.premium_bps - a.premium_bps)
+          .slice(0, 50);
+        setOpportunities(sorted);
+      }
+    };
+    const flushInterval = setInterval(flushUpdates, 100);
+
     // Browser fallback
     if (!isTauri()) {
       const unsubscribe = wsManager.subscribe((msg) => {
         if (msg.type === "opportunity") {
           const opp = msg.data as ArbitrageOpportunity;
-          setOpportunities((prev) => {
-            // Deduplicate by exchange pair
-            const exists = prev.some(
-              (p) =>
-                p.symbol === opp.symbol &&
-                p.source_exchange === opp.source_exchange &&
-                p.target_exchange === opp.target_exchange
-            );
-            if (exists) {
-              return prev.map((p) =>
-                p.symbol === opp.symbol &&
-                p.source_exchange === opp.source_exchange &&
-                p.target_exchange === opp.target_exchange
-                  ? opp
-                  : p
-              );
-            }
-            const updated = [opp, ...prev];
-            return updated.slice(0, 50);
-          });
+          oppMapRef.current.set(getOppKey(opp), opp);
+          pendingUpdateRef.current = true;
         } else if (msg.type === "opportunities") {
-          // Initial batch of opportunities
           const opps = msg.data as ArbitrageOpportunity[];
-          setOpportunities(opps);
+          oppMapRef.current.clear();
+          for (const opp of opps) {
+            oppMapRef.current.set(getOppKey(opp), opp);
+          }
+          pendingUpdateRef.current = true;
         }
       });
 
-      return unsubscribe;
+      return () => {
+        clearInterval(flushInterval);
+        unsubscribe();
+      };
     }
 
     // Tauri mode
@@ -231,26 +268,8 @@ export function useOpportunities() {
         "new_opportunity",
         (event) => {
           const opp = event.payload;
-          setOpportunities((prev) => {
-            // Deduplicate by exchange pair
-            const exists = prev.some(
-              (p) =>
-                p.symbol === opp.symbol &&
-                p.source_exchange === opp.source_exchange &&
-                p.target_exchange === opp.target_exchange
-            );
-            if (exists) {
-              return prev.map((p) =>
-                p.symbol === opp.symbol &&
-                p.source_exchange === opp.source_exchange &&
-                p.target_exchange === opp.target_exchange
-                  ? opp
-                  : p
-              );
-            }
-            const updated = [opp, ...prev];
-            return updated.slice(0, 50);
-          });
+          oppMapRef.current.set(getOppKey(opp), opp);
+          pendingUpdateRef.current = true;
         }
       );
 
@@ -258,13 +277,20 @@ export function useOpportunities() {
       unlistenBatch = await listen<ArbitrageOpportunity[]>(
         "opportunities",
         (event) => {
-          setOpportunities(event.payload);
+          oppMapRef.current.clear();
+          for (const opp of event.payload) {
+            oppMapRef.current.set(getOppKey(opp), opp);
+          }
+          pendingUpdateRef.current = true;
         }
       );
 
       try {
         const data = await invoke<ArbitrageOpportunity[]>("get_opportunities");
-        setOpportunities(data);
+        for (const opp of data) {
+          oppMapRef.current.set(getOppKey(opp), opp);
+        }
+        pendingUpdateRef.current = true;
       } catch (e) {
         console.error("Failed to fetch initial opportunities:", e);
       }
@@ -273,6 +299,7 @@ export function useOpportunities() {
     setup();
 
     return () => {
+      clearInterval(flushInterval);
       if (unlistenNew) unlistenNew();
       if (unlistenBatch) unlistenBatch();
     };
@@ -563,4 +590,83 @@ export function useWalletInfo(exchange?: string) {
   }, [exchange]);
 
   return { wallets, loading, error, fetchWallets };
+}
+
+// Cache for wallet status (persists across component remounts)
+let cachedWalletStatus: ExchangeWalletStatus[] = [];
+
+/**
+ * Hook to receive wallet status updates via WebSocket from the server.
+ * This is for the Markets component which only needs deposit/withdraw status.
+ * Updated every 5 minutes from the server.
+ */
+export function useWalletStatus() {
+  const [walletStatus, setWalletStatus] = useState<ExchangeWalletStatus[]>(cachedWalletStatus);
+
+  useEffect(() => {
+    // Browser fallback: use shared WebSocket
+    if (!isTauri()) {
+      const unsubscribe = wsManager.subscribe((msg) => {
+        if (msg.type === "wallet_status") {
+          const data = msg.data as WsWalletStatusData;
+          cachedWalletStatus = data.exchanges;
+          setWalletStatus(cachedWalletStatus);
+        }
+      });
+
+      return unsubscribe;
+    }
+
+    // Tauri mode: listen for wallet_status events
+    let unlisten: UnlistenFn | undefined;
+
+    const setup = async () => {
+      unlisten = await listen<WsWalletStatusData>("wallet_status", (event) => {
+        cachedWalletStatus = event.payload.exchanges;
+        setWalletStatus(cachedWalletStatus);
+      });
+
+      // Fetch initial wallet status from cache
+      try {
+        const data = await invoke<WsWalletStatusData | null>("get_wallet_status");
+        if (data && data.exchanges.length > 0) {
+          cachedWalletStatus = data.exchanges;
+          setWalletStatus(cachedWalletStatus);
+        }
+      } catch (e) {
+        console.error("Failed to fetch initial wallet status:", e);
+      }
+    };
+
+    setup();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  return walletStatus;
+}
+
+/**
+ * Hook to fetch debug stats for memory leak investigation.
+ * Only works in Tauri mode.
+ */
+export function useDebugStats() {
+  const [stats, setStats] = useState<DebugStats | null>(null);
+
+  const fetchStats = useCallback(async () => {
+    if (!isTauri()) return null;
+    try {
+      const data = await invoke<DebugStats>("get_debug_stats");
+      setStats(data);
+      console.log("[DEBUG] Backend stats:", data);
+      return data;
+    } catch (e) {
+      console.error("Failed to fetch debug stats:", e);
+      return null;
+    }
+  }, []);
+
+  return { stats, fetchStats };
 }

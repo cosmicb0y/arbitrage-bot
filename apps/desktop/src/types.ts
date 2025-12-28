@@ -104,3 +104,25 @@ export interface ExchangeWalletInfo {
   wallet_status: AssetWalletStatus[];
   last_updated: number;
 }
+
+// WebSocket wallet status data (from server)
+export interface WsWalletStatusData {
+  exchanges: ExchangeWalletStatus[];
+  timestamp: number;
+}
+
+// Exchange wallet status (without balances, from server)
+export interface ExchangeWalletStatus {
+  exchange: string;
+  wallet_status: AssetWalletStatus[];
+  last_updated: number;
+}
+
+// Debug stats for memory leak investigation
+export interface DebugStats {
+  prices_count: number;
+  opportunities_count: number;
+  message_count: number;
+  has_common_markets: boolean;
+  has_wallet_status: boolean;
+}

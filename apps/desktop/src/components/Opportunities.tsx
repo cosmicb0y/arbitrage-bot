@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useOpportunities, usePrices } from "../hooks/useTauri";
+import { useOpportunities, usePrices, useWalletStatus } from "../hooks/useTauri";
 
 type OppKey = string;
 type ChangeType = "up" | "down" | null;
@@ -16,12 +16,28 @@ const getOppKey = (opp: { symbol: string; source_exchange: string; target_exchan
 function Opportunities() {
   const { opportunities: rawOpportunities, executeOpportunity } = useOpportunities();
   const prices = usePrices();
+  const walletStatuses = useWalletStatus();
   const [executing, setExecuting] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [, setTick] = useState(0);
   const [priceChanges, setPriceChanges] = useState<Map<OppKey, PriceChanges>>(new Map());
   const prevDataRef = useRef<Map<OppKey, { source: number; target: number; spread: number }>>(new Map());
   const [minVolume, setMinVolume] = useState<number>(0);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Build wallet status lookup: exchange -> asset -> { canDeposit, canWithdraw }
+  const walletStatusMap = useMemo(() => {
+    const map: Record<string, Record<string, { canDeposit: boolean; canWithdraw: boolean }>> = {};
+    for (const status of walletStatuses) {
+      map[status.exchange] = {};
+      for (const assetStatus of status.wallet_status) {
+        map[status.exchange][assetStatus.asset] = {
+          canDeposit: assetStatus.can_deposit,
+          canWithdraw: assetStatus.can_withdraw,
+        };
+      }
+    }
+    return map;
+  }, [walletStatuses]);
 
   // Build volume map by symbol
   const volumeBySymbol = useMemo(() => {
@@ -37,8 +53,17 @@ function Opportunities() {
 
   // Sort and filter opportunities
   const opportunities = useMemo(() => {
+    const query = searchQuery.toUpperCase();
     return [...rawOpportunities]
       .filter((opp) => {
+        // Search filter: match symbol or exchange names
+        if (query) {
+          const matchesSymbol = opp.symbol.toUpperCase().includes(query);
+          const matchesSource = opp.source_exchange.toUpperCase().includes(query);
+          const matchesTarget = opp.target_exchange.toUpperCase().includes(query);
+          if (!matchesSymbol && !matchesSource && !matchesTarget) return false;
+        }
+        // Volume filter
         if (minVolume > 0) {
           const volume = volumeBySymbol[opp.symbol] || 0;
           if (volume < minVolume) return false;
@@ -46,23 +71,17 @@ function Opportunities() {
         return true;
       })
       .sort((a, b) => b.premium_bps - a.premium_bps);
-  }, [rawOpportunities, minVolume, volumeBySymbol]);
-
-  // Force re-render every second to update time display
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTick((t) => t + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  }, [rawOpportunities, searchQuery, minVolume, volumeBySymbol]);
 
   // Detect price changes
   useEffect(() => {
     const newChanges = new Map<OppKey, PriceChanges>();
     const prevData = prevDataRef.current;
+    const currentKeys = new Set<OppKey>();
 
     for (const opp of opportunities) {
       const key = getOppKey(opp);
+      currentKeys.add(key);
       const prev = prevData.get(key);
 
       if (prev) {
@@ -76,6 +95,13 @@ function Opportunities() {
       }
 
       prevData.set(key, { source: opp.source_price, target: opp.target_price, spread: opp.premium_bps });
+    }
+
+    // Clean up old entries that are no longer in opportunities (prevent memory leak)
+    for (const key of prevData.keys()) {
+      if (!currentKeys.has(key)) {
+        prevData.delete(key);
+      }
     }
 
     if (newChanges.size > 0) {
@@ -117,21 +143,18 @@ function Opportunities() {
     });
   };
 
-  const timeSince = (ms: number): string => {
-    const seconds = Math.floor((Date.now() - ms) / 1000);
-    if (seconds < 1) return "0s ago";
-    if (seconds < 60) return `${seconds}s ago`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    return `${hours}h ago`;
-  };
-
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-semibold">Arbitrage Opportunities</h2>
         <div className="flex items-center gap-4">
+          <input
+            type="text"
+            placeholder="Search symbol or exchange..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-48 px-3 py-1.5 bg-dark-700 border border-dark-600 rounded text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
+          />
           <select
             value={minVolume}
             onChange={(e) => setMinVolume(Number(e.target.value))}
@@ -157,16 +180,26 @@ function Opportunities() {
       )}
 
       <div className="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
-        <table className="w-full">
+        <table className="w-full table-fixed">
+          <colgroup>
+            <col className="w-24" />
+            <col className="w-48" />
+            <col className="w-24" />
+            <col className="w-28" />
+            <col className="w-28" />
+            <col className="w-24" />
+            <col className="w-24" />
+            <col className="w-24" />
+          </colgroup>
           <thead className="bg-dark-700">
             <tr>
               <th className="text-left text-gray-400 text-sm p-4">Asset</th>
               <th className="text-left text-gray-400 text-sm p-4">Route</th>
+              <th className="text-center text-gray-400 text-sm p-4">Transfer</th>
               <th className="text-right text-gray-400 text-sm p-4">Buy Price</th>
               <th className="text-right text-gray-400 text-sm p-4">Sell Price</th>
               <th className="text-right text-gray-400 text-sm p-4">Spread</th>
               <th className="text-center text-gray-400 text-sm p-4">Confidence</th>
-              <th className="text-right text-gray-400 text-sm p-4">Time</th>
               <th className="text-center text-gray-400 text-sm p-4">Action</th>
             </tr>
           </thead>
@@ -175,6 +208,11 @@ function Opportunities() {
               opportunities.map((opp, index) => {
                 const oppKey = getOppKey(opp);
                 const changes = priceChanges.get(oppKey);
+                // source_exchange에서 출금, target_exchange로 입금
+                const sourceStatus = walletStatusMap[opp.source_exchange]?.[opp.symbol];
+                const targetStatus = walletStatusMap[opp.target_exchange]?.[opp.symbol];
+                const canWithdrawFromSource = sourceStatus?.canWithdraw;
+                const canDepositToTarget = targetStatus?.canDeposit;
                 return (
                   <tr
                     key={`${opp.id}-${index}`}
@@ -193,6 +231,35 @@ function Opportunities() {
                       <span className="text-gray-500">→</span>
                       <span className="text-primary-500 font-medium">
                         {opp.target_exchange}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="p-4 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <span
+                        className={`text-xs px-1.5 py-0.5 rounded ${
+                          canWithdrawFromSource === undefined
+                            ? "bg-gray-600 text-gray-400"
+                            : canWithdrawFromSource
+                              ? "bg-success-500/20 text-success-400"
+                              : "bg-danger-500/20 text-danger-400"
+                        }`}
+                        title={`${opp.source_exchange} withdraw`}
+                      >
+                        W{canWithdrawFromSource === undefined ? "?" : canWithdrawFromSource ? "✓" : "✕"}
+                      </span>
+                      <span className="text-gray-600">→</span>
+                      <span
+                        className={`text-xs px-1.5 py-0.5 rounded ${
+                          canDepositToTarget === undefined
+                            ? "bg-gray-600 text-gray-400"
+                            : canDepositToTarget
+                              ? "bg-success-500/20 text-success-400"
+                              : "bg-danger-500/20 text-danger-400"
+                        }`}
+                        title={`${opp.target_exchange} deposit`}
+                      >
+                        D{canDepositToTarget === undefined ? "?" : canDepositToTarget ? "✓" : "✕"}
                       </span>
                     </div>
                   </td>
@@ -234,9 +301,6 @@ function Opportunities() {
                         {opp.confidence_score}%
                       </span>
                     </div>
-                  </td>
-                  <td className="p-4 text-right text-sm text-gray-400">
-                    {timeSince(opp.timestamp)}
                   </td>
                   <td className="p-4 text-center">
                     <button

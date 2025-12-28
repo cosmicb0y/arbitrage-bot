@@ -109,6 +109,43 @@ pub struct CommonMarketsData {
     pub timestamp: u64,
 }
 
+/// Network status for deposit/withdraw.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStatus {
+    pub network: String,
+    pub name: String,
+    pub deposit_enabled: bool,
+    pub withdraw_enabled: bool,
+    pub min_withdraw: f64,
+    pub withdraw_fee: f64,
+    pub confirms_required: u32,
+}
+
+/// Asset wallet status from CLI server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetWalletStatus {
+    pub asset: String,
+    pub name: String,
+    pub networks: Vec<NetworkStatus>,
+    pub can_deposit: bool,
+    pub can_withdraw: bool,
+}
+
+/// Exchange wallet status from CLI server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeWalletStatus {
+    pub exchange: String,
+    pub wallet_status: Vec<AssetWalletStatus>,
+    pub last_updated: u64,
+}
+
+/// Wallet status data from CLI server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletStatusData {
+    pub exchanges: Vec<ExchangeWalletStatus>,
+    pub timestamp: u64,
+}
+
 /// WebSocket message types from CLI server.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -131,6 +168,9 @@ pub enum WsServerMessage {
     /// Common markets across exchanges
     #[serde(rename = "common_markets")]
     CommonMarkets(CommonMarketsData),
+    /// Wallet status for deposit/withdraw
+    #[serde(rename = "wallet_status")]
+    WalletStatus(WalletStatusData),
 }
 
 /// Application state shared across commands.
@@ -139,7 +179,7 @@ pub struct AppState {
     connected: AtomicBool,
     /// CLI server WebSocket URL
     server_url: std::sync::RwLock<String>,
-    /// Cached prices from CLI server
+    /// Cached prices from CLI server (key: "exchange:symbol")
     prices: DashMap<String, PriceData>,
     /// Cached stats from CLI server
     stats: std::sync::RwLock<BotStats>,
@@ -151,6 +191,10 @@ pub struct AppState {
     exchange_rate: std::sync::RwLock<Option<ExchangeRateData>>,
     /// Common markets
     common_markets: std::sync::RwLock<Option<CommonMarketsData>>,
+    /// Wallet status for deposit/withdraw
+    wallet_status: std::sync::RwLock<Option<WalletStatusData>>,
+    /// Message counter for debug
+    message_count: std::sync::atomic::AtomicU64,
 }
 
 impl AppState {
@@ -164,7 +208,37 @@ impl AppState {
             config: std::sync::RwLock::new(ExecutionConfig::default()),
             exchange_rate: std::sync::RwLock::new(None),
             common_markets: std::sync::RwLock::new(None),
+            wallet_status: std::sync::RwLock::new(None),
+            message_count: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Increment message counter and return current count
+    pub fn increment_message_count(&self) -> u64 {
+        self.message_count.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Log current state sizes for debugging memory usage
+    pub fn log_debug_stats(&self) {
+        let prices_count = self.prices.len();
+        let opps_count = self.opportunities.read().unwrap().len();
+        let msg_count = self.message_count.load(Ordering::Relaxed);
+        let has_common_markets = self.common_markets.read().unwrap().is_some();
+        let has_wallet_status = self.wallet_status.read().unwrap().is_some();
+
+        info!(
+            "[DEBUG] State sizes - prices: {}, opportunities: {}, messages: {}, common_markets: {}, wallet_status: {}",
+            prices_count,
+            opps_count,
+            msg_count,
+            has_common_markets,
+            has_wallet_status
+        );
+    }
+
+    /// Get message count for debugging
+    pub fn get_message_count(&self) -> u64 {
+        self.message_count.load(Ordering::Relaxed)
     }
 
     pub fn is_connected(&self) -> bool {
@@ -256,6 +330,14 @@ impl AppState {
     pub fn get_common_markets(&self) -> Option<CommonMarketsData> {
         self.common_markets.read().unwrap().clone()
     }
+
+    pub fn update_wallet_status(&self, status: WalletStatusData) {
+        *self.wallet_status.write().unwrap() = Some(status);
+    }
+
+    pub fn get_wallet_status(&self) -> Option<WalletStatusData> {
+        self.wallet_status.read().unwrap().clone()
+    }
 }
 
 impl Default for AppState {
@@ -302,41 +384,61 @@ async fn connect_to_server(
     // Emit connection status
     let _ = app.emit("server_connected", true);
 
+    // Log initial state
+    state.log_debug_stats();
+
     while let Some(msg_result) = read.next().await {
         match msg_result {
             Ok(Message::Text(text)) => {
+                // Increment message counter
+                let msg_count = state.increment_message_count();
+
+                // Log debug stats every 1000 messages
+                if msg_count > 0 && msg_count % 1000 == 0 {
+                    state.log_debug_stats();
+                }
+
                 if let Ok(ws_msg) = serde_json::from_str::<WsServerMessage>(&text) {
                     match ws_msg {
                         WsServerMessage::Price(price) => {
                             // Single price update (event-driven)
-                            state.update_price(price.clone());
-                            let _ = app.emit("price", price);
+                            // Emit first, then store (avoids clone)
+                            let _ = app.emit("price", &price);
+                            state.update_price(price);
                         }
                         WsServerMessage::Prices(prices) => {
                             // Batch prices (initial sync)
-                            state.update_prices(prices.clone());
+                            info!("[DEBUG] Received {} prices in batch", prices.len());
+                            state.update_prices(prices);
                             let _ = app.emit("price_update", state.get_prices());
                         }
                         WsServerMessage::Stats(stats) => {
-                            state.update_stats(stats.clone());
-                            let _ = app.emit("stats", stats);
+                            let _ = app.emit("stats", &stats);
+                            state.update_stats(stats);
                         }
                         WsServerMessage::Opportunity(opp) => {
-                            state.add_opportunity(opp.clone());
-                            let _ = app.emit("new_opportunity", opp);
+                            let _ = app.emit("new_opportunity", &opp);
+                            state.add_opportunity(opp);
                         }
                         WsServerMessage::Opportunities(opps) => {
                             // Batch opportunities (initial sync)
-                            state.set_opportunities(opps.clone());
-                            let _ = app.emit("opportunities", opps);
+                            info!("[DEBUG] Received {} opportunities in batch", opps.len());
+                            let _ = app.emit("opportunities", &opps);
+                            state.set_opportunities(opps);
                         }
                         WsServerMessage::ExchangeRate(rate) => {
-                            state.update_exchange_rate(rate.clone());
-                            let _ = app.emit("exchange_rate", rate);
+                            let _ = app.emit("exchange_rate", &rate);
+                            state.update_exchange_rate(rate);
                         }
                         WsServerMessage::CommonMarkets(markets) => {
-                            state.update_common_markets(markets.clone());
-                            let _ = app.emit("common_markets", markets);
+                            info!("[DEBUG] Received common_markets with {} bases", markets.common_bases.len());
+                            let _ = app.emit("common_markets", &markets);
+                            state.update_common_markets(markets);
+                        }
+                        WsServerMessage::WalletStatus(wallet_status) => {
+                            info!("[DEBUG] Received wallet_status for {} exchanges", wallet_status.exchanges.len());
+                            let _ = app.emit("wallet_status", &wallet_status);
+                            state.update_wallet_status(wallet_status);
                         }
                     }
                 }
@@ -390,6 +492,7 @@ mod tests {
                 price: 50000.0,
                 bid: 49999.0,
                 ask: 50001.0,
+                volume_24h: 1000000.0,
                 timestamp: 0,
             },
         ];
