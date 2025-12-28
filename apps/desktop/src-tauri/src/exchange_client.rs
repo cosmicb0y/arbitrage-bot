@@ -283,7 +283,8 @@ pub async fn fetch_upbit_wallet_status() -> Result<Vec<AssetWalletStatus>, Strin
                         "working" => (true, true),
                         "withdraw_only" => (false, true),
                         "deposit_only" => (true, false),
-                        _ => (false, false), // paused, suspended, etc.
+                        "paused" | "unsupported" => (false, false),
+                        _ => (false, false),
                     };
 
                     NetworkStatus {
