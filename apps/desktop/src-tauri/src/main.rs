@@ -64,7 +64,6 @@ fn main() {
             commands::save_credentials,
             commands::get_wallet_info,
             commands::get_all_wallets,
-            commands::get_debug_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

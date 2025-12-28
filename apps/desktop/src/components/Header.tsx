@@ -1,4 +1,4 @@
-import { useStats, useBotControl, useDebugStats } from "../hooks/useTauri";
+import { useStats, useBotControl } from "../hooks/useTauri";
 
 interface HeaderProps {
   activeTab: string;
@@ -8,7 +8,6 @@ interface HeaderProps {
 function Header({ activeTab, onTabChange }: HeaderProps) {
   const stats = useStats();
   const { start, stop } = useBotControl();
-  const { stats: debugStats, fetchStats } = useDebugStats();
 
   const formatUptime = (secs: number): string => {
     const hours = Math.floor(secs / 3600);
@@ -94,28 +93,8 @@ function Header({ activeTab, onTabChange }: HeaderProps) {
               {stats.is_running ? "Running" : "Stopped"}
             </span>
           </div>
-
-          {/* Debug Button */}
-          <button
-            onClick={fetchStats}
-            className="px-2 py-1 text-xs bg-dark-700 hover:bg-dark-600 text-gray-400 rounded"
-            title="Check debug stats (see console)"
-          >
-            Debug
-          </button>
         </div>
       </div>
-
-      {/* Debug Stats Panel (shown after clicking Debug button) */}
-      {debugStats && (
-        <div className="bg-dark-900 border-t border-dark-700 px-4 py-2 text-xs font-mono text-gray-400">
-          <span className="mr-4">Backend: prices={debugStats.prices_count}</span>
-          <span className="mr-4">opportunities={debugStats.opportunities_count}</span>
-          <span className="mr-4">messages={debugStats.message_count.toLocaleString()}</span>
-          <span className="mr-4">common_markets={debugStats.has_common_markets ? "yes" : "no"}</span>
-          <span>wallet_status={debugStats.has_wallet_status ? "yes" : "no"}</span>
-        </div>
-      )}
     </header>
   );
 }

@@ -12,7 +12,6 @@ import type {
   ExchangeWalletInfo,
   WsWalletStatusData,
   ExchangeWalletStatus,
-  DebugStats,
 } from "../types";
 
 // Check if running inside Tauri
@@ -646,27 +645,4 @@ export function useWalletStatus() {
   }, []);
 
   return walletStatus;
-}
-
-/**
- * Hook to fetch debug stats for memory leak investigation.
- * Only works in Tauri mode.
- */
-export function useDebugStats() {
-  const [stats, setStats] = useState<DebugStats | null>(null);
-
-  const fetchStats = useCallback(async () => {
-    if (!isTauri()) return null;
-    try {
-      const data = await invoke<DebugStats>("get_debug_stats");
-      setStats(data);
-      console.log("[DEBUG] Backend stats:", data);
-      return data;
-    } catch (e) {
-      console.error("Failed to fetch debug stats:", e);
-      return null;
-    }
-  }, []);
-
-  return { stats, fetchStats };
 }

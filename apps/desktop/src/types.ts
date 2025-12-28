@@ -117,12 +117,3 @@ export interface ExchangeWalletStatus {
   wallet_status: AssetWalletStatus[];
   last_updated: number;
 }
-
-// Debug stats for memory leak investigation
-export interface DebugStats {
-  prices_count: number;
-  opportunities_count: number;
-  message_count: number;
-  has_common_markets: boolean;
-  has_wallet_status: boolean;
-}

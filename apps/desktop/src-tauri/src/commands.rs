@@ -134,29 +134,6 @@ pub async fn get_all_wallets() -> Vec<crate::exchange_client::ExchangeWalletInfo
     crate::exchange_client::fetch_all_wallets().await
 }
 
-/// Debug stats for memory leak investigation.
-#[derive(serde::Serialize)]
-pub struct DebugStats {
-    pub prices_count: usize,
-    pub opportunities_count: usize,
-    pub message_count: u64,
-    pub has_common_markets: bool,
-    pub has_wallet_status: bool,
-}
-
-/// Get debug stats for investigating memory usage.
-#[tauri::command]
-pub fn get_debug_stats(state: State<'_, Arc<AppState>>) -> DebugStats {
-    state.log_debug_stats();
-    DebugStats {
-        prices_count: state.get_prices().len(),
-        opportunities_count: state.get_opportunities().len(),
-        message_count: state.get_message_count(),
-        has_common_markets: state.get_common_markets().is_some(),
-        has_wallet_status: state.get_wallet_status().is_some(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
