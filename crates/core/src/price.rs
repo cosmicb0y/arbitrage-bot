@@ -138,6 +138,19 @@ impl PriceTick {
         FixedPoint(self.volume_24h)
     }
 
+    /// Set volume_24h.
+    #[inline]
+    pub fn set_volume_24h(&mut self, volume: FixedPoint) {
+        self.volume_24h = volume.0;
+    }
+
+    /// Builder pattern: set volume_24h and return self.
+    #[inline]
+    pub fn with_volume_24h(mut self, volume: FixedPoint) -> Self {
+        self.volume_24h = volume.0;
+        self
+    }
+
     /// Get liquidity (safe accessor for packed struct).
     #[inline]
     pub fn liquidity(&self) -> FixedPoint {

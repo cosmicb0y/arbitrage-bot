@@ -110,6 +110,9 @@ impl BinanceAdapter {
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
         let ask = ticker.ask.parse::<f64>()
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let volume = ticker.volume.parse::<f64>().unwrap_or(0.0);
+        // Convert volume to USD value (volume * price)
+        let volume_usd = volume * price;
 
         Ok((PriceTick::new(
             Exchange::Binance,
@@ -117,7 +120,7 @@ impl BinanceAdapter {
             FixedPoint::from_f64(price),
             FixedPoint::from_f64(bid),
             FixedPoint::from_f64(ask),
-        ), symbol))
+        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), symbol))
     }
 
     /// Parse a book ticker message from Binance (best bid/ask only).
@@ -448,6 +451,9 @@ impl CoinbaseAdapter {
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
         let ask = ticker.best_ask.parse::<f64>()
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let volume = ticker.volume_24h.parse::<f64>().unwrap_or(0.0);
+        // Coinbase volume_24h is already in base currency, convert to USD
+        let volume_usd = volume * price;
 
         Ok((PriceTick::new(
             Exchange::Coinbase,
@@ -455,7 +461,7 @@ impl CoinbaseAdapter {
             FixedPoint::from_f64(price),
             FixedPoint::from_f64(bid),
             FixedPoint::from_f64(ask),
-        ), symbol))
+        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), symbol))
     }
 
     /// Generate a subscription message for Coinbase WebSocket.
