@@ -7,6 +7,8 @@ function Dashboard() {
   const { opportunities } = useOpportunities();
   const exchangeRate = useExchangeRate();
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [minVolume, setMinVolume] = useState<number>(0);
 
   // Group prices by symbol
   const pricesBySymbol = useMemo(() => {
@@ -20,20 +22,37 @@ function Dashboard() {
     return grouped;
   }, [prices]);
 
-  // Available symbols sorted by spread (descending)
+  // Helper to calculate total volume for a symbol
+  const getSymbolVolume = (symbol: string): number => {
+    const prices = pricesBySymbol[symbol];
+    if (!prices) return 0;
+    return prices.reduce((sum, p) => sum + (p.volume_24h || 0), 0);
+  };
+
+  // Available symbols sorted by spread (descending) and filtered by search and volume
   const symbols = useMemo(() => {
-    return Object.keys(pricesBySymbol).sort((a, b) => {
-      const pricesA = pricesBySymbol[a];
-      const pricesB = pricesBySymbol[b];
-      const maxA = Math.max(...pricesA.map(p => p.price));
-      const minA = Math.min(...pricesA.map(p => p.price));
-      const maxB = Math.max(...pricesB.map(p => p.price));
-      const minB = Math.min(...pricesB.map(p => p.price));
-      const spreadA = minA > 0 ? (maxA - minA) / minA : 0;
-      const spreadB = minB > 0 ? (maxB - minB) / minB : 0;
-      return spreadB - spreadA;
-    });
-  }, [pricesBySymbol]);
+    const query = searchQuery.toUpperCase();
+    return Object.keys(pricesBySymbol)
+      .filter((symbol) => {
+        if (!symbol.toUpperCase().includes(query)) return false;
+        if (minVolume > 0) {
+          const totalVolume = getSymbolVolume(symbol);
+          if (totalVolume < minVolume) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const pricesA = pricesBySymbol[a];
+        const pricesB = pricesBySymbol[b];
+        const maxA = Math.max(...pricesA.map(p => p.price));
+        const minA = Math.min(...pricesA.map(p => p.price));
+        const maxB = Math.max(...pricesB.map(p => p.price));
+        const minB = Math.min(...pricesB.map(p => p.price));
+        const spreadA = minA > 0 ? (maxA - minA) / minA : 0;
+        const spreadB = minB > 0 ? (maxB - minB) / minB : 0;
+        return spreadB - spreadA;
+      });
+  }, [pricesBySymbol, searchQuery, minVolume]);
 
   // Auto-select first symbol if none selected
   const activeSymbol = selectedSymbol && pricesBySymbol[selectedSymbol]
@@ -51,6 +70,19 @@ function Dashboard() {
       minimumFractionDigits: 4,
       maximumFractionDigits: 4,
     });
+  };
+
+  const formatVolume = (volume: number): string => {
+    if (volume >= 1_000_000_000) {
+      return `$${(volume / 1_000_000_000).toFixed(2)}B`;
+    }
+    if (volume >= 1_000_000) {
+      return `$${(volume / 1_000_000).toFixed(2)}M`;
+    }
+    if (volume >= 1_000) {
+      return `$${(volume / 1_000).toFixed(2)}K`;
+    }
+    return `$${volume.toFixed(2)}`;
   };
 
   return (
@@ -106,29 +138,58 @@ function Dashboard() {
         {/* Left: Market List */}
         <div className="w-64 flex-shrink-0">
           <h2 className="text-lg font-semibold mb-4">Markets</h2>
-          <div className="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden max-h-[500px] overflow-y-auto">
+          <div className="mb-2 space-y-2">
+            <input
+              type="text"
+              placeholder="Search markets..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
+            />
+            <select
+              value={minVolume}
+              onChange={(e) => setMinVolume(Number(e.target.value))}
+              className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-sm text-white focus:outline-none focus:border-primary-500"
+            >
+              <option value={0}>All Volumes</option>
+              <option value={100000}>Vol &gt; $100K</option>
+              <option value={1000000}>Vol &gt; $1M</option>
+              <option value={10000000}>Vol &gt; $10M</option>
+              <option value={100000000}>Vol &gt; $100M</option>
+              <option value={1000000000}>Vol &gt; $1B</option>
+            </select>
+          </div>
+          <div className="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden max-h-[456px] overflow-y-auto">
               {symbols.map((symbol) => {
                 const exchangePrices = pricesBySymbol[symbol];
                 const maxPrice = Math.max(...exchangePrices.map(p => p.price));
                 const minPrice = Math.min(...exchangePrices.map(p => p.price));
                 const spread = maxPrice > 0 ? ((maxPrice - minPrice) / minPrice) * 100 : 0;
+                const totalVolume = exchangePrices.reduce((sum, p) => sum + (p.volume_24h || 0), 0);
 
                 return (
                   <button
                     key={symbol}
                     onClick={() => setSelectedSymbol(symbol)}
-                    className={`w-full px-4 py-3 flex justify-between items-center text-left transition-colors border-b border-dark-700 last:border-b-0 ${
+                    className={`w-full px-4 py-3 text-left transition-colors border-b border-dark-700 last:border-b-0 ${
                       activeSymbol === symbol
                         ? "bg-primary-500/20 border-l-2 border-l-primary-500"
                         : "hover:bg-dark-700"
                     }`}
                   >
-                    <span className={`font-medium ${activeSymbol === symbol ? "text-primary-400" : "text-white"}`}>
-                      {symbol}
-                    </span>
-                    <span className={`text-sm font-mono ${spread >= 0.5 ? "text-success-500" : "text-gray-500"}`}>
-                      {spread.toFixed(2)}%
-                    </span>
+                    <div className="flex justify-between items-center">
+                      <span className={`font-medium ${activeSymbol === symbol ? "text-primary-400" : "text-white"}`}>
+                        {symbol}
+                      </span>
+                      <span className={`text-sm font-mono ${spread >= 0.5 ? "text-success-500" : "text-gray-500"}`}>
+                        {spread.toFixed(2)}%
+                      </span>
+                    </div>
+                    {totalVolume > 0 && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        Vol: {formatVolume(totalVolume)}
+                      </div>
+                    )}
                   </button>
                 );
               })}

@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import { useOpportunities } from "../hooks/useTauri";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useOpportunities, usePrices } from "../hooks/useTauri";
 
 type OppKey = string;
 type ChangeType = "up" | "down" | null;
@@ -15,14 +15,38 @@ const getOppKey = (opp: { symbol: string; source_exchange: string; target_exchan
 
 function Opportunities() {
   const { opportunities: rawOpportunities, executeOpportunity } = useOpportunities();
+  const prices = usePrices();
   const [executing, setExecuting] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [, setTick] = useState(0);
   const [priceChanges, setPriceChanges] = useState<Map<OppKey, PriceChanges>>(new Map());
   const prevDataRef = useRef<Map<OppKey, { source: number; target: number; spread: number }>>(new Map());
+  const [minVolume, setMinVolume] = useState<number>(0);
 
-  // Sort opportunities by spread (premium_bps) descending
-  const opportunities = [...rawOpportunities].sort((a, b) => b.premium_bps - a.premium_bps);
+  // Build volume map by symbol
+  const volumeBySymbol = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const price of prices) {
+      if (!map[price.symbol]) {
+        map[price.symbol] = 0;
+      }
+      map[price.symbol] += price.volume_24h || 0;
+    }
+    return map;
+  }, [prices]);
+
+  // Sort and filter opportunities
+  const opportunities = useMemo(() => {
+    return [...rawOpportunities]
+      .filter((opp) => {
+        if (minVolume > 0) {
+          const volume = volumeBySymbol[opp.symbol] || 0;
+          if (volume < minVolume) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => b.premium_bps - a.premium_bps);
+  }, [rawOpportunities, minVolume, volumeBySymbol]);
 
   // Force re-render every second to update time display
   useEffect(() => {
@@ -107,9 +131,23 @@ function Opportunities() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-semibold">Arbitrage Opportunities</h2>
-        <span className="text-sm text-gray-400">
-          {opportunities.length} opportunities found
-        </span>
+        <div className="flex items-center gap-4">
+          <select
+            value={minVolume}
+            onChange={(e) => setMinVolume(Number(e.target.value))}
+            className="px-3 py-1.5 bg-dark-700 border border-dark-600 rounded text-sm text-white focus:outline-none focus:border-primary-500"
+          >
+            <option value={0}>All Volumes</option>
+            <option value={100000}>Vol &gt; $100K</option>
+            <option value={1000000}>Vol &gt; $1M</option>
+            <option value={10000000}>Vol &gt; $10M</option>
+            <option value={100000000}>Vol &gt; $100M</option>
+            <option value={1000000000}>Vol &gt; $1B</option>
+          </select>
+          <span className="text-sm text-gray-400">
+            {opportunities.length} opportunities found
+          </span>
+        </div>
       </div>
 
       {message && (
