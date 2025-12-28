@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { usePrices, useOpportunities, useExchangeRate } from "../hooks/useTauri";
+import { usePrices, useOpportunities, useExchangeRate, useCommonMarkets } from "../hooks/useTauri";
 import type { PriceData } from "../types";
 
 function Dashboard() {
   const prices = usePrices();
   const { opportunities } = useOpportunities();
   const exchangeRate = useExchangeRate();
+  const commonMarkets = useCommonMarkets();
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [minVolume, setMinVolume] = useState<number>(0);
@@ -22,6 +23,22 @@ function Dashboard() {
     return grouped;
   }, [prices]);
 
+  // All available symbols (from commonMarkets, with price data merged)
+  const allSymbols = useMemo(() => {
+    const symbolSet = new Set<string>();
+    // Add symbols from commonMarkets (common_bases are the symbols)
+    if (commonMarkets) {
+      for (const symbol of commonMarkets.common_bases) {
+        symbolSet.add(symbol);
+      }
+    }
+    // Also add symbols from prices (in case some are not in commonMarkets)
+    for (const symbol of Object.keys(pricesBySymbol)) {
+      symbolSet.add(symbol);
+    }
+    return symbolSet;
+  }, [commonMarkets, pricesBySymbol]);
+
   // Helper to calculate total volume for a symbol
   const getSymbolVolume = (symbol: string): number => {
     const prices = pricesBySymbol[symbol];
@@ -30,9 +47,10 @@ function Dashboard() {
   };
 
   // Available symbols sorted by spread (descending) and filtered by search and volume
+  // Includes symbols from commonMarkets even if no price data yet
   const symbols = useMemo(() => {
     const query = searchQuery.toUpperCase();
-    return Object.keys(pricesBySymbol)
+    return Array.from(allSymbols)
       .filter((symbol) => {
         if (!symbol.toUpperCase().includes(query)) return false;
         if (minVolume > 0) {
@@ -44,6 +62,11 @@ function Dashboard() {
       .sort((a, b) => {
         const pricesA = pricesBySymbol[a];
         const pricesB = pricesBySymbol[b];
+        // Symbols with price data come first
+        if (pricesA && !pricesB) return -1;
+        if (!pricesA && pricesB) return 1;
+        if (!pricesA || !pricesB) return a.localeCompare(b);
+        // Sort by spread (descending)
         const maxA = Math.max(...pricesA.map(p => p.price));
         const minA = Math.min(...pricesA.map(p => p.price));
         const maxB = Math.max(...pricesB.map(p => p.price));
@@ -52,10 +75,10 @@ function Dashboard() {
         const spreadB = minB > 0 ? (maxB - minB) / minB : 0;
         return spreadB - spreadA;
       });
-  }, [pricesBySymbol, searchQuery, minVolume]);
+  }, [allSymbols, pricesBySymbol, searchQuery, minVolume]);
 
   // Auto-select first symbol if none selected
-  const activeSymbol = selectedSymbol && pricesBySymbol[selectedSymbol]
+  const activeSymbol = selectedSymbol && allSymbols.has(selectedSymbol)
     ? selectedSymbol
     : symbols[0] || null;
 
@@ -162,10 +185,11 @@ function Dashboard() {
           <div className="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden max-h-[456px] overflow-y-auto">
               {symbols.map((symbol) => {
                 const exchangePrices = pricesBySymbol[symbol];
-                const maxPrice = Math.max(...exchangePrices.map(p => p.price));
-                const minPrice = Math.min(...exchangePrices.map(p => p.price));
+                const hasPriceData = exchangePrices && exchangePrices.length > 0;
+                const maxPrice = hasPriceData ? Math.max(...exchangePrices.map(p => p.price)) : 0;
+                const minPrice = hasPriceData ? Math.min(...exchangePrices.map(p => p.price)) : 0;
                 const spread = maxPrice > 0 ? ((maxPrice - minPrice) / minPrice) * 100 : 0;
-                const totalVolume = exchangePrices.reduce((sum, p) => sum + (p.volume_24h || 0), 0);
+                const totalVolume = hasPriceData ? exchangePrices.reduce((sum, p) => sum + (p.volume_24h || 0), 0) : 0;
 
                 return (
                   <button
@@ -178,12 +202,16 @@ function Dashboard() {
                     }`}
                   >
                     <div className="flex justify-between items-center">
-                      <span className={`font-medium ${activeSymbol === symbol ? "text-primary-400" : "text-white"}`}>
+                      <span className={`font-medium ${activeSymbol === symbol ? "text-primary-400" : hasPriceData ? "text-white" : "text-gray-500"}`}>
                         {symbol}
                       </span>
-                      <span className={`text-sm font-mono ${spread >= 0.5 ? "text-success-500" : "text-gray-500"}`}>
-                        {spread.toFixed(2)}%
-                      </span>
+                      {hasPriceData ? (
+                        <span className={`text-sm font-mono ${spread >= 0.5 ? "text-success-500" : "text-gray-500"}`}>
+                          {spread.toFixed(2)}%
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-600">no data</span>
+                      )}
                     </div>
                     {totalVolume > 0 && (
                       <div className="text-xs text-gray-500 mt-1">
@@ -220,6 +248,14 @@ function Dashboard() {
                   </div>
                 </div>
               </>
+            ) : activeSymbol ? (
+              <div className="text-gray-400 text-center py-8">
+                <div className="text-lg mb-2">{activeSymbol}</div>
+                <div className="text-sm">No live price data available</div>
+                <div className="text-xs mt-2 text-gray-500">
+                  This market exists on all exchanges but is not in the top 50 by volume.
+                </div>
+              </div>
             ) : (
               <div className="text-gray-400 text-center py-8">
                 Select a market from the list
