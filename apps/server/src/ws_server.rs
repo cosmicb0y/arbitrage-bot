@@ -30,6 +30,7 @@ pub struct WsPriceData {
     pub price: f64,
     pub bid: f64,
     pub ask: f64,
+    pub volume_24h: f64,
     pub timestamp: u64,
 }
 
@@ -254,6 +255,7 @@ async fn collect_prices(state: &SharedState) -> Vec<WsPriceData> {
                     price: tick.price().to_f64(),
                     bid: tick.bid().to_f64(),
                     ask: tick.ask().to_f64(),
+                    volume_24h: tick.volume_24h().to_f64(),
                     timestamp: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
@@ -350,6 +352,7 @@ pub fn broadcast_price(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, s
         price: tick.price().to_f64(),
         bid: tick.bid().to_f64(),
         ask: tick.ask().to_f64(),
+        volume_24h: tick.volume_24h().to_f64(),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

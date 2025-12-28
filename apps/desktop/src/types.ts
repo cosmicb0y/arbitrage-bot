@@ -7,6 +7,7 @@ export interface PriceData {
   price: number;
   bid: number;
   ask: number;
+  volume_24h: number;
   timestamp: number;
 }
 

@@ -21,6 +21,8 @@ pub struct PriceData {
     pub price: f64,
     pub bid: f64,
     pub ask: f64,
+    #[serde(default)]
+    pub volume_24h: f64,
     pub timestamp: u64,
 }
 
