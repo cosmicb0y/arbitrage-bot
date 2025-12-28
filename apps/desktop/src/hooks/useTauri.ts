@@ -8,6 +8,7 @@ import type {
   ExecutionConfig,
   ExchangeRate,
   CommonMarkets,
+  Credentials,
 } from "../types";
 
 // Check if running inside Tauri
@@ -484,4 +485,51 @@ export function useCommonMarkets() {
   }, []);
 
   return commonMarkets;
+}
+
+const emptyCredentials: Credentials = {
+  binance: { api_key: "", secret_key: "" },
+  coinbase: { api_key: "", secret_key: "" },
+  upbit: { api_key: "", secret_key: "" },
+};
+
+export function useCredentials() {
+  const [credentials, setCredentials] = useState<Credentials>(emptyCredentials);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchCredentials = async () => {
+      try {
+        const data = await invoke<Credentials>("get_credentials");
+        setCredentials(data);
+      } catch (e) {
+        console.error("Failed to fetch credentials:", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchCredentials();
+  }, []);
+
+  const saveCredentials = useCallback(async (creds: Credentials): Promise<boolean> => {
+    if (!isTauri()) return false;
+    try {
+      await invoke("save_credentials", { creds });
+      // Reload masked credentials after save
+      const data = await invoke<Credentials>("get_credentials");
+      setCredentials(data);
+      return true;
+    } catch (e) {
+      console.error("Failed to save credentials:", e);
+      return false;
+    }
+  }, []);
+
+  return { credentials, saveCredentials, loading };
 }

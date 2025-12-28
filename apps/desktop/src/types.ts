@@ -57,3 +57,14 @@ export interface CommonMarkets {
   exchanges: string[];
   timestamp: number;
 }
+
+export interface ExchangeCredentials {
+  api_key: string;
+  secret_key: string;
+}
+
+export interface Credentials {
+  binance: ExchangeCredentials;
+  coinbase: ExchangeCredentials;
+  upbit: ExchangeCredentials;
+}

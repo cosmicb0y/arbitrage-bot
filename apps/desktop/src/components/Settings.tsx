@@ -1,20 +1,48 @@
-import { useState } from "react";
-import { useConfig } from "../hooks/useTauri";
+import { useState, useEffect } from "react";
+import { useConfig, useCredentials } from "../hooks/useTauri";
+import type { Credentials } from "../types";
 
 function Settings() {
   const { config, updateConfig } = useConfig();
+  const { credentials, saveCredentials, loading: credentialsLoading } = useCredentials();
   const [localConfig, setLocalConfig] = useState(config);
   const [saved, setSaved] = useState(false);
+  const [credentialsSaved, setCredentialsSaved] = useState(false);
+  const [activeExchange, setActiveExchange] = useState<"binance" | "coinbase" | "upbit">("binance");
+  const [editingCredentials, setEditingCredentials] = useState<Credentials>({
+    binance: { api_key: "", secret_key: "" },
+    coinbase: { api_key: "", secret_key: "" },
+    upbit: { api_key: "", secret_key: "" },
+  });
 
   // Update local state when config loads
-  useState(() => {
+  useEffect(() => {
     setLocalConfig(config);
-  });
+  }, [config]);
 
   const handleSave = async () => {
     await updateConfig(localConfig);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleSaveCredentials = async () => {
+    const success = await saveCredentials(editingCredentials);
+    if (success) {
+      setCredentialsSaved(true);
+      setTimeout(() => setCredentialsSaved(false), 2000);
+      // Clear editing form after save
+      setEditingCredentials({
+        binance: { api_key: "", secret_key: "" },
+        coinbase: { api_key: "", secret_key: "" },
+        upbit: { api_key: "", secret_key: "" },
+      });
+    }
+  };
+
+  const hasCredentialChanges = () => {
+    const current = editingCredentials[activeExchange];
+    return current.api_key.length > 0 || current.secret_key.length > 0;
   };
 
   return (
@@ -134,6 +162,109 @@ function Settings() {
         </div>
       </div>
 
+      {/* API Credentials */}
+      <div className="bg-dark-800 rounded-lg border border-dark-700 p-6 space-y-4">
+        <h3 className="font-medium text-white">API Credentials</h3>
+        <p className="text-sm text-gray-500">
+          Enter your exchange API keys to enable balance queries and trading. Keys are stored in a local .env file.
+        </p>
+
+        {credentialsSaved && (
+          <div className="bg-success-500/20 border border-success-500 rounded-lg p-3 text-sm text-success-500">
+            Credentials saved successfully!
+          </div>
+        )}
+
+        {/* Exchange Tabs */}
+        <div className="flex space-x-2 border-b border-dark-700">
+          {(["binance", "coinbase", "upbit"] as const).map((exchange) => (
+            <button
+              key={exchange}
+              onClick={() => setActiveExchange(exchange)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeExchange === exchange
+                  ? "border-primary-500 text-primary-400"
+                  : "border-transparent text-gray-400 hover:text-white"
+              }`}
+            >
+              {exchange.charAt(0).toUpperCase() + exchange.slice(1)}
+              {credentials[exchange]?.api_key && (
+                <span className="ml-2 text-xs text-success-500">●</span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Credential Form */}
+        {!credentialsLoading && (
+          <div className="space-y-4 pt-2">
+            {/* Current Status */}
+            {credentials[activeExchange]?.api_key && (
+              <div className="text-sm text-gray-400">
+                Current: <span className="font-mono text-gray-300">{credentials[activeExchange].api_key}</span>
+              </div>
+            )}
+
+            {/* API Key Input */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                API Key
+              </label>
+              <input
+                type="text"
+                value={editingCredentials[activeExchange].api_key}
+                onChange={(e) =>
+                  setEditingCredentials({
+                    ...editingCredentials,
+                    [activeExchange]: {
+                      ...editingCredentials[activeExchange],
+                      api_key: e.target.value,
+                    },
+                  })
+                }
+                placeholder="Enter new API key..."
+                className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 font-mono text-sm"
+              />
+            </div>
+
+            {/* Secret Key Input */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Secret Key
+              </label>
+              <input
+                type="password"
+                value={editingCredentials[activeExchange].secret_key}
+                onChange={(e) =>
+                  setEditingCredentials({
+                    ...editingCredentials,
+                    [activeExchange]: {
+                      ...editingCredentials[activeExchange],
+                      secret_key: e.target.value,
+                    },
+                  })
+                }
+                placeholder="Enter new secret key..."
+                className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 font-mono text-sm"
+              />
+            </div>
+
+            {/* Save Button */}
+            <button
+              onClick={handleSaveCredentials}
+              disabled={!hasCredentialChanges()}
+              className={`w-full font-medium py-2 px-4 rounded-lg transition-colors ${
+                hasCredentialChanges()
+                  ? "bg-primary-600 hover:bg-primary-500 text-white"
+                  : "bg-dark-600 text-gray-500 cursor-not-allowed"
+              }`}
+            >
+              Save {activeExchange.charAt(0).toUpperCase() + activeExchange.slice(1)} Credentials
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Info Cards */}
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-dark-800 rounded-lg border border-dark-700 p-4">
@@ -141,17 +272,14 @@ function Settings() {
           <ul className="text-sm text-gray-400 space-y-1">
             <li>• Binance</li>
             <li>• Coinbase</li>
-            <li>• Kraken</li>
-            <li>• OKX</li>
+            <li>• Upbit</li>
           </ul>
         </div>
         <div className="bg-dark-800 rounded-lg border border-dark-700 p-4">
-          <h3 className="font-medium text-primary-500 mb-2">Trading Pairs</h3>
-          <ul className="text-sm text-gray-400 space-y-1">
-            <li>• BTC/USDT</li>
-            <li>• ETH/USDT</li>
-            <li>• SOL/USDT</li>
-          </ul>
+          <h3 className="font-medium text-primary-500 mb-2">Security Note</h3>
+          <p className="text-sm text-gray-400">
+            API keys are stored locally in .env file. Never share your secret keys.
+          </p>
         </div>
       </div>
     </div>

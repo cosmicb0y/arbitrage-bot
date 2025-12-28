@@ -1,5 +1,6 @@
 //! Tauri IPC commands.
 
+use crate::credentials::{self, Credentials};
 use crate::state::{AppState, BotStats, CommonMarketsData, ExchangeRateData, ExecutionConfig, OpportunityData, PriceData};
 use std::sync::Arc;
 use tauri::State;
@@ -92,6 +93,20 @@ pub fn get_exchange_rate(state: State<'_, Arc<AppState>>) -> Option<ExchangeRate
 #[tauri::command]
 pub fn get_common_markets(state: State<'_, Arc<AppState>>) -> Option<CommonMarketsData> {
     state.get_common_markets()
+}
+
+/// Get credentials (masked for display).
+#[tauri::command]
+pub fn get_credentials() -> Credentials {
+    credentials::get_masked_credentials()
+}
+
+/// Save credentials to .env file.
+#[tauri::command]
+pub fn save_credentials(creds: Credentials) -> Result<bool, String> {
+    credentials::save_credentials(&creds)?;
+    info!("Credentials saved via command");
+    Ok(true)
 }
 
 #[cfg(test)]

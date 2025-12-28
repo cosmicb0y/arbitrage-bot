@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod credentials;
 mod state;
 
 use state::AppState;
@@ -57,6 +58,8 @@ fn main() {
             commands::is_connected,
             commands::get_exchange_rate,
             commands::get_common_markets,
+            commands::get_credentials,
+            commands::save_credentials,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
