@@ -483,6 +483,149 @@ impl CoinbaseAdapter {
     }
 }
 
+/// Bithumb WebSocket adapter.
+/// Uses the same format as Upbit (Korean exchange).
+pub struct BithumbAdapter;
+
+/// Bithumb WebSocket ticker response (similar to Upbit format).
+#[derive(Debug, Deserialize)]
+struct BithumbTicker {
+    /// Market code (e.g., "KRW-BTC")
+    #[serde(alias = "cd", alias = "code")]
+    code: String,
+    /// Current trade price
+    #[serde(alias = "tp", alias = "trade_price")]
+    trade_price: f64,
+    /// Opening price
+    #[serde(alias = "op", alias = "opening_price", default)]
+    opening_price: f64,
+    /// Highest price
+    #[serde(alias = "hp", alias = "high_price", default)]
+    high_price: f64,
+    /// Lowest price
+    #[serde(alias = "lp", alias = "low_price", default)]
+    low_price: f64,
+    /// Accumulated trade volume (24h)
+    #[serde(alias = "atv24h", alias = "acc_trade_volume_24h", default)]
+    acc_trade_volume_24h: f64,
+    /// Timestamp
+    #[serde(alias = "tms", alias = "timestamp", default)]
+    timestamp: u64,
+}
+
+impl BithumbAdapter {
+    /// Map market code to pair_id.
+    /// Extracts base asset from market code (e.g., KRW-BTC -> BTC) and generates pair_id.
+    pub fn market_to_pair_id(code: &str) -> Option<u32> {
+        let code = code.to_uppercase();
+        if code == "KRW-USDT" {
+            return None; // Special case: used for exchange rate, not trading
+        }
+
+        let base = Self::extract_base_symbol(&code)?;
+        Some(symbol_to_pair_id(&base))
+    }
+
+    /// Extract base symbol from market code (e.g., KRW-BTC -> BTC).
+    pub fn extract_base_symbol(code: &str) -> Option<String> {
+        let code = code.to_uppercase();
+        if code.starts_with("KRW-") {
+            code.strip_prefix("KRW-").map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Check if market code is for USDT (exchange rate).
+    pub fn is_usdt_market(code: &str) -> bool {
+        code.to_uppercase() == "KRW-USDT"
+    }
+
+    /// Parse a ticker message from Bithumb (JSON format).
+    pub fn parse_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
+        let ticker: BithumbTicker = serde_json::from_str(json)?;
+
+        // Bithumb doesn't provide bid/ask in ticker, use trade_price for all
+        let price = FixedPoint::from_f64(ticker.trade_price);
+
+        Ok(PriceTick::new(
+            Exchange::Bithumb,
+            pair_id,
+            price,
+            price, // bid approximation
+            price, // ask approximation
+        ))
+    }
+
+    /// Parse a ticker message from Bithumb and return with market code.
+    /// Returns (market_code, price).
+    pub fn parse_ticker_with_code(json: &str) -> Result<(String, FixedPoint), FeedError> {
+        let ticker: BithumbTicker = serde_json::from_str(json)?;
+        let price = FixedPoint::from_f64(ticker.trade_price);
+        Ok((ticker.code, price))
+    }
+
+    /// Parse a ticker message from Bithumb binary (MessagePack format).
+    pub fn parse_ticker_binary(data: &[u8], pair_id: u32) -> Result<PriceTick, FeedError> {
+        let ticker: BithumbTicker = rmp_serde::from_slice(data)
+            .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))?;
+
+        let price = FixedPoint::from_f64(ticker.trade_price);
+
+        Ok(PriceTick::new(
+            Exchange::Bithumb,
+            pair_id,
+            price,
+            price,
+            price,
+        ))
+    }
+
+    /// Parse a ticker message from Bithumb binary and return with market code.
+    pub fn parse_ticker_binary_with_code(data: &[u8]) -> Result<(String, FixedPoint), FeedError> {
+        let ticker: BithumbTicker = rmp_serde::from_slice(data)
+            .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))?;
+        let price = FixedPoint::from_f64(ticker.trade_price);
+        Ok((ticker.code, price))
+    }
+
+    /// Generate a subscription message for Bithumb WebSocket.
+    /// Bithumb uses the same format as Upbit: array of ticket, type, and codes.
+    pub fn subscribe_message(markets: &[String]) -> String {
+        let codes: Vec<String> = markets.iter().map(|m| format!("\"{}\"", m)).collect();
+
+        format!(
+            r#"[{{"ticket":"arbitrage-bot"}},{{"type":"ticker","codes":[{}]}},{{"format":"SIMPLE"}}]"#,
+            codes.join(",")
+        )
+    }
+
+    /// Get WebSocket URL for Bithumb.
+    pub fn ws_url() -> &'static str {
+        "wss://ws-api.bithumb.com/websocket/v1"
+    }
+
+    /// Convert symbol to Bithumb market format.
+    /// "BTC/KRW" -> "KRW-BTC"
+    pub fn to_market_code(symbol: &str) -> String {
+        if let Some((base, quote)) = symbol.split_once('/') {
+            format!("{}-{}", quote, base)
+        } else {
+            symbol.to_string()
+        }
+    }
+
+    /// Convert Bithumb market code to symbol.
+    /// "KRW-BTC" -> "BTC/KRW"
+    pub fn from_market_code(code: &str) -> String {
+        if let Some((quote, base)) = code.split_once('-') {
+            format!("{}/{}", base, quote)
+        } else {
+            code.to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

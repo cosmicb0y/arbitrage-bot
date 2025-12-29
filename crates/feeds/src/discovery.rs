@@ -240,6 +240,52 @@ impl MarketDiscovery {
         })
     }
 
+    /// Fetch markets from Bithumb.
+    pub async fn fetch_bithumb(&self) -> Result<ExchangeMarkets, FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct BithumbResponse {
+            status: String,
+            data: HashMap<String, serde_json::Value>,
+        }
+
+        let url = "https://api.bithumb.com/public/ticker/ALL_KRW";
+        let resp: BithumbResponse = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| FeedError::ConnectionFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+
+        if resp.status != "0000" {
+            return Err(FeedError::ParseError(format!(
+                "Bithumb API error: status {}",
+                resp.status
+            )));
+        }
+
+        let markets: Vec<MarketInfo> = resp
+            .data
+            .keys()
+            .filter(|k| *k != "date") // Bithumb includes a "date" field in the response
+            .map(|base| MarketInfo {
+                base: base.clone(),
+                quote: "KRW".to_string(),
+                symbol: format!("KRW-{}", base),
+                trading_enabled: true,
+            })
+            .collect();
+
+        debug!("Bithumb: fetched {} KRW markets", markets.len());
+
+        Ok(ExchangeMarkets {
+            markets,
+            updated_at: now_ms(),
+        })
+    }
+
     /// Fetch markets from Bybit.
     pub async fn fetch_bybit(&self) -> Result<ExchangeMarkets, FeedError> {
         #[derive(Debug, Deserialize)]
@@ -399,10 +445,11 @@ impl MarketDiscovery {
         let mut results = HashMap::new();
 
         // Fetch in parallel
-        let (binance, coinbase, upbit, bybit, okx, kraken) = tokio::join!(
+        let (binance, coinbase, upbit, bithumb, bybit, okx, kraken) = tokio::join!(
             self.fetch_binance(),
             self.fetch_coinbase(),
             self.fetch_upbit(),
+            self.fetch_bithumb(),
             self.fetch_bybit(),
             self.fetch_okx(),
             self.fetch_kraken(),
@@ -427,6 +474,13 @@ impl MarketDiscovery {
             results.insert("Upbit".to_string(), m);
         } else if let Err(e) = upbit {
             warn!("Failed to fetch Upbit markets: {}", e);
+        }
+
+        if let Ok(m) = bithumb {
+            info!("Bithumb: {} markets", m.markets.len());
+            results.insert("Bithumb".to_string(), m);
+        } else if let Err(e) = bithumb {
+            warn!("Failed to fetch Bithumb markets: {}", e);
         }
 
         if let Ok(m) = bybit {

@@ -81,6 +81,7 @@ impl FeedConfig {
             Exchange::Okx => "wss://ws.okx.com:8443/ws/v5/public".to_string(),
             Exchange::Bybit => "wss://stream.bybit.com/v5/public/spot".to_string(),
             Exchange::Upbit => "wss://api.upbit.com/websocket/v1".to_string(),
+            Exchange::Bithumb => "wss://ws-api.bithumb.com/websocket/v1".to_string(),
             _ => String::new(),
         };
 

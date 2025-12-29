@@ -1,7 +1,8 @@
 //! Exchange-specific feed implementations.
 
 use crate::{
-    BinanceAdapter, CoinbaseAdapter, FeedConfig, FeedError, PriceAggregator, WsMessage,
+    BinanceAdapter, BithumbAdapter, CoinbaseAdapter, FeedConfig, FeedError, PriceAggregator,
+    WsMessage,
 };
 use arbitrage_core::{Exchange, PriceTick};
 use std::sync::Arc;
@@ -53,6 +54,23 @@ impl FeedHandler for CoinbaseFeed {
 
     fn exchange(&self) -> Exchange {
         Exchange::Coinbase
+    }
+}
+
+/// Bithumb feed handler.
+pub struct BithumbFeed;
+
+impl FeedHandler for BithumbFeed {
+    fn parse_message(&self, msg: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
+        BithumbAdapter::parse_ticker(msg, pair_id)
+    }
+
+    fn subscribe_message(&self, symbols: &[String]) -> String {
+        BithumbAdapter::subscribe_message(symbols)
+    }
+
+    fn exchange(&self) -> Exchange {
+        Exchange::Bithumb
     }
 }
 
