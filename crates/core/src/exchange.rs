@@ -48,6 +48,7 @@ pub enum Exchange {
     Okx = 103,
     Bybit = 104,
     Upbit = 105,
+    Bithumb = 106,
 
     // DEX - EVM CPMM (200-209)
     UniswapV2 = 200,
@@ -78,6 +79,7 @@ impl Exchange {
             103 => Some(Exchange::Okx),
             104 => Some(Exchange::Bybit),
             105 => Some(Exchange::Upbit),
+            106 => Some(Exchange::Bithumb),
             200 => Some(Exchange::UniswapV2),
             201 => Some(Exchange::UniswapV3),
             202 => Some(Exchange::SushiSwap),
@@ -105,7 +107,8 @@ impl Exchange {
             | Exchange::Kraken
             | Exchange::Okx
             | Exchange::Bybit
-            | Exchange::Upbit => ExchangeType::Cex,
+            | Exchange::Upbit
+            | Exchange::Bithumb => ExchangeType::Cex,
 
             Exchange::UniswapV2 | Exchange::SushiSwap => ExchangeType::CpmmDex,
 
@@ -125,7 +128,8 @@ impl Exchange {
             | Exchange::Kraken
             | Exchange::Okx
             | Exchange::Bybit
-            | Exchange::Upbit => None,
+            | Exchange::Upbit
+            | Exchange::Bithumb => None,
 
             // EVM DEXes on Ethereum mainnet
             Exchange::UniswapV2
@@ -163,6 +167,7 @@ impl Exchange {
             Exchange::Gmx => "GMX",
             Exchange::Hyperliquid => "Hyperliquid",
             Exchange::Upbit => "Upbit",
+            Exchange::Bithumb => "Bithumb",
         }
     }
 
@@ -174,6 +179,7 @@ impl Exchange {
             Exchange::Okx,
             Exchange::Bybit,
             Exchange::Upbit,
+            Exchange::Bithumb,
         ]
     }
 
