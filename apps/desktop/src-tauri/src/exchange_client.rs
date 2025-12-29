@@ -420,6 +420,110 @@ fn generate_upbit_token(
 }
 
 // ============================================================================
+// Bithumb Client
+// ============================================================================
+
+/// Fetch Bithumb wallet status (public API - no auth required)
+pub async fn fetch_bithumb_wallet_status() -> Result<Vec<AssetWalletStatus>, String> {
+    let client = Client::new();
+
+    // Use public ticker API to get list of currencies
+    // Bithumb doesn't have a dedicated public wallet status endpoint
+    let resp = client
+        .get("https://api.bithumb.com/public/ticker/ALL_KRW")
+        .send()
+        .await
+        .map_err(|e| format!("Bithumb ticker request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let error_text = resp.text().await.unwrap_or_default();
+        return Err(format!("Bithumb ticker API error: {}", error_text));
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct BithumbTickerResponse {
+        status: String,
+        data: serde_json::Value,
+    }
+
+    let ticker_resp: BithumbTickerResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Bithumb ticker: {}", e))?;
+
+    if ticker_resp.status != "0000" {
+        return Err(format!(
+            "Bithumb API error: status {}",
+            ticker_resp.status
+        ));
+    }
+
+    // Extract currency symbols from ticker data
+    let currencies: Vec<String> = if let serde_json::Value::Object(map) = ticker_resp.data {
+        map.keys()
+            .filter(|k| *k != "date")
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // For Bithumb, we assume all currencies are available since there's no public status API
+    let wallet_status: Vec<AssetWalletStatus> = currencies
+        .into_iter()
+        .map(|currency| {
+            AssetWalletStatus {
+                asset: currency.clone(),
+                name: currency.clone(),
+                networks: vec![NetworkStatus {
+                    network: "KRW".to_string(),
+                    name: "Bithumb".to_string(),
+                    deposit_enabled: true,
+                    withdraw_enabled: true,
+                    min_withdraw: 0.0,
+                    withdraw_fee: 0.0,
+                    confirms_required: 0,
+                }],
+                can_deposit: true,
+                can_withdraw: true,
+            }
+        })
+        .collect();
+
+    info!(
+        "Fetched Bithumb wallet status: {} assets",
+        wallet_status.len()
+    );
+    Ok(wallet_status)
+}
+
+/// Fetch Bithumb wallet (status only - balances require auth)
+pub async fn fetch_bithumb_wallet() -> Result<ExchangeWalletInfo, String> {
+    // Fetch wallet status (public API - no auth required)
+    let wallet_status = fetch_bithumb_wallet_status().await.unwrap_or_else(|e| {
+        warn!("Failed to fetch Bithumb wallet status: {}", e);
+        Vec::new()
+    });
+
+    // Note: Balances require HMAC authentication
+    // For now, we only return wallet status
+    let balances = Vec::new();
+
+    info!(
+        "Fetched Bithumb wallet: {} balances, {} assets with status",
+        balances.len(),
+        wallet_status.len()
+    );
+
+    Ok(ExchangeWalletInfo {
+        exchange: "Bithumb".to_string(),
+        balances,
+        wallet_status,
+        last_updated: timestamp_ms(),
+    })
+}
+
+// ============================================================================
 // Coinbase Client
 // ============================================================================
 
@@ -582,9 +686,10 @@ pub async fn fetch_all_wallets() -> Vec<ExchangeWalletInfo> {
     let mut results = Vec::new();
 
     // Fetch in parallel
-    let (binance, upbit, coinbase) = tokio::join!(
+    let (binance, upbit, bithumb, coinbase) = tokio::join!(
         fetch_binance_wallet(),
         fetch_upbit_wallet(),
+        fetch_bithumb_wallet(),
         fetch_coinbase_wallet()
     );
 
@@ -592,6 +697,9 @@ pub async fn fetch_all_wallets() -> Vec<ExchangeWalletInfo> {
         results.push(info);
     }
     if let Ok(info) = upbit {
+        results.push(info);
+    }
+    if let Ok(info) = bithumb {
         results.push(info);
     }
     if let Ok(info) = coinbase {
