@@ -17,7 +17,8 @@ use tracing_subscriber::FmtSubscriber;
 
 use arbitrage_core::{Exchange, FixedPoint, PriceTick};
 use arbitrage_feeds::{
-    BinanceAdapter, CoinbaseAdapter, FeedConfig, MarketDiscovery, UpbitAdapter, WsClient, WsMessage,
+    BinanceAdapter, BithumbAdapter, CoinbaseAdapter, FeedConfig, MarketDiscovery, UpbitAdapter,
+    WsClient, WsMessage,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -389,6 +390,90 @@ async fn run_coinbase_feed(
     info!("Coinbase feed processor stopped");
 }
 
+/// Process Bithumb ticker data by market code.
+fn process_bithumb_ticker(
+    code: &str,
+    price: FixedPoint,
+    state: &SharedState,
+    broadcast_tx: &BroadcastSender,
+) {
+    // Handle USDT/KRW for exchange rate (if Bithumb has it)
+    if BithumbAdapter::is_usdt_market(code) {
+        state.update_usdt_krw_price(price);
+        let rate = price.to_f64();
+        ws_server::broadcast_exchange_rate(broadcast_tx, rate);
+        tracing::debug!("Updated USDT/KRW rate from Bithumb: {:.2}", rate);
+        return;
+    }
+
+    // Handle trading pairs - extract symbol from code (e.g., "KRW-BTC" -> "BTC")
+    if let Some(symbol) = BithumbAdapter::extract_base_symbol(code) {
+        let pair_id = arbitrage_core::symbol_to_pair_id(&symbol);
+
+        // Convert KRW to USD and broadcast
+        // Skip if exchange rate is not available yet
+        if let Some(price_usd) = convert_krw_to_usd(price) {
+            let tick_usd = PriceTick::new(Exchange::Bithumb, pair_id, price_usd, price_usd, price_usd);
+
+            // Update state asynchronously (fire and forget for now)
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                state_clone.update_price(Exchange::Bithumb, pair_id, price_usd).await;
+            });
+
+            ws_server::broadcast_price(broadcast_tx, Exchange::Bithumb, pair_id, &symbol, &tick_usd);
+        }
+    }
+}
+
+/// Run live WebSocket feed for Bithumb
+async fn run_bithumb_feed(
+    state: SharedState,
+    broadcast_tx: BroadcastSender,
+    mut rx: mpsc::Receiver<WsMessage>,
+) {
+    info!("Starting Bithumb live feed processor");
+
+    while let Some(msg) = rx.recv().await {
+        if !state.is_running() {
+            break;
+        }
+
+        match msg {
+            WsMessage::Text(text) => {
+                // Parse ticker with market code
+                if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
+                    process_bithumb_ticker(&code, price, &state, &broadcast_tx);
+                }
+            }
+            WsMessage::Binary(data) => {
+                // Bithumb sends binary MessagePack data
+                if let Ok((code, price)) = BithumbAdapter::parse_ticker_binary_with_code(&data) {
+                    process_bithumb_ticker(&code, price, &state, &broadcast_tx);
+                } else {
+                    // Fallback: try parsing as UTF-8 JSON
+                    if let Ok(text) = String::from_utf8(data) {
+                        if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
+                            process_bithumb_ticker(&code, price, &state, &broadcast_tx);
+                        }
+                    }
+                }
+            }
+            WsMessage::Connected => {
+                info!("Bithumb: Connected to WebSocket");
+            }
+            WsMessage::Disconnected => {
+                warn!("Bithumb: Disconnected from WebSocket");
+            }
+            WsMessage::Error(e) => {
+                warn!("Bithumb: Error - {}", e);
+            }
+        }
+    }
+
+    info!("Bithumb feed processor stopped");
+}
+
 /// Spawn live WebSocket feeds
 async fn spawn_live_feeds(
     state: SharedState,
@@ -401,13 +486,14 @@ async fn spawn_live_feeds(
     let all_markets = discovery.fetch_all().await;
 
     // Find common markets across exchanges we support for live feeds
-    let exchanges = ["Binance", "Coinbase", "Upbit"];
+    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb"];
     let common = MarketDiscovery::find_markets_on_n_exchanges(&all_markets, &exchanges, 2);
 
     // Get symbols for each exchange from common markets
     let mut binance_symbols: Vec<String> = Vec::new();
     let mut coinbase_symbols: Vec<String> = Vec::new();
     let mut upbit_symbols: Vec<String> = vec!["KRW-USDT".to_string()]; // Always include for exchange rate
+    let mut bithumb_symbols: Vec<String> = Vec::new();
 
     for (base, exchange_markets) in &common.common {
         for (exchange, market_info) in exchange_markets {
@@ -415,6 +501,7 @@ async fn spawn_live_feeds(
                 "Binance" => binance_symbols.push(market_info.symbol.to_lowercase()),
                 "Coinbase" => coinbase_symbols.push(market_info.symbol.clone()),
                 "Upbit" => upbit_symbols.push(market_info.symbol.clone()),
+                "Bithumb" => bithumb_symbols.push(market_info.symbol.clone()),
                 _ => {}
             }
         }
@@ -423,13 +510,14 @@ async fn spawn_live_feeds(
     // Subscribe to all common markets
     // - Binance: supports up to 1024 streams per connection
     // - Coinbase: supports many subscriptions per connection
-    // - Upbit: supports many codes per connection
+    // - Upbit/Bithumb: supports many codes per connection
 
     info!(
-        "📡 Subscribing to live feeds: Binance={}, Coinbase={}, Upbit={}",
+        "📡 Subscribing to live feeds: Binance={}, Coinbase={}, Upbit={}, Bithumb={}",
         binance_symbols.len(),
         coinbase_symbols.len(),
-        upbit_symbols.len()
+        upbit_symbols.len(),
+        bithumb_symbols.len()
     );
 
     // Register all symbols for opportunity detection
@@ -495,6 +583,26 @@ async fn spawn_live_feeds(
         }));
     }
 
+    // Bithumb
+    if !bithumb_symbols.is_empty() {
+        let bithumb_config = FeedConfig::for_exchange(Exchange::Bithumb);
+        let (bithumb_tx, bithumb_rx) = mpsc::channel(1000);
+        let bithumb_subscribe = BithumbAdapter::subscribe_message(&bithumb_symbols);
+
+        let bithumb_client = WsClient::new(bithumb_config.clone(), bithumb_tx);
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = bithumb_client.run(Some(bithumb_subscribe)).await {
+                warn!("Bithumb WebSocket error: {}", e);
+            }
+        }));
+
+        let bithumb_state = state.clone();
+        let bithumb_broadcast = broadcast_tx.clone();
+        handles.push(tokio::spawn(async move {
+            run_bithumb_feed(bithumb_state, bithumb_broadcast, bithumb_rx).await;
+        }));
+    }
+
     handles
 }
 
@@ -504,7 +612,7 @@ async fn run_market_discovery(state: SharedState, broadcast_tx: BroadcastSender)
     info!("Starting market discovery loop");
 
     let discovery = MarketDiscovery::new();
-    let exchanges = ["Binance", "Coinbase", "Upbit"];
+    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb"];
 
     loop {
         info!("🔍 Fetching markets from exchanges...");

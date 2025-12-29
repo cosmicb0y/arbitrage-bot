@@ -263,6 +263,103 @@ async fn fetch_coinbase_wallet_status() -> Result<ExchangeWalletStatus, String> 
 }
 
 // ============================================================================
+// Bithumb Client (Public API)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct BithumbStatusResponse {
+    status: String,
+    data: HashMap<String, BithumbAssetStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BithumbAssetStatus {
+    #[serde(default)]
+    withdrawal_status: Option<i32>, // 1 = available, 0 = unavailable
+    #[serde(default)]
+    deposit_status: Option<i32>, // 1 = available, 0 = unavailable
+}
+
+/// Fetch Bithumb wallet status (public API - no auth required)
+async fn fetch_bithumb_wallet_status() -> Result<ExchangeWalletStatus, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build client: {}", e))?;
+
+    // Bithumb has a status endpoint per currency
+    // Use ticker/ALL to get list of currencies, then assume all are enabled
+    // (Bithumb doesn't have a public wallet status endpoint like Upbit)
+    let resp = client
+        .get("https://api.bithumb.com/public/ticker/ALL_KRW")
+        .send()
+        .await
+        .map_err(|e| format!("Bithumb ticker request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let error_text = resp.text().await.unwrap_or_default();
+        return Err(format!("Bithumb ticker API error: {}", error_text));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct BithumbTickerResponse {
+        status: String,
+        data: serde_json::Value,
+    }
+
+    let ticker_resp: BithumbTickerResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Bithumb ticker: {}", e))?;
+
+    if ticker_resp.status != "0000" {
+        return Err(format!(
+            "Bithumb API error: status {}",
+            ticker_resp.status
+        ));
+    }
+
+    // Extract currency symbols from ticker data
+    let currencies: Vec<String> = if let serde_json::Value::Object(map) = ticker_resp.data {
+        map.keys()
+            .filter(|k| *k != "date")
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // For Bithumb, we assume all currencies are available since there's no public status API
+    // In production, you might want to check the account/balance endpoint with auth
+    let wallet_status: Vec<AssetWalletStatus> = currencies
+        .into_iter()
+        .map(|currency| {
+            AssetWalletStatus {
+                asset: currency.clone(),
+                name: currency.clone(),
+                networks: vec![NetworkStatus {
+                    network: "KRW".to_string(),
+                    name: "Bithumb".to_string(),
+                    deposit_enabled: true,
+                    withdraw_enabled: true,
+                    min_withdraw: 0.0,
+                    withdraw_fee: 0.0,
+                    confirms_required: 0,
+                }],
+                can_deposit: true,
+                can_withdraw: true,
+            }
+        })
+        .collect();
+
+    Ok(ExchangeWalletStatus {
+        exchange: "Bithumb".to_string(),
+        wallet_status,
+        last_updated: timestamp_ms(),
+    })
+}
+
+// ============================================================================
 // Binance Client (Requires API Key)
 // ============================================================================
 
@@ -395,8 +492,9 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
     let mut results = Vec::new();
 
     // Fetch in parallel
-    let (upbit, coinbase, binance) = tokio::join!(
+    let (upbit, bithumb, coinbase, binance) = tokio::join!(
         fetch_upbit_wallet_status(),
+        fetch_bithumb_wallet_status(),
         fetch_coinbase_wallet_status(),
         fetch_binance_wallet_status()
     );
@@ -408,6 +506,15 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
         }
     } else if let Err(e) = upbit {
         warn!("Failed to fetch Upbit wallet status: {}", e);
+    }
+
+    if let Ok(status) = bithumb {
+        if !status.wallet_status.is_empty() {
+            info!("Fetched Bithumb wallet status: {} assets", status.wallet_status.len());
+            results.push(status);
+        }
+    } else if let Err(e) = bithumb {
+        warn!("Failed to fetch Bithumb wallet status: {}", e);
     }
 
     if let Ok(status) = coinbase {
