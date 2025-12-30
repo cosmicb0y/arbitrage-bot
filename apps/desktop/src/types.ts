@@ -63,10 +63,16 @@ export interface ExchangeCredentials {
   secret_key: string;
 }
 
+export interface CoinbaseCredentials {
+  api_key_id: string;
+  secret_key: string;
+}
+
 export interface Credentials {
   binance: ExchangeCredentials;
-  coinbase: ExchangeCredentials;
+  coinbase: CoinbaseCredentials;
   upbit: ExchangeCredentials;
+  bithumb: ExchangeCredentials;
 }
 
 // Wallet and deposit/withdraw status

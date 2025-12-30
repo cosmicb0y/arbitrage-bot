@@ -13,20 +13,43 @@ pub struct ExchangeCredentials {
     pub secret_key: String,
 }
 
+/// Coinbase CDP credentials (requires api_key_id and secret_key).
+/// api_key_id format: "organizations/{org_id}/apiKeys/{key_id}"
+/// secret_key: Full PEM with BEGIN/END headers (multiline)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CoinbaseCredentials {
+    pub api_key_id: String,
+    pub secret_key: String,
+}
+
+impl CoinbaseCredentials {
+    /// Get the key name for JWT kid field (same as api_key_id).
+    pub fn key_name(&self) -> String {
+        self.api_key_id.clone()
+    }
+
+    /// Check if credentials are configured.
+    pub fn is_configured(&self) -> bool {
+        !self.api_key_id.is_empty() && !self.secret_key.is_empty()
+    }
+}
+
 /// All exchange credentials.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Credentials {
     pub binance: ExchangeCredentials,
-    pub coinbase: ExchangeCredentials,
+    pub coinbase: CoinbaseCredentials,
     pub upbit: ExchangeCredentials,
+    pub bithumb: ExchangeCredentials,
 }
 
 impl Credentials {
     /// Check if any credentials are configured.
     pub fn has_any(&self) -> bool {
         !self.binance.api_key.is_empty()
-            || !self.coinbase.api_key.is_empty()
+            || self.coinbase.is_configured()
             || !self.upbit.api_key.is_empty()
+            || !self.bithumb.api_key.is_empty()
     }
 
     /// Get configured exchanges.
@@ -35,11 +58,14 @@ impl Credentials {
         if !self.binance.api_key.is_empty() {
             exchanges.push("Binance".to_string());
         }
-        if !self.coinbase.api_key.is_empty() {
+        if self.coinbase.is_configured() {
             exchanges.push("Coinbase".to_string());
         }
         if !self.upbit.api_key.is_empty() {
             exchanges.push("Upbit".to_string());
+        }
+        if !self.bithumb.api_key.is_empty() {
+            exchanges.push("Bithumb".to_string());
         }
         exchanges
     }
@@ -83,13 +109,20 @@ pub fn load_credentials() -> Credentials {
             api_key: std::env::var("BINANCE_API_KEY").unwrap_or_default(),
             secret_key: std::env::var("BINANCE_SECRET_KEY").unwrap_or_default(),
         },
-        coinbase: ExchangeCredentials {
-            api_key: std::env::var("COINBASE_API_KEY").unwrap_or_default(),
-            secret_key: std::env::var("COINBASE_SECRET_KEY").unwrap_or_default(),
+        coinbase: CoinbaseCredentials {
+            api_key_id: std::env::var("COINBASE_API_KEY_ID").unwrap_or_default(),
+            // Secret key is full PEM with BEGIN/END headers (stored with \n escaped)
+            secret_key: std::env::var("COINBASE_SECRET_KEY")
+                .unwrap_or_default()
+                .replace("\\n", "\n"),
         },
         upbit: ExchangeCredentials {
             api_key: std::env::var("UPBIT_ACCESS_KEY").unwrap_or_default(),
             secret_key: std::env::var("UPBIT_SECRET_KEY").unwrap_or_default(),
+        },
+        bithumb: ExchangeCredentials {
+            api_key: std::env::var("BITHUMB_API_KEY").unwrap_or_default(),
+            secret_key: std::env::var("BITHUMB_SECRET_KEY").unwrap_or_default(),
         },
     }
 }
@@ -120,30 +153,41 @@ pub fn save_credentials(creds: &Credentials) -> Result<(), String> {
     // Update with new credentials
     env_vars.insert("BINANCE_API_KEY".to_string(), creds.binance.api_key.clone());
     env_vars.insert("BINANCE_SECRET_KEY".to_string(), creds.binance.secret_key.clone());
-    env_vars.insert("COINBASE_API_KEY".to_string(), creds.coinbase.api_key.clone());
-    env_vars.insert("COINBASE_SECRET_KEY".to_string(), creds.coinbase.secret_key.clone());
+    env_vars.insert("COINBASE_API_KEY_ID".to_string(), creds.coinbase.api_key_id.clone());
+    // Escape newlines for .env file storage
+    env_vars.insert("COINBASE_SECRET_KEY".to_string(), creds.coinbase.secret_key.replace("\n", "\\n"));
     env_vars.insert("UPBIT_ACCESS_KEY".to_string(), creds.upbit.api_key.clone());
     env_vars.insert("UPBIT_SECRET_KEY".to_string(), creds.upbit.secret_key.clone());
+    env_vars.insert("BITHUMB_API_KEY".to_string(), creds.bithumb.api_key.clone());
+    env_vars.insert("BITHUMB_SECRET_KEY".to_string(), creds.bithumb.secret_key.clone());
 
     // Write to file
+    // Note: Coinbase secret key uses double quotes to preserve escaped \n in .env format
     let content = format!(
         "# Arbitrage Bot - Exchange API Credentials\n\
          # DO NOT COMMIT THIS FILE\n\n\
          # Binance\n\
          BINANCE_API_KEY={}\n\
          BINANCE_SECRET_KEY={}\n\n\
-         # Coinbase\n\
-         COINBASE_API_KEY={}\n\
-         COINBASE_SECRET_KEY={}\n\n\
+         # Coinbase (CDP API with ES256/ECDSA)\n\
+         # API Key ID format: organizations/{{org_id}}/apiKeys/{{key_id}}\n\
+         COINBASE_API_KEY_ID={}\n\
+         # Secret Key: Full PEM with BEGIN/END headers (newlines escaped as \\n)\n\
+         COINBASE_SECRET_KEY=\"{}\"\n\n\
          # Upbit\n\
          UPBIT_ACCESS_KEY={}\n\
-         UPBIT_SECRET_KEY={}\n",
+         UPBIT_SECRET_KEY={}\n\n\
+         # Bithumb\n\
+         BITHUMB_API_KEY={}\n\
+         BITHUMB_SECRET_KEY={}\n",
         creds.binance.api_key,
         creds.binance.secret_key,
-        creds.coinbase.api_key,
-        creds.coinbase.secret_key,
+        creds.coinbase.api_key_id,
+        creds.coinbase.secret_key.replace("\n", "\\n"),
         creds.upbit.api_key,
         creds.upbit.secret_key,
+        creds.bithumb.api_key,
+        creds.bithumb.secret_key,
     );
 
     fs::write(&env_path, content).map_err(|e| format!("Failed to write .env: {}", e))?;
@@ -151,10 +195,12 @@ pub fn save_credentials(creds: &Credentials) -> Result<(), String> {
     // Update environment variables in current process
     std::env::set_var("BINANCE_API_KEY", &creds.binance.api_key);
     std::env::set_var("BINANCE_SECRET_KEY", &creds.binance.secret_key);
-    std::env::set_var("COINBASE_API_KEY", &creds.coinbase.api_key);
+    std::env::set_var("COINBASE_API_KEY_ID", &creds.coinbase.api_key_id);
     std::env::set_var("COINBASE_SECRET_KEY", &creds.coinbase.secret_key);
     std::env::set_var("UPBIT_ACCESS_KEY", &creds.upbit.api_key);
     std::env::set_var("UPBIT_SECRET_KEY", &creds.upbit.secret_key);
+    std::env::set_var("BITHUMB_API_KEY", &creds.bithumb.api_key);
+    std::env::set_var("BITHUMB_SECRET_KEY", &creds.bithumb.secret_key);
 
     info!("Credentials saved successfully");
     Ok(())
@@ -179,13 +225,17 @@ pub fn get_masked_credentials() -> Credentials {
             api_key: mask(&creds.binance.api_key),
             secret_key: mask(&creds.binance.secret_key),
         },
-        coinbase: ExchangeCredentials {
-            api_key: mask(&creds.coinbase.api_key),
+        coinbase: CoinbaseCredentials {
+            api_key_id: mask(&creds.coinbase.api_key_id),
             secret_key: mask(&creds.coinbase.secret_key),
         },
         upbit: ExchangeCredentials {
             api_key: mask(&creds.upbit.api_key),
             secret_key: mask(&creds.upbit.secret_key),
+        },
+        bithumb: ExchangeCredentials {
+            api_key: mask(&creds.bithumb.api_key),
+            secret_key: mask(&creds.bithumb.secret_key),
         },
     }
 }

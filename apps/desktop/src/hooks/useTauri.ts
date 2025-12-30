@@ -516,8 +516,9 @@ export function useCommonMarkets() {
 
 const emptyCredentials: Credentials = {
   binance: { api_key: "", secret_key: "" },
-  coinbase: { api_key: "", secret_key: "" },
+  coinbase: { api_key_id: "", secret_key: "" },
   upbit: { api_key: "", secret_key: "" },
+  bithumb: { api_key: "", secret_key: "" },
 };
 
 export function useCredentials() {

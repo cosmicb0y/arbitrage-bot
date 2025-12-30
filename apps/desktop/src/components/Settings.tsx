@@ -8,11 +8,12 @@ function Settings() {
   const [localConfig, setLocalConfig] = useState(config);
   const [saved, setSaved] = useState(false);
   const [credentialsSaved, setCredentialsSaved] = useState(false);
-  const [activeExchange, setActiveExchange] = useState<"binance" | "coinbase" | "upbit">("binance");
+  const [activeExchange, setActiveExchange] = useState<"binance" | "coinbase" | "upbit" | "bithumb">("binance");
   const [editingCredentials, setEditingCredentials] = useState<Credentials>({
     binance: { api_key: "", secret_key: "" },
-    coinbase: { api_key: "", secret_key: "" },
+    coinbase: { api_key_id: "", secret_key: "" },
     upbit: { api_key: "", secret_key: "" },
+    bithumb: { api_key: "", secret_key: "" },
   });
 
   // Update local state when config loads
@@ -34,15 +35,27 @@ function Settings() {
       // Clear editing form after save
       setEditingCredentials({
         binance: { api_key: "", secret_key: "" },
-        coinbase: { api_key: "", secret_key: "" },
+        coinbase: { api_key_id: "", secret_key: "" },
         upbit: { api_key: "", secret_key: "" },
+        bithumb: { api_key: "", secret_key: "" },
       });
     }
   };
 
   const hasCredentialChanges = () => {
+    if (activeExchange === "coinbase") {
+      const current = editingCredentials.coinbase;
+      return current.api_key_id.length > 0 || current.secret_key.length > 0;
+    }
     const current = editingCredentials[activeExchange];
     return current.api_key.length > 0 || current.secret_key.length > 0;
+  };
+
+  const hasConfiguredCredentials = (exchange: typeof activeExchange) => {
+    if (exchange === "coinbase") {
+      return credentials.coinbase?.api_key_id;
+    }
+    return credentials[exchange]?.api_key;
   };
 
   return (
@@ -177,7 +190,7 @@ function Settings() {
 
         {/* Exchange Tabs */}
         <div className="flex space-x-2 border-b border-dark-700">
-          {(["binance", "coinbase", "upbit"] as const).map((exchange) => (
+          {(["binance", "coinbase", "upbit", "bithumb"] as const).map((exchange) => (
             <button
               key={exchange}
               onClick={() => setActiveExchange(exchange)}
@@ -188,7 +201,7 @@ function Settings() {
               }`}
             >
               {exchange.charAt(0).toUpperCase() + exchange.slice(1)}
-              {credentials[exchange]?.api_key && (
+              {hasConfiguredCredentials(exchange) && (
                 <span className="ml-2 text-xs text-success-500">●</span>
               )}
             </button>
@@ -198,56 +211,120 @@ function Settings() {
         {/* Credential Form */}
         {!credentialsLoading && (
           <div className="space-y-4 pt-2">
-            {/* Current Status */}
-            {credentials[activeExchange]?.api_key && (
-              <div className="text-sm text-gray-400">
-                Current: <span className="font-mono text-gray-300">{credentials[activeExchange].api_key}</span>
-              </div>
+            {/* Coinbase-specific form */}
+            {activeExchange === "coinbase" ? (
+              <>
+                {/* Current Status */}
+                {credentials.coinbase?.api_key_id && (
+                  <div className="text-sm text-gray-400">
+                    Current: <span className="font-mono text-gray-300">{credentials.coinbase.api_key_id}</span>
+                  </div>
+                )}
+
+                {/* API Key ID Input */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    API Key ID
+                  </label>
+                  <input
+                    type="text"
+                    value={editingCredentials.coinbase.api_key_id}
+                    onChange={(e) =>
+                      setEditingCredentials({
+                        ...editingCredentials,
+                        coinbase: {
+                          ...editingCredentials.coinbase,
+                          api_key_id: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="organizations/{org_id}/apiKeys/{key_id}"
+                    className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 font-mono text-sm"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Full key ID from CDP Portal (format: organizations/.../apiKeys/...)
+                  </p>
+                </div>
+
+                {/* Secret Key Input (Textarea for multiline PEM) */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Secret Key (PEM)
+                  </label>
+                  <textarea
+                    value={editingCredentials.coinbase.secret_key}
+                    onChange={(e) =>
+                      setEditingCredentials({
+                        ...editingCredentials,
+                        coinbase: {
+                          ...editingCredentials.coinbase,
+                          secret_key: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder={"-----BEGIN EC PRIVATE KEY-----\nMHQC...\n-----END EC PRIVATE KEY-----"}
+                    rows={5}
+                    className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 font-mono text-sm resize-none"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Full PEM format with BEGIN/END headers. Must use ECDSA (ES256) key type.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Current Status */}
+                {credentials[activeExchange]?.api_key && (
+                  <div className="text-sm text-gray-400">
+                    Current: <span className="font-mono text-gray-300">{credentials[activeExchange].api_key}</span>
+                  </div>
+                )}
+
+                {/* API Key Input */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    API Key
+                  </label>
+                  <input
+                    type="text"
+                    value={editingCredentials[activeExchange].api_key}
+                    onChange={(e) =>
+                      setEditingCredentials({
+                        ...editingCredentials,
+                        [activeExchange]: {
+                          ...editingCredentials[activeExchange],
+                          api_key: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="Enter new API key..."
+                    className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 font-mono text-sm"
+                  />
+                </div>
+
+                {/* Secret Key Input */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Secret Key
+                  </label>
+                  <input
+                    type="password"
+                    value={editingCredentials[activeExchange].secret_key}
+                    onChange={(e) =>
+                      setEditingCredentials({
+                        ...editingCredentials,
+                        [activeExchange]: {
+                          ...editingCredentials[activeExchange],
+                          secret_key: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="Enter new secret key..."
+                    className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 font-mono text-sm"
+                  />
+                </div>
+              </>
             )}
-
-            {/* API Key Input */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                API Key
-              </label>
-              <input
-                type="text"
-                value={editingCredentials[activeExchange].api_key}
-                onChange={(e) =>
-                  setEditingCredentials({
-                    ...editingCredentials,
-                    [activeExchange]: {
-                      ...editingCredentials[activeExchange],
-                      api_key: e.target.value,
-                    },
-                  })
-                }
-                placeholder="Enter new API key..."
-                className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 font-mono text-sm"
-              />
-            </div>
-
-            {/* Secret Key Input */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Secret Key
-              </label>
-              <input
-                type="password"
-                value={editingCredentials[activeExchange].secret_key}
-                onChange={(e) =>
-                  setEditingCredentials({
-                    ...editingCredentials,
-                    [activeExchange]: {
-                      ...editingCredentials[activeExchange],
-                      secret_key: e.target.value,
-                    },
-                  })
-                }
-                placeholder="Enter new secret key..."
-                className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 font-mono text-sm"
-              />
-            </div>
 
             {/* Save Button */}
             <button
@@ -273,6 +350,7 @@ function Settings() {
             <li>• Binance</li>
             <li>• Coinbase</li>
             <li>• Upbit</li>
+            <li>• Bithumb</li>
           </ul>
         </div>
         <div className="bg-dark-800 rounded-lg border border-dark-700 p-4">

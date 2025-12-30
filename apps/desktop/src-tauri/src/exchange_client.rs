@@ -394,17 +394,18 @@ fn generate_upbit_token(
 ) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
+    // Use nanoseconds + random component for unique nonce
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+        .unwrap();
+    let nonce = format!("{}{:06}", now.as_millis(), now.subsec_nanos() % 1_000_000);
 
     // Simple JWT structure for Upbit
     let header = r#"{"alg":"HS256","typ":"JWT"}"#;
     let payload = format!(
         r#"{{"access_key":"{}","nonce":"{}"}}"#,
         access_key,
-        now * 1000
+        nonce
     );
 
     let header_b64 = STANDARD.encode(header);
@@ -420,72 +421,134 @@ fn generate_upbit_token(
 }
 
 // ============================================================================
-// Bithumb Client
+// Bithumb Client (API 2.0 with JWT authentication)
 // ============================================================================
 
-/// Fetch Bithumb wallet status (public API - no auth required)
+#[derive(Debug, Deserialize)]
+struct BithumbWalletAsset {
+    currency: String,
+    #[serde(default)]
+    net_type: Option<String>,
+    #[serde(default)]
+    wallet_state: Option<String>, // "working", "withdraw_only", "deposit_only", "suspended"
+}
+
+/// Generate JWT token for Bithumb API 2.0
+fn generate_bithumb_jwt(api_key: &str, secret_key: &str) -> Result<String, String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // JWT header
+    let header = r#"{"alg":"HS256","typ":"JWT"}"#;
+
+    // JWT payload with required claims
+    let payload = format!(
+        r#"{{"access_key":"{}","nonce":"{}","timestamp":{}}}"#,
+        api_key, now, now
+    );
+
+    let header_b64 = URL_SAFE_NO_PAD.encode(header);
+    let payload_b64 = URL_SAFE_NO_PAD.encode(&payload);
+    let message = format!("{}.{}", header_b64, payload_b64);
+
+    let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
+        .map_err(|e| format!("HMAC error: {}", e))?;
+    mac.update(message.as_bytes());
+    let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+
+    Ok(format!("{}.{}.{}", header_b64, payload_b64, signature))
+}
+
+/// Fetch Bithumb wallet status (API 2.0 with JWT authentication)
 pub async fn fetch_bithumb_wallet_status() -> Result<Vec<AssetWalletStatus>, String> {
+    let creds = credentials::load_credentials();
+
+    if creds.bithumb.api_key.is_empty() || creds.bithumb.secret_key.is_empty() {
+        // No API keys - return empty status
+        info!("Bithumb API keys not configured");
+        return Ok(Vec::new());
+    }
+
     let client = Client::new();
 
-    // Use public ticker API to get list of currencies
-    // Bithumb doesn't have a dedicated public wallet status endpoint
+    // Generate JWT token for authentication
+    let token = generate_bithumb_jwt(&creds.bithumb.api_key, &creds.bithumb.secret_key)?;
+
+    // Call wallet status endpoint
     let resp = client
-        .get("https://api.bithumb.com/public/ticker/ALL_KRW")
+        .get("https://api.bithumb.com/v1/status/wallet")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
         .send()
         .await
-        .map_err(|e| format!("Bithumb ticker request failed: {}", e))?;
+        .map_err(|e| format!("Bithumb wallet status request failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        let error_text = resp.text().await.unwrap_or_default();
-        return Err(format!("Bithumb ticker API error: {}", error_text));
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    info!("Bithumb wallet status API response: status={}, body_len={}, body_preview={}",
+          status, body.len(), &body[..body.len().min(500)]);
+
+    if !status.is_success() {
+        return Err(format!("Bithumb wallet status API error: status={}, body={}", status, body));
     }
 
-    #[derive(Debug, serde::Deserialize)]
-    struct BithumbTickerResponse {
-        status: String,
-        data: serde_json::Value,
+    // Response is a direct array, not wrapped in {status, data}
+    let assets: Vec<BithumbWalletAsset> = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse Bithumb wallet status: {}", e))?;
+
+    info!("Bithumb parsed {} raw assets from API", assets.len());
+
+    // Group by currency
+    let mut currency_map: std::collections::HashMap<String, Vec<BithumbWalletAsset>> =
+        std::collections::HashMap::new();
+    for asset in assets {
+        currency_map
+            .entry(asset.currency.clone())
+            .or_default()
+            .push(asset);
     }
 
-    let ticker_resp: BithumbTickerResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Bithumb ticker: {}", e))?;
-
-    if ticker_resp.status != "0000" {
-        return Err(format!(
-            "Bithumb API error: status {}",
-            ticker_resp.status
-        ));
-    }
-
-    // Extract currency symbols from ticker data
-    let currencies: Vec<String> = if let serde_json::Value::Object(map) = ticker_resp.data {
-        map.keys()
-            .filter(|k| *k != "date")
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    // For Bithumb, we assume all currencies are available since there's no public status API
-    let wallet_status: Vec<AssetWalletStatus> = currencies
+    let wallet_status: Vec<AssetWalletStatus> = currency_map
         .into_iter()
-        .map(|currency| {
+        .map(|(currency, networks)| {
+            let network_statuses: Vec<NetworkStatus> = networks
+                .iter()
+                .map(|n| {
+                    // Parse wallet_state: "working", "withdraw_only", "deposit_only", "suspended"
+                    let (deposit_enabled, withdraw_enabled) =
+                        match n.wallet_state.as_deref().unwrap_or("suspended") {
+                            "working" => (true, true),
+                            "withdraw_only" => (false, true),
+                            "deposit_only" => (true, false),
+                            _ => (false, false), // "suspended" or unknown
+                        };
+
+                    NetworkStatus {
+                        network: n.net_type.clone().unwrap_or_else(|| currency.clone()),
+                        name: n.net_type.clone().unwrap_or_else(|| "Default".to_string()),
+                        deposit_enabled,
+                        withdraw_enabled,
+                        min_withdraw: 0.0,
+                        withdraw_fee: 0.0,
+                        confirms_required: 0,
+                    }
+                })
+                .collect();
+
+            let can_deposit = network_statuses.iter().any(|n| n.deposit_enabled);
+            let can_withdraw = network_statuses.iter().any(|n| n.withdraw_enabled);
+
             AssetWalletStatus {
                 asset: currency.clone(),
-                name: currency.clone(),
-                networks: vec![NetworkStatus {
-                    network: "KRW".to_string(),
-                    name: "Bithumb".to_string(),
-                    deposit_enabled: true,
-                    withdraw_enabled: true,
-                    min_withdraw: 0.0,
-                    withdraw_fee: 0.0,
-                    confirms_required: 0,
-                }],
-                can_deposit: true,
-                can_withdraw: true,
+                name: currency,
+                networks: network_statuses,
+                can_deposit,
+                can_withdraw,
             }
         })
         .collect();
@@ -497,17 +560,96 @@ pub async fn fetch_bithumb_wallet_status() -> Result<Vec<AssetWalletStatus>, Str
     Ok(wallet_status)
 }
 
-/// Fetch Bithumb wallet (status only - balances require auth)
+/// Bithumb account response
+#[derive(Debug, Deserialize)]
+struct BithumbAccount {
+    currency: String,
+    balance: String,
+    locked: String,
+    #[allow(dead_code)]
+    avg_buy_price: Option<String>,
+    #[allow(dead_code)]
+    avg_buy_price_modified: Option<bool>,
+    #[allow(dead_code)]
+    unit_currency: Option<String>,
+}
+
+/// Fetch Bithumb balances (requires JWT auth)
+async fn fetch_bithumb_balances() -> Result<Vec<AssetBalance>, String> {
+    let creds = credentials::load_credentials();
+
+    if creds.bithumb.api_key.is_empty() || creds.bithumb.secret_key.is_empty() {
+        info!("Bithumb API keys not configured for balance query");
+        return Ok(Vec::new());
+    }
+
+    let client = Client::new();
+    let token = generate_bithumb_jwt(&creds.bithumb.api_key, &creds.bithumb.secret_key)?;
+
+    let resp = client
+        .get("https://api.bithumb.com/v1/accounts")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Bithumb accounts request failed: {}", e))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    info!("Bithumb accounts API response: status={}, body_preview={}",
+          status, &body[..body.len().min(500)]);
+
+    if !status.is_success() {
+        return Err(format!("Bithumb accounts API error: status={}, body={}", status, body));
+    }
+
+    let accounts: Vec<BithumbAccount> = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse Bithumb accounts: {}", e))?;
+
+    let balances: Vec<AssetBalance> = accounts
+        .into_iter()
+        .filter_map(|a| {
+            let free: f64 = a.balance.parse().unwrap_or(0.0);
+            let locked: f64 = a.locked.parse().unwrap_or(0.0);
+            let total = free + locked;
+            if total > 0.0 {
+                Some(AssetBalance {
+                    asset: a.currency,
+                    free,
+                    locked,
+                    total,
+                    usd_value: None,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    info!("Bithumb fetched {} balances with value", balances.len());
+    Ok(balances)
+}
+
+/// Fetch Bithumb wallet with balances and status
 pub async fn fetch_bithumb_wallet() -> Result<ExchangeWalletInfo, String> {
-    // Fetch wallet status (public API - no auth required)
+    let creds = credentials::load_credentials();
+
+    // Fetch wallet status first
     let wallet_status = fetch_bithumb_wallet_status().await.unwrap_or_else(|e| {
         warn!("Failed to fetch Bithumb wallet status: {}", e);
         Vec::new()
     });
 
-    // Note: Balances require HMAC authentication
-    // For now, we only return wallet status
-    let balances = Vec::new();
+    // Fetch balances if credentials are available
+    let balances = if !creds.bithumb.api_key.is_empty() && !creds.bithumb.secret_key.is_empty() {
+        fetch_bithumb_balances().await.unwrap_or_else(|e| {
+            warn!("Failed to fetch Bithumb balances: {}", e);
+            Vec::new()
+        })
+    } else {
+        Vec::new()
+    };
 
     info!(
         "Fetched Bithumb wallet: {} balances, {} assets with status",
@@ -652,17 +794,193 @@ pub async fn fetch_coinbase_wallet_status() -> Result<Vec<AssetWalletStatus>, St
     Ok(wallet_status)
 }
 
-/// Fetch Coinbase wallet (status only - balances require OAuth)
+/// Coinbase Advanced Trade API account response (Legacy Key format)
+#[derive(Debug, Deserialize)]
+struct CoinbaseAccountsResponse {
+    accounts: Vec<CoinbaseAccount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoinbaseAccount {
+    #[serde(default)]
+    uuid: String,
+    #[serde(default)]
+    currency: String,
+    #[serde(default)]
+    available_balance: CoinbaseBalance,
+    #[serde(default)]
+    hold: CoinbaseBalance,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CoinbaseBalance {
+    #[serde(default)]
+    value: String,
+    #[serde(default)]
+    currency: String,
+}
+
+/// Generate JWT token for Coinbase App API (ES256/ECDSA signing)
+/// Documentation: https://docs.cdp.coinbase.com/coinbase-app/authentication-authorization/api-key-authentication
+fn generate_coinbase_cdp_jwt(
+    key_name: &str,
+    secret_key_pem: &str,
+    method: &str,
+    request_path: &str,
+) -> Result<String, String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use p256::ecdsa::{SigningKey, Signature, signature::Signer};
+    use p256::pkcs8::DecodePrivateKey;
+    use p256::SecretKey;
+
+    // Log key format for debugging (first 50 chars only)
+    info!("Coinbase secret key format: starts_with={:?}, len={}",
+          &secret_key_pem.chars().take(50).collect::<String>(),
+          secret_key_pem.len());
+
+    // Parse EC private key from PEM format (ES256 = P-256/secp256r1)
+    // Try SEC1 format first (-----BEGIN EC PRIVATE KEY-----), then PKCS#8 (-----BEGIN PRIVATE KEY-----)
+    let signing_key = if secret_key_pem.contains("EC PRIVATE KEY") {
+        SecretKey::from_sec1_pem(secret_key_pem)
+            .map(|sk| SigningKey::from(&sk))
+            .map_err(|e| format!("Failed to parse SEC1 EC private key: {}. Key preview: {:?}", e, &secret_key_pem.chars().take(100).collect::<String>()))?
+    } else if secret_key_pem.contains("PRIVATE KEY") {
+        SigningKey::from_pkcs8_pem(secret_key_pem)
+            .map_err(|e| format!("Failed to parse PKCS#8 private key: {}", e))?
+    } else {
+        return Err(format!("Invalid key format. Expected PEM format but got: {:?}", &secret_key_pem.chars().take(50).collect::<String>()));
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // Generate random nonce (32 bytes hex string)
+    let nonce = format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
+
+    // JWT Header: {"alg": "ES256", "typ": "JWT", "kid": key_name, "nonce": nonce}
+    let header = serde_json::json!({
+        "alg": "ES256",
+        "typ": "JWT",
+        "kid": key_name,
+        "nonce": nonce
+    });
+
+    // URI for the request: "{METHOD} {HOST}{PATH}"
+    let uri = format!("{} api.coinbase.com{}", method, request_path);
+
+    // JWT Payload
+    let payload = serde_json::json!({
+        "iss": "cdp",
+        "sub": key_name,
+        "nbf": now,
+        "exp": now + 120, // 120 seconds expiry
+        "uri": uri
+    });
+
+    let header_b64 = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+    let message = format!("{}.{}", header_b64, payload_b64);
+
+    // Sign with ES256 (ECDSA P-256)
+    let signature: Signature = signing_key.sign(message.as_bytes());
+    let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+
+    Ok(format!("{}.{}.{}", header_b64, payload_b64, signature_b64))
+}
+
+/// Fetch Coinbase balances (CDP API with ES256 JWT auth)
+async fn fetch_coinbase_balances() -> Result<Vec<AssetBalance>, String> {
+    let creds = credentials::load_credentials();
+
+    if !creds.coinbase.is_configured() {
+        info!("Coinbase API keys not configured");
+        return Ok(Vec::new());
+    }
+
+    let client = Client::new();
+    let path = "/api/v3/brokerage/accounts";
+
+    // Generate CDP JWT token with ES256 signature
+    let jwt_token = generate_coinbase_cdp_jwt(
+        &creds.coinbase.key_name(),
+        &creds.coinbase.secret_key,
+        "GET",
+        path,
+    )?;
+
+    let resp = client
+        .get(format!("https://api.coinbase.com{}", path))
+        .header("Authorization", format!("Bearer {}", jwt_token))
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Coinbase accounts request failed: {}", e))?;
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap_or_default();
+
+    info!(
+        "Coinbase accounts API response: status={}, body_preview={}",
+        status,
+        &body_text[..body_text.len().min(500)]
+    );
+
+    if !status.is_success() {
+        return Err(format!(
+            "Coinbase accounts API error: status={}, body={}",
+            status, body_text
+        ));
+    }
+
+    let response: CoinbaseAccountsResponse = serde_json::from_str(&body_text)
+        .map_err(|e| format!("Failed to parse Coinbase accounts: {}", e))?;
+
+    let balances: Vec<AssetBalance> = response.accounts
+        .into_iter()
+        .filter_map(|a| {
+            let free: f64 = a.available_balance.value.parse().unwrap_or(0.0);
+            let locked: f64 = a.hold.value.parse().unwrap_or(0.0);
+            let total = free + locked;
+
+            if total > 0.0 {
+                Some(AssetBalance {
+                    asset: a.currency,
+                    free,
+                    locked,
+                    total,
+                    usd_value: None,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    info!("Coinbase fetched {} balances with value", balances.len());
+    Ok(balances)
+}
+
+/// Fetch Coinbase wallet with balances (CDP API with ES256 auth) and status
 pub async fn fetch_coinbase_wallet() -> Result<ExchangeWalletInfo, String> {
+    let creds = credentials::load_credentials();
+
     // Fetch wallet status (public API - no auth required)
     let wallet_status = fetch_coinbase_wallet_status().await.unwrap_or_else(|e| {
         warn!("Failed to fetch Coinbase wallet status: {}", e);
         Vec::new()
     });
 
-    // Note: Balances require OAuth authentication which is complex to implement
-    // For now, we only return wallet status (deposit/withdraw availability)
-    let balances = Vec::new();
+    // Fetch balances if credentials are available
+    let balances = if creds.coinbase.is_configured() {
+        fetch_coinbase_balances().await.unwrap_or_else(|e| {
+            warn!("Failed to fetch Coinbase balances: {}", e);
+            Vec::new()
+        })
+    } else {
+        Vec::new()
+    };
 
     info!(
         "Fetched Coinbase wallet: {} balances, {} assets with status",
