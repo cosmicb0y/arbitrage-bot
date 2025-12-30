@@ -1144,7 +1144,106 @@ pub async fn fetch_bybit_wallet_status() -> Result<Vec<AssetWalletStatus>, Strin
     Ok(wallet_status)
 }
 
-/// Fetch Bybit balances (unified account)
+/// Bybit FUND account balance response
+#[derive(Debug, Deserialize)]
+struct BybitFundBalanceResponse {
+    #[serde(rename = "retCode")]
+    ret_code: i32,
+    #[serde(rename = "retMsg")]
+    ret_msg: String,
+    result: BybitFundBalanceResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitFundBalanceResult {
+    #[serde(default)]
+    balance: Vec<BybitFundCoin>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitFundCoin {
+    coin: String,
+    #[serde(rename = "walletBalance", default)]
+    wallet_balance: String,
+    #[serde(rename = "transferBalance", default)]
+    transfer_balance: String,
+}
+
+/// Bybit EARN position response
+#[derive(Debug, Deserialize)]
+struct BybitEarnResponse {
+    #[serde(rename = "retCode")]
+    ret_code: i32,
+    #[serde(rename = "retMsg")]
+    ret_msg: String,
+    result: BybitEarnResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitEarnResult {
+    #[serde(default)]
+    list: Vec<BybitEarnPosition>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitEarnPosition {
+    coin: String,
+    #[serde(default)]
+    amount: String,
+    #[serde(rename = "claimableYield", default)]
+    claimable_yield: String,
+}
+
+/// Fetch Bybit EARN positions for a specific category
+async fn fetch_bybit_earn_positions(
+    client: &Client,
+    creds: &credentials::Credentials,
+    category: &str,
+) -> Vec<(String, f64)> {
+    let recv_window = "5000";
+    let timestamp = timestamp_ms();
+    let query = format!("category={}", category);
+
+    let signature = sign_bybit(
+        timestamp,
+        &creds.bybit.api_key,
+        recv_window,
+        &query,
+        &creds.bybit.secret_key,
+    );
+
+    let resp = client
+        .get(format!("https://api.bybit.com/v5/earn/position?{}", query))
+        .header("X-BAPI-API-KEY", &creds.bybit.api_key)
+        .header("X-BAPI-SIGN", &signature)
+        .header("X-BAPI-TIMESTAMP", timestamp.to_string())
+        .header("X-BAPI-RECV-WINDOW", recv_window)
+        .send()
+        .await;
+
+    let mut positions = Vec::new();
+
+    if let Ok(resp) = resp {
+        if let Ok(body) = resp.text().await {
+            if let Ok(response) = serde_json::from_str::<BybitEarnResponse>(&body) {
+                if response.ret_code == 0 {
+                    for pos in response.result.list {
+                        let amount: f64 = pos.amount.parse().unwrap_or(0.0);
+                        let yield_amount: f64 = pos.claimable_yield.parse().unwrap_or(0.0);
+                        let total = amount + yield_amount;
+                        if total > 0.0 {
+                            positions.push((pos.coin, total));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    positions
+}
+
+/// Fetch Bybit balances (UNIFIED + FUND + EARN accounts)
 async fn fetch_bybit_balances() -> Result<Vec<AssetBalance>, String> {
     let creds = credentials::load_credentials();
 
@@ -1154,6 +1253,9 @@ async fn fetch_bybit_balances() -> Result<Vec<AssetBalance>, String> {
     }
 
     let client = Client::new();
+    let mut balances: Vec<AssetBalance> = Vec::new();
+
+    // 1. Fetch UNIFIED account balance
     let timestamp = timestamp_ms();
     let recv_window = "5000";
     let query = "accountType=UNIFIED";
@@ -1169,48 +1271,117 @@ async fn fetch_bybit_balances() -> Result<Vec<AssetBalance>, String> {
     let resp = client
         .get(format!("https://api.bybit.com/v5/account/wallet-balance?{}", query))
         .header("X-BAPI-API-KEY", &creds.bybit.api_key)
-        .header("X-BAPI-SIGN", signature)
+        .header("X-BAPI-SIGN", &signature)
         .header("X-BAPI-TIMESTAMP", timestamp.to_string())
         .header("X-BAPI-RECV-WINDOW", recv_window)
         .send()
         .await
-        .map_err(|e| format!("Bybit balance request failed: {}", e))?;
+        .map_err(|e| format!("Bybit UNIFIED balance request failed: {}", e))?;
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
 
-    if !status.is_success() {
-        return Err(format!("Bybit balance API error: status={}, body={}", status, body));
-    }
+    if status.is_success() {
+        if let Ok(response) = serde_json::from_str::<BybitBalanceResponse>(&body) {
+            if response.ret_code == 0 {
+                for account in response.result.list {
+                    for coin in account.coin {
+                        let total: f64 = coin.wallet_balance.parse().unwrap_or(0.0);
+                        let available: f64 = coin.available_to_withdraw.parse().unwrap_or(0.0);
+                        let locked: f64 = coin.locked.parse().unwrap_or(0.0);
 
-    let response: BybitBalanceResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse Bybit balance: {}", e))?;
-
-    if response.ret_code != 0 {
-        return Err(format!("Bybit API error: {} - {}", response.ret_code, response.ret_msg));
-    }
-
-    let mut balances: Vec<AssetBalance> = Vec::new();
-
-    for account in response.result.list {
-        for coin in account.coin {
-            let total: f64 = coin.wallet_balance.parse().unwrap_or(0.0);
-            let available: f64 = coin.available_to_withdraw.parse().unwrap_or(0.0);
-            let locked: f64 = coin.locked.parse().unwrap_or(0.0);
-
-            if total > 0.0 {
-                balances.push(AssetBalance {
-                    asset: coin.coin,
-                    free: available,
-                    locked,
-                    total,
-                    usd_value: None,
-                });
+                        if total > 0.0 {
+                            balances.push(AssetBalance {
+                                asset: coin.coin,
+                                free: available,
+                                locked,
+                                total,
+                                usd_value: None,
+                            });
+                        }
+                    }
+                }
+                info!("Bybit UNIFIED: {} balances", balances.len());
             }
         }
     }
 
-    info!("Bybit fetched {} balances with value", balances.len());
+    // 2. Fetch FUND account balance (funding wallet)
+    let timestamp = timestamp_ms();
+    let query = "accountType=FUND";
+
+    let signature = sign_bybit(
+        timestamp,
+        &creds.bybit.api_key,
+        recv_window,
+        query,
+        &creds.bybit.secret_key,
+    );
+
+    let resp = client
+        .get(format!("https://api.bybit.com/v5/asset/transfer/query-account-coins-balance?{}", query))
+        .header("X-BAPI-API-KEY", &creds.bybit.api_key)
+        .header("X-BAPI-SIGN", &signature)
+        .header("X-BAPI-TIMESTAMP", timestamp.to_string())
+        .header("X-BAPI-RECV-WINDOW", recv_window)
+        .send()
+        .await
+        .map_err(|e| format!("Bybit FUND balance request failed: {}", e))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if status.is_success() {
+        if let Ok(response) = serde_json::from_str::<BybitFundBalanceResponse>(&body) {
+            if response.ret_code == 0 {
+                let mut fund_count = 0;
+                for coin in response.result.balance {
+                    let total: f64 = coin.wallet_balance.parse().unwrap_or(0.0);
+                    if total > 0.0 {
+                        // Check if already exists from UNIFIED
+                        if !balances.iter().any(|b| b.asset == coin.coin) {
+                            balances.push(AssetBalance {
+                                asset: coin.coin,
+                                free: total,
+                                locked: 0.0,
+                                total,
+                                usd_value: None,
+                            });
+                            fund_count += 1;
+                        }
+                    }
+                }
+                info!("Bybit FUND: {} additional balances", fund_count);
+            }
+        }
+    }
+
+    // 3. Fetch EARN positions (FlexibleSaving + OnChain)
+    let mut earn_count = 0;
+    for category in ["FlexibleSaving", "OnChain"] {
+        let positions = fetch_bybit_earn_positions(&client, &creds, category).await;
+        for (coin, amount) in positions {
+            // Add to existing balance or create new entry
+            if let Some(existing) = balances.iter_mut().find(|b| b.asset == coin) {
+                existing.locked += amount;
+                existing.total += amount;
+            } else {
+                balances.push(AssetBalance {
+                    asset: coin,
+                    free: 0.0,
+                    locked: amount,
+                    total: amount,
+                    usd_value: None,
+                });
+            }
+            earn_count += 1;
+        }
+    }
+    if earn_count > 0 {
+        info!("Bybit EARN: {} positions added", earn_count);
+    }
+
+    info!("Bybit fetched {} total balances (UNIFIED + FUND + EARN)", balances.len());
     Ok(balances)
 }
 
