@@ -483,6 +483,157 @@ impl CoinbaseAdapter {
     }
 }
 
+/// Bybit WebSocket adapter.
+/// Uses V5 public WebSocket API for spot market.
+pub struct BybitAdapter;
+
+/// Bybit WebSocket ticker response (V5 API).
+/// Note: Spot tickers only have lastPrice, not bid1Price/ask1Price (those are for derivatives).
+#[derive(Debug, Deserialize)]
+struct BybitTickerData {
+    /// Symbol (e.g., "BTCUSDT")
+    symbol: String,
+    /// Last traded price
+    #[serde(rename = "lastPrice")]
+    last_price: String,
+    /// Best bid price (optional, only available for derivatives)
+    #[serde(rename = "bid1Price", default)]
+    bid1_price: String,
+    /// Best ask price (optional, only available for derivatives)
+    #[serde(rename = "ask1Price", default)]
+    ask1_price: String,
+    /// 24h volume (base currency)
+    #[serde(rename = "volume24h", default)]
+    volume_24h: String,
+    /// 24h turnover (quote currency, already in USDT)
+    #[serde(rename = "turnover24h", default)]
+    turnover_24h: String,
+}
+
+/// Bybit WebSocket message wrapper.
+/// Note: For spot, `data` is an object (not an array like in some other endpoints).
+#[derive(Debug, Deserialize)]
+struct BybitTickerMessage {
+    topic: String,
+    #[serde(rename = "type")]
+    msg_type: String,
+    data: BybitTickerData,
+    ts: u64,
+}
+
+impl BybitAdapter {
+    /// Map symbol to pair_id.
+    /// Extracts base asset from trading pair (e.g., BTCUSDT -> BTC) and generates pair_id.
+    pub fn symbol_to_pair_id(symbol: &str) -> Option<u32> {
+        let base = Self::extract_base_symbol(symbol)?;
+        Some(symbol_to_pair_id(&base))
+    }
+
+    /// Extract base symbol from trading pair (e.g., BTCUSDT -> BTC).
+    pub fn extract_base_symbol(symbol: &str) -> Option<String> {
+        let symbol = symbol.to_uppercase();
+        if symbol.ends_with("USDT") {
+            symbol.strip_suffix("USDT").map(|s| s.to_string())
+        } else if symbol.ends_with("USDC") {
+            symbol.strip_suffix("USDC").map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Parse a ticker message from Bybit.
+    pub fn parse_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
+        let msg: BybitTickerMessage = serde_json::from_str(json)?;
+
+        let price = msg.data.last_price.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        // For spot tickers, bid1_price and ask1_price might be empty
+        // Use lastPrice as fallback for bid/ask
+        let bid = msg.data.bid1_price.parse::<f64>().unwrap_or(price);
+        let ask = msg.data.ask1_price.parse::<f64>().unwrap_or(price);
+
+        Ok(PriceTick::new(
+            Exchange::Bybit,
+            pair_id,
+            FixedPoint::from_f64(price),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+        ))
+    }
+
+    /// Parse a ticker message and auto-detect pair_id from symbol.
+    pub fn parse_ticker_auto(json: &str) -> Result<PriceTick, FeedError> {
+        let (tick, _) = Self::parse_ticker_with_symbol(json)?;
+        Ok(tick)
+    }
+
+    /// Parse a ticker message, returning both the tick and the base symbol.
+    pub fn parse_ticker_with_symbol(json: &str) -> Result<(PriceTick, String), FeedError> {
+        let msg: BybitTickerMessage = serde_json::from_str(json)?;
+
+        let symbol = Self::extract_base_symbol(&msg.data.symbol)
+            .ok_or_else(|| FeedError::ParseError(format!("Unknown symbol: {}", msg.data.symbol)))?;
+        let pair_id = symbol_to_pair_id(&symbol);
+
+        let price = msg.data.last_price.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        // For spot tickers, bid1_price and ask1_price might be empty
+        // Use lastPrice as fallback for bid/ask
+        let bid = msg.data.bid1_price.parse::<f64>().unwrap_or(price);
+        let ask = msg.data.ask1_price.parse::<f64>().unwrap_or(price);
+        // turnover_24h is already in USDT
+        let volume_usd = msg.data.turnover_24h.parse::<f64>().unwrap_or(0.0);
+
+        Ok((PriceTick::new(
+            Exchange::Bybit,
+            pair_id,
+            FixedPoint::from_f64(price),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), symbol))
+    }
+
+    /// Generate a subscription message for Bybit WebSocket.
+    /// Note: Bybit has a limit of 10 args per subscription message.
+    /// This function generates a single message - use subscribe_messages() for batched subscriptions.
+    pub fn subscribe_message(symbols: &[String]) -> String {
+        // Take only first 10 symbols for single message
+        let topics: Vec<String> = symbols
+            .iter()
+            .take(10)
+            .map(|s| format!("\"tickers.{}\"", s.to_uppercase()))
+            .collect();
+
+        format!(
+            r#"{{"op": "subscribe", "args": [{}]}}"#,
+            topics.join(", ")
+        )
+    }
+
+    /// Generate multiple subscription messages for Bybit WebSocket (batched by 10).
+    /// Bybit has a limit of 10 args per subscription message.
+    pub fn subscribe_messages(symbols: &[String]) -> Vec<String> {
+        symbols
+            .chunks(10)
+            .map(|chunk| {
+                let topics: Vec<String> = chunk
+                    .iter()
+                    .map(|s| format!("\"tickers.{}\"", s.to_uppercase()))
+                    .collect();
+                format!(
+                    r#"{{"op": "subscribe", "args": [{}]}}"#,
+                    topics.join(", ")
+                )
+            })
+            .collect()
+    }
+
+    /// Get WebSocket URL for Bybit.
+    pub fn ws_url() -> &'static str {
+        "wss://stream.bybit.com/v5/public/spot"
+    }
+}
+
 /// Bithumb WebSocket adapter.
 /// Uses the same format as Upbit (Korean exchange).
 pub struct BithumbAdapter;
@@ -750,5 +901,44 @@ mod tests {
         assert!(msg.contains("SUBSCRIBE"));
         assert!(msg.contains("btcusdt@ticker"));
         assert!(msg.contains("ethusdt@ticker"));
+    }
+
+    // === Bybit tests ===
+
+    #[test]
+    fn test_bybit_parse_ticker() {
+        // Based on Bybit V5 API spot ticker format
+        let json = r#"{
+            "topic": "tickers.BTCUSDT",
+            "type": "snapshot",
+            "data": {
+                "symbol": "BTCUSDT",
+                "lastPrice": "50000.00",
+                "highPrice24h": "51000.00",
+                "lowPrice24h": "49000.00",
+                "prevPrice24h": "49500.00",
+                "volume24h": "1000.00",
+                "turnover24h": "50000000.00",
+                "price24hPcnt": "0.01"
+            },
+            "ts": 1700000000000
+        }"#;
+
+        let (tick, symbol) = BybitAdapter::parse_ticker_with_symbol(json).unwrap();
+        assert_eq!(tick.exchange(), Exchange::Bybit);
+        assert_eq!(symbol, "BTC");
+        assert!((tick.price().to_f64() - 50000.0).abs() < 0.01);
+        // bid/ask should fallback to lastPrice for spot
+        assert!((tick.bid().to_f64() - 50000.0).abs() < 0.01);
+        assert!((tick.ask().to_f64() - 50000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_bybit_subscribe_message() {
+        let symbols = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
+        let msg = BybitAdapter::subscribe_message(&symbols);
+        assert!(msg.contains("subscribe"));
+        assert!(msg.contains("tickers.BTCUSDT"));
+        assert!(msg.contains("tickers.ETHUSDT"));
     }
 }
