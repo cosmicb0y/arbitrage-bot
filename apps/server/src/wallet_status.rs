@@ -263,91 +263,140 @@ async fn fetch_coinbase_wallet_status() -> Result<ExchangeWalletStatus, String> 
 }
 
 // ============================================================================
-// Bithumb Client (Public API)
+// Bithumb Client (API 2.0 with JWT authentication)
 // ============================================================================
 
 #[derive(Debug, Deserialize)]
-struct BithumbStatusResponse {
-    status: String,
-    data: HashMap<String, BithumbAssetStatus>,
+struct BithumbWalletAsset {
+    currency: String,
+    #[serde(default)]
+    net_type: Option<String>,
+    #[serde(default)]
+    wallet_state: Option<String>, // "working", "withdraw_only", "deposit_only", "suspended"
 }
 
-#[derive(Debug, Deserialize)]
-struct BithumbAssetStatus {
-    #[serde(default)]
-    withdrawal_status: Option<i32>, // 1 = available, 0 = unavailable
-    #[serde(default)]
-    deposit_status: Option<i32>, // 1 = available, 0 = unavailable
+/// Generate JWT token for Bithumb API 2.0
+fn generate_bithumb_jwt(api_key: &str, secret_key: &str) -> Result<String, String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // JWT header
+    let header = r#"{"alg":"HS256","typ":"JWT"}"#;
+
+    // JWT payload with required claims
+    let payload = format!(
+        r#"{{"access_key":"{}","nonce":"{}","timestamp":{}}}"#,
+        api_key, now, now
+    );
+
+    let header_b64 = URL_SAFE_NO_PAD.encode(header);
+    let payload_b64 = URL_SAFE_NO_PAD.encode(&payload);
+    let message = format!("{}.{}", header_b64, payload_b64);
+
+    let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
+        .map_err(|e| format!("HMAC error: {}", e))?;
+    mac.update(message.as_bytes());
+    let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+
+    Ok(format!("{}.{}.{}", header_b64, payload_b64, signature))
 }
 
-/// Fetch Bithumb wallet status (public API - no auth required)
+/// Fetch Bithumb wallet status (API 2.0 with JWT authentication)
 async fn fetch_bithumb_wallet_status() -> Result<ExchangeWalletStatus, String> {
+    let api_key = std::env::var("BITHUMB_API_KEY").unwrap_or_default();
+    let secret_key = std::env::var("BITHUMB_SECRET_KEY").unwrap_or_default();
+
+    if api_key.is_empty() || secret_key.is_empty() {
+        // No API keys - return empty status
+        info!("Bithumb API keys not configured (BITHUMB_API_KEY, BITHUMB_SECRET_KEY)");
+        return Ok(ExchangeWalletStatus {
+            exchange: "Bithumb".to_string(),
+            wallet_status: Vec::new(),
+            last_updated: timestamp_ms(),
+        });
+    }
+
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 
-    // Bithumb has a status endpoint per currency
-    // Use ticker/ALL to get list of currencies, then assume all are enabled
-    // (Bithumb doesn't have a public wallet status endpoint like Upbit)
+    // Generate JWT token for authentication
+    let token = generate_bithumb_jwt(&api_key, &secret_key)?;
+
+    // Call wallet status endpoint
     let resp = client
-        .get("https://api.bithumb.com/public/ticker/ALL_KRW")
+        .get("https://api.bithumb.com/v1/status/wallet")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
         .send()
         .await
-        .map_err(|e| format!("Bithumb ticker request failed: {}", e))?;
+        .map_err(|e| format!("Bithumb wallet status request failed: {}", e))?;
 
     if !resp.status().is_success() {
         let error_text = resp.text().await.unwrap_or_default();
-        return Err(format!("Bithumb ticker API error: {}", error_text));
+        return Err(format!("Bithumb wallet status API error: {}", error_text));
     }
 
-    #[derive(Debug, Deserialize)]
-    struct BithumbTickerResponse {
-        status: String,
-        data: serde_json::Value,
-    }
-
-    let ticker_resp: BithumbTickerResponse = resp
+    // Response is a direct array, not wrapped in {status, data}
+    let assets: Vec<BithumbWalletAsset> = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse Bithumb ticker: {}", e))?;
+        .map_err(|e| format!("Failed to parse Bithumb wallet status: {}", e))?;
 
-    if ticker_resp.status != "0000" {
-        return Err(format!(
-            "Bithumb API error: status {}",
-            ticker_resp.status
-        ));
+    // Group by currency
+    let mut currency_map: HashMap<String, Vec<BithumbWalletAsset>> = HashMap::new();
+    for asset in assets {
+        currency_map
+            .entry(asset.currency.clone())
+            .or_default()
+            .push(asset);
     }
 
-    // Extract currency symbols from ticker data
-    let currencies: Vec<String> = if let serde_json::Value::Object(map) = ticker_resp.data {
-        map.keys()
-            .filter(|k| *k != "date")
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    // For Bithumb, we assume all currencies are available since there's no public status API
-    // In production, you might want to check the account/balance endpoint with auth
-    let wallet_status: Vec<AssetWalletStatus> = currencies
+    let wallet_status: Vec<AssetWalletStatus> = currency_map
         .into_iter()
-        .map(|currency| {
+        .map(|(currency, networks)| {
+            let network_statuses: Vec<NetworkStatus> = networks
+                .iter()
+                .map(|n| {
+                    // Parse wallet_state: "working", "withdraw_only", "deposit_only", "suspended"
+                    let (deposit_enabled, withdraw_enabled) =
+                        match n.wallet_state.as_deref().unwrap_or("suspended") {
+                            "working" => (true, true),
+                            "withdraw_only" => (false, true),
+                            "deposit_only" => (true, false),
+                            _ => (false, false), // "suspended" or unknown
+                        };
+
+                    NetworkStatus {
+                        network: n.net_type.clone().unwrap_or_else(|| currency.clone()),
+                        name: n.net_type.clone().unwrap_or_else(|| "Default".to_string()),
+                        deposit_enabled,
+                        withdraw_enabled,
+                        min_withdraw: 0.0,
+                        withdraw_fee: 0.0,
+                        confirms_required: 0,
+                    }
+                })
+                .collect();
+
+            let can_deposit = network_statuses.iter().any(|n| n.deposit_enabled);
+            let can_withdraw = network_statuses.iter().any(|n| n.withdraw_enabled);
+
             AssetWalletStatus {
                 asset: currency.clone(),
-                name: currency.clone(),
-                networks: vec![NetworkStatus {
-                    network: "KRW".to_string(),
-                    name: "Bithumb".to_string(),
-                    deposit_enabled: true,
-                    withdraw_enabled: true,
-                    min_withdraw: 0.0,
-                    withdraw_fee: 0.0,
-                    confirms_required: 0,
-                }],
-                can_deposit: true,
-                can_withdraw: true,
+                name: currency,
+                networks: network_statuses,
+                can_deposit,
+                can_withdraw,
             }
         })
         .collect();
