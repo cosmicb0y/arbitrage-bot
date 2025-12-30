@@ -519,6 +519,7 @@ const emptyCredentials: Credentials = {
   coinbase: { api_key_id: "", secret_key: "" },
   upbit: { api_key: "", secret_key: "" },
   bithumb: { api_key: "", secret_key: "" },
+  bybit: { api_key: "", secret_key: "" },
 };
 
 export function useCredentials() {

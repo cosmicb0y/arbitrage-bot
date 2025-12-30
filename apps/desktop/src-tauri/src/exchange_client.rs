@@ -490,9 +490,6 @@ pub async fn fetch_bithumb_wallet_status() -> Result<Vec<AssetWalletStatus>, Str
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
 
-    info!("Bithumb wallet status API response: status={}, body_len={}, body_preview={}",
-          status, body.len(), &body[..body.len().min(500)]);
-
     if !status.is_success() {
         return Err(format!("Bithumb wallet status API error: status={}, body={}", status, body));
     }
@@ -500,8 +497,6 @@ pub async fn fetch_bithumb_wallet_status() -> Result<Vec<AssetWalletStatus>, Str
     // Response is a direct array, not wrapped in {status, data}
     let assets: Vec<BithumbWalletAsset> = serde_json::from_str(&body)
         .map_err(|e| format!("Failed to parse Bithumb wallet status: {}", e))?;
-
-    info!("Bithumb parsed {} raw assets from API", assets.len());
 
     // Group by currency
     let mut currency_map: std::collections::HashMap<String, Vec<BithumbWalletAsset>> =
@@ -596,9 +591,6 @@ async fn fetch_bithumb_balances() -> Result<Vec<AssetBalance>, String> {
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
-
-    info!("Bithumb accounts API response: status={}, body_preview={}",
-          status, &body[..body.len().min(500)]);
 
     if !status.is_success() {
         return Err(format!("Bithumb accounts API error: status={}, body={}", status, body));
@@ -833,11 +825,6 @@ fn generate_coinbase_cdp_jwt(
     use p256::pkcs8::DecodePrivateKey;
     use p256::SecretKey;
 
-    // Log key format for debugging (first 50 chars only)
-    info!("Coinbase secret key format: starts_with={:?}, len={}",
-          &secret_key_pem.chars().take(50).collect::<String>(),
-          secret_key_pem.len());
-
     // Parse EC private key from PEM format (ES256 = P-256/secp256r1)
     // Try SEC1 format first (-----BEGIN EC PRIVATE KEY-----), then PKCS#8 (-----BEGIN PRIVATE KEY-----)
     let signing_key = if secret_key_pem.contains("EC PRIVATE KEY") {
@@ -921,12 +908,6 @@ async fn fetch_coinbase_balances() -> Result<Vec<AssetBalance>, String> {
     let status = resp.status();
     let body_text = resp.text().await.unwrap_or_default();
 
-    info!(
-        "Coinbase accounts API response: status={}, body_preview={}",
-        status,
-        &body_text[..body_text.len().min(500)]
-    );
-
     if !status.is_success() {
         return Err(format!(
             "Coinbase accounts API error: status={}, body={}",
@@ -997,6 +978,271 @@ pub async fn fetch_coinbase_wallet() -> Result<ExchangeWalletInfo, String> {
 }
 
 // ============================================================================
+// Bybit Client (V5 API with HMAC-SHA256 signing)
+// ============================================================================
+
+/// Bybit coin info for wallet status
+#[derive(Debug, Deserialize)]
+struct BybitCoinInfo {
+    coin: String,
+    #[serde(rename = "coinName", default)]
+    coin_name: String,
+    chains: Vec<BybitChainInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitChainInfo {
+    chain: String,
+    #[serde(rename = "chainDeposit", default)]
+    chain_deposit: String, // "0" or "1"
+    #[serde(rename = "chainWithdraw", default)]
+    chain_withdraw: String, // "0" or "1"
+    #[serde(rename = "minWithdraw", default)]
+    min_withdraw: String,
+    #[serde(rename = "withdrawFee", default)]
+    withdraw_fee: String,
+    #[serde(rename = "confirmation", default)]
+    confirmation: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitCoinInfoResponse {
+    #[serde(rename = "retCode")]
+    ret_code: i32,
+    #[serde(rename = "retMsg")]
+    ret_msg: String,
+    result: BybitCoinInfoResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitCoinInfoResult {
+    rows: Vec<BybitCoinInfo>,
+}
+
+/// Bybit wallet balance response
+#[derive(Debug, Deserialize)]
+struct BybitBalanceResponse {
+    #[serde(rename = "retCode")]
+    ret_code: i32,
+    #[serde(rename = "retMsg")]
+    ret_msg: String,
+    result: BybitBalanceResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitBalanceResult {
+    list: Vec<BybitAccountBalance>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitAccountBalance {
+    #[serde(rename = "accountType")]
+    account_type: String,
+    coin: Vec<BybitCoinBalance>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitCoinBalance {
+    coin: String,
+    #[serde(rename = "walletBalance", default)]
+    wallet_balance: String,
+    #[serde(rename = "availableToWithdraw", default)]
+    available_to_withdraw: String,
+    #[serde(rename = "locked", default)]
+    locked: String,
+}
+
+/// Sign request for Bybit V5 API (HMAC-SHA256)
+fn sign_bybit(timestamp: u64, api_key: &str, recv_window: &str, query: &str, secret: &str) -> String {
+    let sign_str = format!("{}{}{}{}", timestamp, api_key, recv_window, query);
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(sign_str.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Fetch Bybit wallet status (coin info with deposit/withdraw status)
+pub async fn fetch_bybit_wallet_status() -> Result<Vec<AssetWalletStatus>, String> {
+    let creds = credentials::load_credentials();
+
+    if creds.bybit.api_key.is_empty() || creds.bybit.secret_key.is_empty() {
+        info!("Bybit API keys not configured");
+        return Ok(Vec::new());
+    }
+
+    let client = Client::new();
+    let timestamp = timestamp_ms();
+    let recv_window = "5000";
+    let query = "";
+
+    let signature = sign_bybit(
+        timestamp,
+        &creds.bybit.api_key,
+        recv_window,
+        query,
+        &creds.bybit.secret_key,
+    );
+
+    let resp = client
+        .get("https://api.bybit.com/v5/asset/coin/query-info")
+        .header("X-BAPI-API-KEY", &creds.bybit.api_key)
+        .header("X-BAPI-SIGN", signature)
+        .header("X-BAPI-TIMESTAMP", timestamp.to_string())
+        .header("X-BAPI-RECV-WINDOW", recv_window)
+        .send()
+        .await
+        .map_err(|e| format!("Bybit coin info request failed: {}", e))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        return Err(format!("Bybit coin info API error: status={}, body={}", status, body));
+    }
+
+    let response: BybitCoinInfoResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse Bybit coin info: {}", e))?;
+
+    if response.ret_code != 0 {
+        return Err(format!("Bybit API error: {} - {}", response.ret_code, response.ret_msg));
+    }
+
+    let wallet_status: Vec<AssetWalletStatus> = response.result.rows
+        .into_iter()
+        .map(|coin| {
+            let network_statuses: Vec<NetworkStatus> = coin.chains
+                .into_iter()
+                .map(|chain| {
+                    let deposit_enabled = chain.chain_deposit == "1";
+                    let withdraw_enabled = chain.chain_withdraw == "1";
+
+                    NetworkStatus {
+                        network: chain.chain.clone(),
+                        name: chain.chain,
+                        deposit_enabled,
+                        withdraw_enabled,
+                        min_withdraw: chain.min_withdraw.parse().unwrap_or(0.0),
+                        withdraw_fee: chain.withdraw_fee.parse().unwrap_or(0.0),
+                        confirms_required: chain.confirmation.parse().unwrap_or(0),
+                    }
+                })
+                .collect();
+
+            let can_deposit = network_statuses.iter().any(|n| n.deposit_enabled);
+            let can_withdraw = network_statuses.iter().any(|n| n.withdraw_enabled);
+
+            AssetWalletStatus {
+                asset: coin.coin.clone(),
+                name: if coin.coin_name.is_empty() { coin.coin } else { coin.coin_name },
+                networks: network_statuses,
+                can_deposit,
+                can_withdraw,
+            }
+        })
+        .collect();
+
+    info!("Fetched Bybit wallet status: {} assets", wallet_status.len());
+    Ok(wallet_status)
+}
+
+/// Fetch Bybit balances (unified account)
+async fn fetch_bybit_balances() -> Result<Vec<AssetBalance>, String> {
+    let creds = credentials::load_credentials();
+
+    if creds.bybit.api_key.is_empty() || creds.bybit.secret_key.is_empty() {
+        info!("Bybit API keys not configured for balance query");
+        return Ok(Vec::new());
+    }
+
+    let client = Client::new();
+    let timestamp = timestamp_ms();
+    let recv_window = "5000";
+    let query = "accountType=UNIFIED";
+
+    let signature = sign_bybit(
+        timestamp,
+        &creds.bybit.api_key,
+        recv_window,
+        query,
+        &creds.bybit.secret_key,
+    );
+
+    let resp = client
+        .get(format!("https://api.bybit.com/v5/account/wallet-balance?{}", query))
+        .header("X-BAPI-API-KEY", &creds.bybit.api_key)
+        .header("X-BAPI-SIGN", signature)
+        .header("X-BAPI-TIMESTAMP", timestamp.to_string())
+        .header("X-BAPI-RECV-WINDOW", recv_window)
+        .send()
+        .await
+        .map_err(|e| format!("Bybit balance request failed: {}", e))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        return Err(format!("Bybit balance API error: status={}, body={}", status, body));
+    }
+
+    let response: BybitBalanceResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse Bybit balance: {}", e))?;
+
+    if response.ret_code != 0 {
+        return Err(format!("Bybit API error: {} - {}", response.ret_code, response.ret_msg));
+    }
+
+    let mut balances: Vec<AssetBalance> = Vec::new();
+
+    for account in response.result.list {
+        for coin in account.coin {
+            let total: f64 = coin.wallet_balance.parse().unwrap_or(0.0);
+            let available: f64 = coin.available_to_withdraw.parse().unwrap_or(0.0);
+            let locked: f64 = coin.locked.parse().unwrap_or(0.0);
+
+            if total > 0.0 {
+                balances.push(AssetBalance {
+                    asset: coin.coin,
+                    free: available,
+                    locked,
+                    total,
+                    usd_value: None,
+                });
+            }
+        }
+    }
+
+    info!("Bybit fetched {} balances with value", balances.len());
+    Ok(balances)
+}
+
+/// Fetch Bybit wallet with balances and status
+pub async fn fetch_bybit_wallet() -> Result<ExchangeWalletInfo, String> {
+    // Fetch wallet status first
+    let wallet_status = fetch_bybit_wallet_status().await.unwrap_or_else(|e| {
+        warn!("Failed to fetch Bybit wallet status: {}", e);
+        Vec::new()
+    });
+
+    // Fetch balances
+    let balances = fetch_bybit_balances().await.unwrap_or_else(|e| {
+        warn!("Failed to fetch Bybit balances: {}", e);
+        Vec::new()
+    });
+
+    info!(
+        "Fetched Bybit wallet: {} balances, {} assets with status",
+        balances.len(),
+        wallet_status.len()
+    );
+
+    Ok(ExchangeWalletInfo {
+        exchange: "Bybit".to_string(),
+        balances,
+        wallet_status,
+        last_updated: timestamp_ms(),
+    })
+}
+
+// ============================================================================
 // Aggregate function
 // ============================================================================
 
@@ -1004,11 +1250,12 @@ pub async fn fetch_all_wallets() -> Vec<ExchangeWalletInfo> {
     let mut results = Vec::new();
 
     // Fetch in parallel
-    let (binance, upbit, bithumb, coinbase) = tokio::join!(
+    let (binance, upbit, bithumb, coinbase, bybit) = tokio::join!(
         fetch_binance_wallet(),
         fetch_upbit_wallet(),
         fetch_bithumb_wallet(),
-        fetch_coinbase_wallet()
+        fetch_coinbase_wallet(),
+        fetch_bybit_wallet()
     );
 
     if let Ok(info) = binance {
@@ -1021,6 +1268,9 @@ pub async fn fetch_all_wallets() -> Vec<ExchangeWalletInfo> {
         results.push(info);
     }
     if let Ok(info) = coinbase {
+        results.push(info);
+    }
+    if let Ok(info) = bybit {
         results.push(info);
     }
 

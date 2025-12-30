@@ -8,12 +8,13 @@ function Settings() {
   const [localConfig, setLocalConfig] = useState(config);
   const [saved, setSaved] = useState(false);
   const [credentialsSaved, setCredentialsSaved] = useState(false);
-  const [activeExchange, setActiveExchange] = useState<"binance" | "coinbase" | "upbit" | "bithumb">("binance");
+  const [activeExchange, setActiveExchange] = useState<"binance" | "coinbase" | "upbit" | "bithumb" | "bybit">("binance");
   const [editingCredentials, setEditingCredentials] = useState<Credentials>({
     binance: { api_key: "", secret_key: "" },
     coinbase: { api_key_id: "", secret_key: "" },
     upbit: { api_key: "", secret_key: "" },
     bithumb: { api_key: "", secret_key: "" },
+    bybit: { api_key: "", secret_key: "" },
   });
 
   // Update local state when config loads
@@ -38,6 +39,7 @@ function Settings() {
         coinbase: { api_key_id: "", secret_key: "" },
         upbit: { api_key: "", secret_key: "" },
         bithumb: { api_key: "", secret_key: "" },
+        bybit: { api_key: "", secret_key: "" },
       });
     }
   };
@@ -190,7 +192,7 @@ function Settings() {
 
         {/* Exchange Tabs */}
         <div className="flex space-x-2 border-b border-dark-700">
-          {(["binance", "coinbase", "upbit", "bithumb"] as const).map((exchange) => (
+          {(["binance", "coinbase", "upbit", "bithumb", "bybit"] as const).map((exchange) => (
             <button
               key={exchange}
               onClick={() => setActiveExchange(exchange)}
@@ -351,6 +353,7 @@ function Settings() {
             <li>• Coinbase</li>
             <li>• Upbit</li>
             <li>• Bithumb</li>
+            <li>• Bybit</li>
           </ul>
         </div>
         <div className="bg-dark-800 rounded-lg border border-dark-700 p-4">

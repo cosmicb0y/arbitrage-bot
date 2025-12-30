@@ -73,6 +73,7 @@ export interface Credentials {
   coinbase: CoinbaseCredentials;
   upbit: ExchangeCredentials;
   bithumb: ExchangeCredentials;
+  bybit: ExchangeCredentials;
 }
 
 // Wallet and deposit/withdraw status
