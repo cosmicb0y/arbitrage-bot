@@ -17,8 +17,8 @@ use tracing_subscriber::FmtSubscriber;
 
 use arbitrage_core::{Exchange, FixedPoint, PriceTick};
 use arbitrage_feeds::{
-    BinanceAdapter, BithumbAdapter, CoinbaseAdapter, FeedConfig, MarketDiscovery, UpbitAdapter,
-    WsClient, WsMessage,
+    BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, FeedConfig, MarketDiscovery,
+    UpbitAdapter, WsClient, WsMessage,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -474,6 +474,46 @@ async fn run_bithumb_feed(
     info!("Bithumb feed processor stopped");
 }
 
+/// Run live WebSocket feed for Bybit
+async fn run_bybit_feed(
+    state: SharedState,
+    broadcast_tx: BroadcastSender,
+    mut rx: mpsc::Receiver<WsMessage>,
+) {
+    info!("Starting Bybit live feed processor");
+
+    while let Some(msg) = rx.recv().await {
+        if !state.is_running() {
+            break;
+        }
+
+        match msg {
+            WsMessage::Text(text) => {
+                // Parse ticker with symbol (auto-detects pair_id from symbol)
+                if let Ok((tick, symbol)) = BybitAdapter::parse_ticker_with_symbol(&text) {
+                    let pair_id = tick.pair_id();
+                    state.update_price(Exchange::Bybit, pair_id, tick.price()).await;
+                    ws_server::broadcast_price(&broadcast_tx, Exchange::Bybit, pair_id, &symbol, &tick);
+                }
+            }
+            WsMessage::Binary(_) => {
+                // Bybit uses JSON text, not binary
+            }
+            WsMessage::Connected => {
+                info!("Bybit: Connected to WebSocket");
+            }
+            WsMessage::Disconnected => {
+                warn!("Bybit: Disconnected from WebSocket");
+            }
+            WsMessage::Error(e) => {
+                warn!("Bybit: Error - {}", e);
+            }
+        }
+    }
+
+    info!("Bybit feed processor stopped");
+}
+
 /// Spawn live WebSocket feeds
 async fn spawn_live_feeds(
     state: SharedState,
@@ -486,7 +526,7 @@ async fn spawn_live_feeds(
     let all_markets = discovery.fetch_all().await;
 
     // Find common markets across exchanges we support for live feeds
-    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb"];
+    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb", "Bybit"];
     let common = MarketDiscovery::find_markets_on_n_exchanges(&all_markets, &exchanges, 2);
 
     // Get symbols for each exchange from common markets
@@ -494,6 +534,7 @@ async fn spawn_live_feeds(
     let mut coinbase_symbols: Vec<String> = Vec::new();
     let mut upbit_symbols: Vec<String> = vec!["KRW-USDT".to_string()]; // Always include for exchange rate
     let mut bithumb_symbols: Vec<String> = Vec::new();
+    let mut bybit_symbols: Vec<String> = Vec::new();
 
     for (base, exchange_markets) in &common.common {
         for (exchange, market_info) in exchange_markets {
@@ -502,6 +543,7 @@ async fn spawn_live_feeds(
                 "Coinbase" => coinbase_symbols.push(market_info.symbol.clone()),
                 "Upbit" => upbit_symbols.push(market_info.symbol.clone()),
                 "Bithumb" => bithumb_symbols.push(market_info.symbol.clone()),
+                "Bybit" => bybit_symbols.push(market_info.symbol.clone()),
                 _ => {}
             }
         }
@@ -511,13 +553,15 @@ async fn spawn_live_feeds(
     // - Binance: supports up to 1024 streams per connection
     // - Coinbase: supports many subscriptions per connection
     // - Upbit/Bithumb: supports many codes per connection
+    // - Bybit: supports many tickers per connection
 
     info!(
-        "📡 Subscribing to live feeds: Binance={}, Coinbase={}, Upbit={}, Bithumb={}",
+        "📡 Subscribing to live feeds: Binance={}, Coinbase={}, Upbit={}, Bithumb={}, Bybit={}",
         binance_symbols.len(),
         coinbase_symbols.len(),
         upbit_symbols.len(),
-        bithumb_symbols.len()
+        bithumb_symbols.len(),
+        bybit_symbols.len()
     );
 
     // Register all symbols for opportunity detection
@@ -603,6 +647,27 @@ async fn spawn_live_feeds(
         }));
     }
 
+    // Bybit
+    if !bybit_symbols.is_empty() {
+        let bybit_config = FeedConfig::for_exchange(Exchange::Bybit);
+        let (bybit_tx, bybit_rx) = mpsc::channel(1000);
+        // Bybit has a limit of 10 args per subscription, so we batch them
+        let bybit_subscribe_msgs = BybitAdapter::subscribe_messages(&bybit_symbols);
+
+        let bybit_client = WsClient::new(bybit_config.clone(), bybit_tx);
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = bybit_client.run_with_messages(Some(bybit_subscribe_msgs)).await {
+                warn!("Bybit WebSocket error: {}", e);
+            }
+        }));
+
+        let bybit_state = state.clone();
+        let bybit_broadcast = broadcast_tx.clone();
+        handles.push(tokio::spawn(async move {
+            run_bybit_feed(bybit_state, bybit_broadcast, bybit_rx).await;
+        }));
+    }
+
     handles
 }
 
@@ -612,7 +677,7 @@ async fn run_market_discovery(state: SharedState, broadcast_tx: BroadcastSender)
     info!("Starting market discovery loop");
 
     let discovery = MarketDiscovery::new();
-    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb"];
+    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb", "Bybit"];
 
     loop {
         info!("🔍 Fetching markets from exchanges...");

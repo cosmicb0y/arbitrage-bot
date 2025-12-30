@@ -533,6 +533,148 @@ async fn fetch_binance_wallet_status() -> Result<ExchangeWalletStatus, String> {
 }
 
 // ============================================================================
+// Bybit Client (V5 API with HMAC-SHA256 signing)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct BybitCoinInfo {
+    coin: String,
+    #[serde(rename = "coinName", default)]
+    coin_name: String,
+    chains: Vec<BybitChainInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitChainInfo {
+    chain: String,
+    #[serde(rename = "chainDeposit", default)]
+    chain_deposit: String,
+    #[serde(rename = "chainWithdraw", default)]
+    chain_withdraw: String,
+    #[serde(rename = "minWithdraw", default)]
+    min_withdraw: String,
+    #[serde(rename = "withdrawFee", default)]
+    withdraw_fee: String,
+    #[serde(rename = "confirmation", default)]
+    confirmation: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitCoinInfoResponse {
+    #[serde(rename = "retCode")]
+    ret_code: i32,
+    #[serde(rename = "retMsg")]
+    ret_msg: String,
+    result: BybitCoinInfoResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct BybitCoinInfoResult {
+    rows: Vec<BybitCoinInfo>,
+}
+
+fn sign_bybit(timestamp: u64, api_key: &str, recv_window: &str, query: &str, secret: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    type HmacSha256 = Hmac<Sha256>;
+    let sign_str = format!("{}{}{}{}", timestamp, api_key, recv_window, query);
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(sign_str.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Fetch Bybit wallet status (requires API key)
+async fn fetch_bybit_wallet_status() -> Result<ExchangeWalletStatus, String> {
+    let api_key = std::env::var("BYBIT_API_KEY").unwrap_or_default();
+    let secret_key = std::env::var("BYBIT_SECRET_KEY").unwrap_or_default();
+
+    if api_key.is_empty() || secret_key.is_empty() {
+        info!("Bybit API keys not configured (BYBIT_API_KEY, BYBIT_SECRET_KEY)");
+        return Ok(ExchangeWalletStatus {
+            exchange: "Bybit".to_string(),
+            wallet_status: Vec::new(),
+            last_updated: timestamp_ms(),
+        });
+    }
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build client: {}", e))?;
+
+    let timestamp = timestamp_ms();
+    let recv_window = "5000";
+    let query = "";
+
+    let signature = sign_bybit(timestamp, &api_key, recv_window, query, &secret_key);
+
+    let resp = client
+        .get("https://api.bybit.com/v5/asset/coin/query-info")
+        .header("X-BAPI-API-KEY", &api_key)
+        .header("X-BAPI-SIGN", signature)
+        .header("X-BAPI-TIMESTAMP", timestamp.to_string())
+        .header("X-BAPI-RECV-WINDOW", recv_window)
+        .send()
+        .await
+        .map_err(|e| format!("Bybit coin info request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let error_text = resp.text().await.unwrap_or_default();
+        return Err(format!("Bybit coin info API error: {}", error_text));
+    }
+
+    let response: BybitCoinInfoResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Bybit coin info: {}", e))?;
+
+    if response.ret_code != 0 {
+        return Err(format!("Bybit API error: {} - {}", response.ret_code, response.ret_msg));
+    }
+
+    let wallet_status: Vec<AssetWalletStatus> = response.result.rows
+        .into_iter()
+        .map(|coin| {
+            let network_statuses: Vec<NetworkStatus> = coin.chains
+                .into_iter()
+                .map(|chain| {
+                    let deposit_enabled = chain.chain_deposit == "1";
+                    let withdraw_enabled = chain.chain_withdraw == "1";
+
+                    NetworkStatus {
+                        network: chain.chain.clone(),
+                        name: chain.chain,
+                        deposit_enabled,
+                        withdraw_enabled,
+                        min_withdraw: chain.min_withdraw.parse().unwrap_or(0.0),
+                        withdraw_fee: chain.withdraw_fee.parse().unwrap_or(0.0),
+                        confirms_required: chain.confirmation.parse().unwrap_or(0),
+                    }
+                })
+                .collect();
+
+            let can_deposit = network_statuses.iter().any(|n| n.deposit_enabled);
+            let can_withdraw = network_statuses.iter().any(|n| n.withdraw_enabled);
+
+            AssetWalletStatus {
+                asset: coin.coin.clone(),
+                name: if coin.coin_name.is_empty() { coin.coin } else { coin.coin_name },
+                networks: network_statuses,
+                can_deposit,
+                can_withdraw,
+            }
+        })
+        .collect();
+
+    Ok(ExchangeWalletStatus {
+        exchange: "Bybit".to_string(),
+        wallet_status,
+        last_updated: timestamp_ms(),
+    })
+}
+
+// ============================================================================
 // Aggregate and Update Functions
 // ============================================================================
 
@@ -541,11 +683,12 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
     let mut results = Vec::new();
 
     // Fetch in parallel
-    let (upbit, bithumb, coinbase, binance) = tokio::join!(
+    let (upbit, bithumb, coinbase, binance, bybit) = tokio::join!(
         fetch_upbit_wallet_status(),
         fetch_bithumb_wallet_status(),
         fetch_coinbase_wallet_status(),
-        fetch_binance_wallet_status()
+        fetch_binance_wallet_status(),
+        fetch_bybit_wallet_status()
     );
 
     if let Ok(status) = upbit {
@@ -580,6 +723,17 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
             info!("Fetched Binance wallet status: {} assets", status.wallet_status.len());
             results.push(status);
         }
+    } else if let Err(e) = binance {
+        warn!("Failed to fetch Binance wallet status: {}", e);
+    }
+
+    if let Ok(status) = bybit {
+        if !status.wallet_status.is_empty() {
+            info!("Fetched Bybit wallet status: {} assets", status.wallet_status.len());
+            results.push(status);
+        }
+    } else if let Err(e) = bybit {
+        warn!("Failed to fetch Bybit wallet status: {}", e);
     }
 
     results
