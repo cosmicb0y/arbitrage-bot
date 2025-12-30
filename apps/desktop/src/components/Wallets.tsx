@@ -108,7 +108,7 @@ function Wallets() {
           >
             {wallet.exchange}
             <span className="ml-2 text-xs text-gray-500">
-              ({wallet.balances.length} assets)
+              ({wallet.balances.length})
             </span>
           </button>
         ))}
