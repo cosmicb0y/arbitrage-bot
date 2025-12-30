@@ -36,10 +36,17 @@ impl WsClient {
 
     /// Connect and run the WebSocket client.
     pub async fn run(self, subscribe_msg: Option<String>) -> Result<(), FeedError> {
+        let msgs = subscribe_msg.map(|m| vec![m]);
+        self.run_with_messages(msgs).await
+    }
+
+    /// Connect and run the WebSocket client with multiple subscribe messages.
+    /// Useful for exchanges like Bybit that have limits on args per subscription.
+    pub async fn run_with_messages(self, subscribe_msgs: Option<Vec<String>>) -> Result<(), FeedError> {
         let mut reconnect_attempts = 0;
 
         loop {
-            match self.connect_and_handle(&subscribe_msg).await {
+            match self.connect_and_handle(&subscribe_msgs).await {
                 Ok(()) => {
                     info!("WebSocket connection closed normally");
                     break;
@@ -74,7 +81,7 @@ impl WsClient {
         Ok(())
     }
 
-    async fn connect_and_handle(&self, subscribe_msg: &Option<String>) -> Result<(), FeedError> {
+    async fn connect_and_handle(&self, subscribe_msgs: &Option<Vec<String>>) -> Result<(), FeedError> {
         debug!("Connecting to {}", self.config.ws_url);
 
         let (ws_stream, _) = connect_async(&self.config.ws_url).await?;
@@ -84,10 +91,19 @@ impl WsClient {
 
         let (mut write, mut read) = ws_stream.split();
 
-        // Send subscription message if provided
-        if let Some(ref msg) = subscribe_msg {
-            debug!("Sending subscription: {}", msg);
-            write.send(Message::Text(msg.clone())).await?;
+        // Send subscription messages if provided
+        if let Some(ref msgs) = subscribe_msgs {
+            for (i, msg) in msgs.iter().enumerate() {
+                debug!("Sending subscription {}/{}: {}", i + 1, msgs.len(), msg);
+                write.send(Message::Text(msg.clone())).await?;
+                // Small delay between messages to avoid rate limiting
+                if msgs.len() > 1 && i < msgs.len() - 1 {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+            if msgs.len() > 1 {
+                info!("Sent {} subscription messages to {:?}", msgs.len(), self.config.exchange);
+            }
         }
 
         // Set up ping interval
