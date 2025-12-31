@@ -28,9 +28,9 @@ function getExchangeTradeUrl(exchange: string, symbol: string, quote: string): s
       // https://www.coinbase.com/advanced-trade/spot/BTC-USD
       return `https://www.coinbase.com/advanced-trade/spot/${symbol}-${q}`;
 
-    case "Gate":
+    case "Gate.io":
       // https://www.gate.com/trade/BTC_USDT
-      return `https://www.gate.io/trade/${symbol}_${q}`;
+      return `https://www.gate.com/trade/${symbol}_${q}`;
 
     case "Bybit":
       // https://www.bybit.com/en/trade/spot/BTC/USDT
