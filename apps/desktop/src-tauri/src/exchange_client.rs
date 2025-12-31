@@ -1443,6 +1443,16 @@ fn sign_gateio(timestamp: &str, method: &str, path: &str, query: &str, body: &st
     hex::encode(mac.finalize().into_bytes())
 }
 
+/// Gate.io chain info
+#[derive(Debug, Deserialize)]
+struct GateIOChain {
+    name: String,
+    #[serde(default)]
+    deposit_disabled: bool,
+    #[serde(default)]
+    withdraw_disabled: bool,
+}
+
 /// Gate.io wallet status response
 #[derive(Debug, Deserialize)]
 struct GateIOCurrency {
@@ -1454,7 +1464,11 @@ struct GateIOCurrency {
     #[serde(default)]
     withdraw_disabled: bool,
     #[serde(default)]
-    chain: String,
+    delisted: bool,
+    #[serde(default)]
+    trade_disabled: bool,
+    #[serde(default)]
+    chains: Vec<GateIOChain>,
 }
 
 /// Fetch Gate.io wallet status
@@ -1483,28 +1497,43 @@ pub async fn fetch_gateio_wallet_status() -> Result<Vec<AssetWalletStatus>, Stri
 
     let wallet_status: Vec<AssetWalletStatus> = currencies
         .into_iter()
+        .filter(|c| !c.delisted && !c.trade_disabled)
         .map(|c| {
-            let can_deposit = !c.deposit_disabled;
-            let can_withdraw = !c.withdraw_disabled;
-
-            let network = if c.chain.is_empty() {
-                c.currency.clone()
+            // Build network statuses from chains array
+            let network_statuses: Vec<NetworkStatus> = if c.chains.is_empty() {
+                // Fallback if no chains info
+                vec![NetworkStatus {
+                    network: c.currency.clone(),
+                    name: c.currency.clone(),
+                    deposit_enabled: !c.deposit_disabled,
+                    withdraw_enabled: !c.withdraw_disabled,
+                    min_withdraw: 0.0,
+                    withdraw_fee: 0.0,
+                    confirms_required: 0,
+                }]
             } else {
-                c.chain.clone()
+                c.chains
+                    .iter()
+                    .map(|chain| NetworkStatus {
+                        network: chain.name.clone(),
+                        name: chain.name.clone(),
+                        deposit_enabled: !chain.deposit_disabled,
+                        withdraw_enabled: !chain.withdraw_disabled,
+                        min_withdraw: 0.0,
+                        withdraw_fee: 0.0,
+                        confirms_required: 0,
+                    })
+                    .collect()
             };
+
+            // Overall status: can if any network can
+            let can_deposit = network_statuses.iter().any(|n| n.deposit_enabled);
+            let can_withdraw = network_statuses.iter().any(|n| n.withdraw_enabled);
 
             AssetWalletStatus {
                 asset: c.currency.clone(),
                 name: if c.name.is_empty() { c.currency } else { c.name },
-                networks: vec![NetworkStatus {
-                    network: network.clone(),
-                    name: network,
-                    deposit_enabled: can_deposit,
-                    withdraw_enabled: can_withdraw,
-                    min_withdraw: 0.0,
-                    withdraw_fee: 0.0,
-                    confirms_required: 0,
-                }],
+                networks: network_statuses,
                 can_deposit,
                 can_withdraw,
             }

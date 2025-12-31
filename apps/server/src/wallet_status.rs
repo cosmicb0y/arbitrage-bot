@@ -675,6 +675,111 @@ async fn fetch_bybit_wallet_status() -> Result<ExchangeWalletStatus, String> {
 }
 
 // ============================================================================
+// Gate.io Client (Public API)
+// ============================================================================
+
+/// Gate.io chain info
+#[derive(Debug, Deserialize)]
+struct GateIOChain {
+    name: String,
+    #[serde(default)]
+    deposit_disabled: bool,
+    #[serde(default)]
+    withdraw_disabled: bool,
+}
+
+/// Gate.io currency response
+#[derive(Debug, Deserialize)]
+struct GateIOCurrency {
+    currency: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    deposit_disabled: bool,
+    #[serde(default)]
+    withdraw_disabled: bool,
+    #[serde(default)]
+    delisted: bool,
+    #[serde(default)]
+    trade_disabled: bool,
+    #[serde(default)]
+    chains: Vec<GateIOChain>,
+}
+
+/// Fetch Gate.io wallet status (public API - no auth required)
+async fn fetch_gateio_wallet_status() -> Result<ExchangeWalletStatus, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build client: {}", e))?;
+
+    let resp = client
+        .get("https://api.gateio.ws/api/v4/spot/currencies")
+        .send()
+        .await
+        .map_err(|e| format!("Gate.io currencies request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let error_text = resp.text().await.unwrap_or_default();
+        return Err(format!("Gate.io currencies API error: {}", error_text));
+    }
+
+    let currencies: Vec<GateIOCurrency> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gate.io currencies: {}", e))?;
+
+    let wallet_status: Vec<AssetWalletStatus> = currencies
+        .into_iter()
+        .filter(|c| !c.delisted && !c.trade_disabled)
+        .map(|c| {
+            // Build network statuses from chains array
+            let network_statuses: Vec<NetworkStatus> = if c.chains.is_empty() {
+                vec![NetworkStatus {
+                    network: c.currency.clone(),
+                    name: c.currency.clone(),
+                    deposit_enabled: !c.deposit_disabled,
+                    withdraw_enabled: !c.withdraw_disabled,
+                    min_withdraw: 0.0,
+                    withdraw_fee: 0.0,
+                    confirms_required: 0,
+                }]
+            } else {
+                c.chains
+                    .iter()
+                    .map(|chain| NetworkStatus {
+                        network: chain.name.clone(),
+                        name: chain.name.clone(),
+                        deposit_enabled: !chain.deposit_disabled,
+                        withdraw_enabled: !chain.withdraw_disabled,
+                        min_withdraw: 0.0,
+                        withdraw_fee: 0.0,
+                        confirms_required: 0,
+                    })
+                    .collect()
+            };
+
+            let can_deposit = network_statuses.iter().any(|n| n.deposit_enabled);
+            let can_withdraw = network_statuses.iter().any(|n| n.withdraw_enabled);
+
+            AssetWalletStatus {
+                asset: c.currency.clone(),
+                name: if c.name.is_empty() { c.currency } else { c.name },
+                networks: network_statuses,
+                can_deposit,
+                can_withdraw,
+            }
+        })
+        .collect();
+
+    Ok(ExchangeWalletStatus {
+        exchange: "GateIO".to_string(),
+        wallet_status,
+        last_updated: timestamp_ms(),
+    })
+}
+
+// ============================================================================
 // Aggregate and Update Functions
 // ============================================================================
 
@@ -683,12 +788,13 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
     let mut results = Vec::new();
 
     // Fetch in parallel
-    let (upbit, bithumb, coinbase, binance, bybit) = tokio::join!(
+    let (upbit, bithumb, coinbase, binance, bybit, gateio) = tokio::join!(
         fetch_upbit_wallet_status(),
         fetch_bithumb_wallet_status(),
         fetch_coinbase_wallet_status(),
         fetch_binance_wallet_status(),
-        fetch_bybit_wallet_status()
+        fetch_bybit_wallet_status(),
+        fetch_gateio_wallet_status()
     );
 
     if let Ok(status) = upbit {
@@ -734,6 +840,15 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
         }
     } else if let Err(e) = bybit {
         warn!("Failed to fetch Bybit wallet status: {}", e);
+    }
+
+    if let Ok(status) = gateio {
+        if !status.wallet_status.is_empty() {
+            info!("Fetched Gate.io wallet status: {} assets", status.wallet_status.len());
+            results.push(status);
+        }
+    } else if let Err(e) = gateio {
+        warn!("Failed to fetch Gate.io wallet status: {}", e);
     }
 
     results
