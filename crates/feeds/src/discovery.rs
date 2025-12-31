@@ -389,6 +389,46 @@ impl MarketDiscovery {
         })
     }
 
+    /// Fetch markets from Gate.io.
+    pub async fn fetch_gateio(&self) -> Result<ExchangeMarkets, FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct GateIOCurrencyPair {
+            id: String,
+            base: String,
+            quote: String,
+            trade_status: String,
+        }
+
+        let url = "https://api.gateio.ws/api/v4/spot/currency_pairs";
+        let resp: Vec<GateIOCurrencyPair> = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| FeedError::ConnectionFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+
+        let markets: Vec<MarketInfo> = resp
+            .into_iter()
+            .filter(|p| p.quote == "USDT" || p.quote == "USD")
+            .map(|p| MarketInfo {
+                base: p.base,
+                quote: p.quote,
+                symbol: p.id,
+                trading_enabled: p.trade_status == "tradable",
+            })
+            .collect();
+
+        debug!("Gate.io: fetched {} USDT/USD markets", markets.len());
+
+        Ok(ExchangeMarkets {
+            markets,
+            updated_at: now_ms(),
+        })
+    }
+
     /// Fetch markets from Kraken.
     pub async fn fetch_kraken(&self) -> Result<ExchangeMarkets, FeedError> {
         #[derive(Debug, Deserialize)]
@@ -445,7 +485,7 @@ impl MarketDiscovery {
         let mut results = HashMap::new();
 
         // Fetch in parallel
-        let (binance, coinbase, upbit, bithumb, bybit, okx, kraken) = tokio::join!(
+        let (binance, coinbase, upbit, bithumb, bybit, okx, kraken, gateio) = tokio::join!(
             self.fetch_binance(),
             self.fetch_coinbase(),
             self.fetch_upbit(),
@@ -453,6 +493,7 @@ impl MarketDiscovery {
             self.fetch_bybit(),
             self.fetch_okx(),
             self.fetch_kraken(),
+            self.fetch_gateio(),
         );
 
         if let Ok(m) = binance {
@@ -502,6 +543,13 @@ impl MarketDiscovery {
             results.insert("Kraken".to_string(), m);
         } else if let Err(e) = kraken {
             warn!("Failed to fetch Kraken markets: {}", e);
+        }
+
+        if let Ok(m) = gateio {
+            info!("Gate.io: {} markets", m.markets.len());
+            results.insert("GateIO".to_string(), m);
+        } else if let Err(e) = gateio {
+            warn!("Failed to fetch Gate.io markets: {}", e);
         }
 
         results

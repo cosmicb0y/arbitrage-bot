@@ -777,6 +777,162 @@ impl BithumbAdapter {
     }
 }
 
+/// Gate.io WebSocket adapter.
+/// Uses V4 WebSocket API for spot market.
+pub struct GateIOAdapter;
+
+/// Gate.io WebSocket ticker response (V4 API).
+#[derive(Debug, Deserialize)]
+struct GateIOTickerResult {
+    /// Trading pair (e.g., "BTC_USDT")
+    currency_pair: String,
+    /// Last traded price
+    last: String,
+    /// Best ask price
+    lowest_ask: String,
+    /// Best bid price
+    highest_bid: String,
+    /// 24h price change percentage
+    #[serde(default)]
+    change_percentage: String,
+    /// 24h volume in base currency
+    #[serde(default)]
+    base_volume: String,
+    /// 24h volume in quote currency (USDT)
+    #[serde(default)]
+    quote_volume: String,
+    /// 24h high price
+    #[serde(default)]
+    high_24h: String,
+    /// 24h low price
+    #[serde(default)]
+    low_24h: String,
+}
+
+/// Gate.io WebSocket message wrapper.
+#[derive(Debug, Deserialize)]
+struct GateIOTickerMessage {
+    time: u64,
+    #[serde(default)]
+    time_ms: u64,
+    channel: String,
+    event: String,
+    result: GateIOTickerResult,
+}
+
+impl GateIOAdapter {
+    /// Map currency pair to pair_id.
+    /// Extracts base asset from trading pair (e.g., BTC_USDT -> BTC) and generates pair_id.
+    pub fn symbol_to_pair_id(currency_pair: &str) -> Option<u32> {
+        let base = Self::extract_base_symbol(currency_pair)?;
+        Some(symbol_to_pair_id(&base))
+    }
+
+    /// Extract base symbol from currency pair (e.g., BTC_USDT -> BTC).
+    pub fn extract_base_symbol(currency_pair: &str) -> Option<String> {
+        let pair = currency_pair.to_uppercase();
+        if pair.ends_with("_USDT") {
+            pair.strip_suffix("_USDT").map(|s| s.to_string())
+        } else if pair.ends_with("_USD") {
+            pair.strip_suffix("_USD").map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Parse a ticker message from Gate.io.
+    pub fn parse_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
+        let msg: GateIOTickerMessage = serde_json::from_str(json)?;
+
+        // Skip non-update messages
+        if msg.event != "update" {
+            return Err(FeedError::ParseError("Not an update message".to_string()));
+        }
+
+        let price = msg.result.last.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let bid = msg.result.highest_bid.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let ask = msg.result.lowest_ask.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+
+        Ok(PriceTick::new(
+            Exchange::GateIO,
+            pair_id,
+            FixedPoint::from_f64(price),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+        ))
+    }
+
+    /// Parse a ticker message and auto-detect pair_id from symbol.
+    pub fn parse_ticker_auto(json: &str) -> Result<PriceTick, FeedError> {
+        let (tick, _) = Self::parse_ticker_with_symbol(json)?;
+        Ok(tick)
+    }
+
+    /// Parse a ticker message, returning both the tick and the base symbol.
+    pub fn parse_ticker_with_symbol(json: &str) -> Result<(PriceTick, String), FeedError> {
+        let msg: GateIOTickerMessage = serde_json::from_str(json)?;
+
+        // Skip non-update messages
+        if msg.event != "update" {
+            return Err(FeedError::ParseError("Not an update message".to_string()));
+        }
+
+        let symbol = Self::extract_base_symbol(&msg.result.currency_pair)
+            .ok_or_else(|| FeedError::ParseError(format!("Unknown pair: {}", msg.result.currency_pair)))?;
+        let pair_id = symbol_to_pair_id(&symbol);
+
+        let price = msg.result.last.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let bid = msg.result.highest_bid.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        let ask = msg.result.lowest_ask.parse::<f64>()
+            .map_err(|e| FeedError::ParseError(e.to_string()))?;
+        // quote_volume is already in USDT
+        let volume_usd = msg.result.quote_volume.parse::<f64>().unwrap_or(0.0);
+
+        Ok((PriceTick::new(
+            Exchange::GateIO,
+            pair_id,
+            FixedPoint::from_f64(price),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), symbol))
+    }
+
+    /// Generate a subscription message for Gate.io WebSocket.
+    pub fn subscribe_message(symbols: &[String]) -> String {
+        let pairs: Vec<String> = symbols
+            .iter()
+            .map(|s| format!("\"{}\"", s.to_uppercase()))
+            .collect();
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        format!(
+            r#"{{"time": {}, "channel": "spot.tickers", "event": "subscribe", "payload": [{}]}}"#,
+            timestamp,
+            pairs.join(", ")
+        )
+    }
+
+    /// Get WebSocket URL for Gate.io.
+    pub fn ws_url() -> &'static str {
+        "wss://api.gateio.ws/ws/v4/"
+    }
+
+    /// Convert symbol to Gate.io format.
+    /// "BTC" -> "BTC_USDT"
+    pub fn to_currency_pair(symbol: &str) -> String {
+        format!("{}_USDT", symbol.to_uppercase())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -940,5 +1096,52 @@ mod tests {
         assert!(msg.contains("subscribe"));
         assert!(msg.contains("tickers.BTCUSDT"));
         assert!(msg.contains("tickers.ETHUSDT"));
+    }
+
+    // === Gate.io tests ===
+
+    #[test]
+    fn test_gateio_parse_ticker() {
+        let json = r#"{
+            "time": 1669107766,
+            "time_ms": 1669107766406,
+            "channel": "spot.tickers",
+            "event": "update",
+            "result": {
+                "currency_pair": "BTC_USDT",
+                "last": "50000.00",
+                "lowest_ask": "50001.00",
+                "highest_bid": "49999.00",
+                "change_percentage": "1.5",
+                "base_volume": "1000.00",
+                "quote_volume": "50000000.00",
+                "high_24h": "51000.00",
+                "low_24h": "49000.00"
+            }
+        }"#;
+
+        let (tick, symbol) = GateIOAdapter::parse_ticker_with_symbol(json).unwrap();
+        assert_eq!(tick.exchange(), Exchange::GateIO);
+        assert_eq!(symbol, "BTC");
+        assert!((tick.price().to_f64() - 50000.0).abs() < 0.01);
+        assert!((tick.bid().to_f64() - 49999.0).abs() < 0.01);
+        assert!((tick.ask().to_f64() - 50001.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_gateio_subscribe_message() {
+        let symbols = vec!["BTC_USDT".to_string(), "ETH_USDT".to_string()];
+        let msg = GateIOAdapter::subscribe_message(&symbols);
+        assert!(msg.contains("spot.tickers"));
+        assert!(msg.contains("subscribe"));
+        assert!(msg.contains("BTC_USDT"));
+        assert!(msg.contains("ETH_USDT"));
+    }
+
+    #[test]
+    fn test_gateio_extract_base_symbol() {
+        assert_eq!(GateIOAdapter::extract_base_symbol("BTC_USDT"), Some("BTC".to_string()));
+        assert_eq!(GateIOAdapter::extract_base_symbol("ETH_USDT"), Some("ETH".to_string()));
+        assert_eq!(GateIOAdapter::extract_base_symbol("BTCUSDT"), None);
     }
 }
