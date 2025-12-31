@@ -118,6 +118,12 @@ class WebSocketManager {
 // Singleton WebSocket manager
 const wsManager = new WebSocketManager();
 
+// Helper to generate price key including quote currency
+const getPriceKey = (p: PriceData) => {
+  const quote = p.quote || 'USD';
+  return `${p.exchange}-${p.symbol}-${quote}`;
+};
+
 export function usePrices() {
   const [prices, setPrices] = useState<PriceData[]>([]);
   // Use Map for O(1) lookups and batch updates
@@ -141,12 +147,14 @@ export function usePrices() {
           const newPrices = msg.data as PriceData[];
           priceMapRef.current.clear();
           for (const p of newPrices) {
-            priceMapRef.current.set(`${p.exchange}-${p.pair_id}`, p);
+            const key = getPriceKey(p);
+            priceMapRef.current.set(key, p);
           }
           pendingUpdateRef.current = true;
         } else if (msg.type === "price") {
           const price = msg.data as PriceData;
-          priceMapRef.current.set(`${price.exchange}-${price.pair_id}`, price);
+          const key = getPriceKey(price);
+          priceMapRef.current.set(key, price);
           pendingUpdateRef.current = true;
         }
       });
@@ -165,14 +173,16 @@ export function usePrices() {
       unlistenBatch = await listen<PriceData[]>("price_update", (event) => {
         priceMapRef.current.clear();
         for (const p of event.payload) {
-          priceMapRef.current.set(`${p.exchange}-${p.pair_id}`, p);
+          const key = getPriceKey(p);
+          priceMapRef.current.set(key, p);
         }
         pendingUpdateRef.current = true;
       });
 
       unlistenSingle = await listen<PriceData>("price", (event) => {
         const p = event.payload;
-        priceMapRef.current.set(`${p.exchange}-${p.pair_id}`, p);
+        const key = getPriceKey(p);
+        priceMapRef.current.set(key, p);
         pendingUpdateRef.current = true;
       });
 
@@ -180,7 +190,8 @@ export function usePrices() {
         const data = await invoke<PriceData[]>("get_prices");
         if (data.length > 0) {
           for (const p of data) {
-            priceMapRef.current.set(`${p.exchange}-${p.pair_id}`, p);
+            const key = getPriceKey(p);
+            priceMapRef.current.set(key, p);
           }
           pendingUpdateRef.current = true;
         }

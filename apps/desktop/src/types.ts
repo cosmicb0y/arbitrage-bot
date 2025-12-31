@@ -9,6 +9,8 @@ export interface PriceData {
   ask: number;
   volume_24h: number;
   timestamp: number;
+  // Quote currency (e.g., "USDT", "USDC", "USD", "KRW")
+  quote?: string;
 }
 
 export interface ArbitrageOpportunity {
@@ -16,9 +18,18 @@ export interface ArbitrageOpportunity {
   symbol: string;
   source_exchange: string;
   target_exchange: string;
+  // Quote currency at source exchange (e.g., "USDT", "USDC", "KRW")
+  source_quote: string;
+  // Quote currency at target exchange (e.g., "USDT", "USDC", "KRW")
+  target_quote: string;
   source_price: number;
   target_price: number;
+  // Raw premium in basis points (direct price comparison)
   premium_bps: number;
+  // Kimchi premium: KRW converted via USD/KRW rate
+  kimchi_premium_bps: number;
+  // Tether premium: KRW converted via USDT/KRW rate
+  tether_premium_bps: number;
   net_profit_bps: number;
   confidence_score: number;
   timestamp: number;
@@ -41,7 +52,11 @@ export interface ExecutionConfig {
 
 export interface ExchangeRate {
   usd_krw: number;
+  upbit_usdt_krw: number;
+  bithumb_usdt_krw: number;
   api_rate?: number;
+  usdt_usd: number;
+  usdc_usd: number;
   timestamp: number;
 }
 

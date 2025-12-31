@@ -24,6 +24,9 @@ pub struct PriceData {
     #[serde(default)]
     pub volume_24h: f64,
     pub timestamp: u64,
+    /// Quote currency (e.g., "USDT", "USDC", "USD", "KRW")
+    #[serde(default)]
+    pub quote: Option<String>,
 }
 
 /// Bot statistics from CLI server.
@@ -55,7 +58,20 @@ pub struct OpportunityData {
     pub symbol: String,
     pub source_exchange: String,
     pub target_exchange: String,
+    /// Quote currency at source exchange (e.g., "USDT", "USDC", "KRW")
+    #[serde(default)]
+    pub source_quote: String,
+    /// Quote currency at target exchange (e.g., "USDT", "USDC", "KRW")
+    #[serde(default)]
+    pub target_quote: String,
+    /// Raw premium in basis points (direct price comparison)
     pub premium_bps: i32,
+    /// Kimchi premium: KRW converted via USD/KRW rate
+    #[serde(default)]
+    pub kimchi_premium_bps: i32,
+    /// Tether premium: KRW converted via USDT/KRW rate
+    #[serde(default)]
+    pub tether_premium_bps: i32,
     pub source_price: f64,
     pub target_price: f64,
     pub net_profit_bps: i32,
@@ -227,7 +243,9 @@ impl AppState {
     }
 
     pub fn update_price(&self, price: PriceData) {
-        let key = format!("{}:{}", price.exchange, price.symbol);
+        // Key includes quote to differentiate USDT vs USDC markets for same exchange/symbol
+        let quote = price.quote.as_deref().unwrap_or("USD");
+        let key = format!("{}:{}:{}", price.exchange, price.symbol, quote);
         self.prices.insert(key, price);
     }
 
@@ -359,13 +377,10 @@ async fn connect_to_server(
                 if let Ok(ws_msg) = serde_json::from_str::<WsServerMessage>(&text) {
                     match ws_msg {
                         WsServerMessage::Price(price) => {
-                            // Single price update (event-driven)
-                            // Emit first, then store (avoids clone)
                             let _ = app.emit("price", &price);
                             state.update_price(price);
                         }
                         WsServerMessage::Prices(prices) => {
-                            // Batch prices (initial sync)
                             state.update_prices(prices);
                             let _ = app.emit("price_update", state.get_prices());
                         }
@@ -378,7 +393,6 @@ async fn connect_to_server(
                             state.add_opportunity(opp);
                         }
                         WsServerMessage::Opportunities(opps) => {
-                            // Batch opportunities (initial sync)
                             let _ = app.emit("opportunities", &opps);
                             state.set_opportunities(opps);
                         }
@@ -448,6 +462,7 @@ mod tests {
                 ask: 50001.0,
                 volume_24h: 1000000.0,
                 timestamp: 0,
+                quote: Some("USDT".to_string()),
             },
         ];
         state.update_prices(prices);
