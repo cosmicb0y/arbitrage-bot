@@ -1,6 +1,6 @@
 //! Arbitrage opportunity detection and route types.
 
-use crate::{Asset, BridgeProtocol, Chain, Exchange, FixedPoint};
+use crate::{Asset, BridgeProtocol, Chain, Exchange, FixedPoint, QuoteCurrency};
 use serde::{Deserialize, Serialize};
 
 /// Trade direction.
@@ -121,11 +121,21 @@ pub struct ArbitrageOpportunity {
     // Price info
     pub source_exchange: Exchange,
     pub target_exchange: Exchange,
+    /// Quote currency at source exchange (e.g., USDT, USDC, KRW)
+    pub source_quote: QuoteCurrency,
+    /// Quote currency at target exchange (e.g., USDT, USDC, KRW)
+    pub target_quote: QuoteCurrency,
     pub asset: Asset,
     pub source_price: u64,
     pub target_price: u64,
-    /// Premium in basis points
+    /// Raw premium in basis points (direct price comparison, no currency conversion)
     pub premium_bps: i32,
+    /// Kimchi premium: KRW price converted via USD/KRW rate vs overseas price
+    /// Only meaningful when one side is KRW
+    pub kimchi_premium_bps: i32,
+    /// Tether premium: KRW price converted via USDT/KRW rate vs overseas price
+    /// Only meaningful when one side is KRW
+    pub tether_premium_bps: i32,
 
     // Execution route
     pub route: Vec<RouteStep>,
@@ -146,6 +156,7 @@ pub struct ArbitrageOpportunity {
 }
 
 impl ArbitrageOpportunity {
+    /// Create a new opportunity with default quote currencies (USD).
     pub fn new(
         id: u64,
         source_exchange: Exchange,
@@ -154,6 +165,58 @@ impl ArbitrageOpportunity {
         source_price: FixedPoint,
         target_price: FixedPoint,
     ) -> Self {
+        Self::with_quotes(
+            id,
+            source_exchange,
+            target_exchange,
+            QuoteCurrency::USD,
+            QuoteCurrency::USD,
+            asset,
+            source_price,
+            target_price,
+        )
+    }
+
+    /// Create a new opportunity with specified quote currencies.
+    pub fn with_quotes(
+        id: u64,
+        source_exchange: Exchange,
+        target_exchange: Exchange,
+        source_quote: QuoteCurrency,
+        target_quote: QuoteCurrency,
+        asset: Asset,
+        source_price: FixedPoint,
+        target_price: FixedPoint,
+    ) -> Self {
+        Self::with_quotes_and_rates(
+            id,
+            source_exchange,
+            target_exchange,
+            source_quote,
+            target_quote,
+            asset,
+            source_price,
+            target_price,
+            None,
+            None,
+        )
+    }
+
+    /// Create a new opportunity with quote currencies and exchange rates for premium calculation.
+    /// - `usd_krw_rate`: USD/KRW exchange rate (e.g., 1450.0 means 1 USD = 1450 KRW)
+    /// - `usdt_krw_rate`: USDT/KRW rate from Korean exchange (e.g., 1455.0)
+    pub fn with_quotes_and_rates(
+        id: u64,
+        source_exchange: Exchange,
+        target_exchange: Exchange,
+        source_quote: QuoteCurrency,
+        target_quote: QuoteCurrency,
+        asset: Asset,
+        source_price: FixedPoint,
+        target_price: FixedPoint,
+        usd_krw_rate: Option<f64>,
+        usdt_krw_rate: Option<f64>,
+    ) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -161,16 +224,30 @@ impl ArbitrageOpportunity {
 
         let premium_bps = FixedPoint::premium_bps(source_price, target_price);
 
+        // Calculate kimchi/tether premiums if one side is KRW
+        let (kimchi_premium_bps, tether_premium_bps) = Self::calculate_kr_premiums(
+            source_quote,
+            target_quote,
+            source_price,
+            target_price,
+            usd_krw_rate,
+            usdt_krw_rate,
+        );
+
         Self {
             id,
             discovered_at_ms: now,
             expires_at_ms: now + 30_000, // 30 seconds default
             source_exchange,
             target_exchange,
+            source_quote,
+            target_quote,
             asset,
             source_price: source_price.0,
             target_price: target_price.0,
             premium_bps,
+            kimchi_premium_bps,
+            tether_premium_bps,
             route: Vec::new(),
             total_hops: 0,
             estimated_gas_cost: 0,
@@ -181,6 +258,76 @@ impl ArbitrageOpportunity {
             max_amount: u64::MAX,
             confidence_score: 50,
         }
+    }
+
+    /// Calculate kimchi and tether premiums for KRW opportunities.
+    /// Returns (kimchi_premium_bps, tether_premium_bps).
+    ///
+    /// IMPORTANT: All prices are already normalized to USD in the system.
+    /// KRW prices are converted via USDT/KRW rate before storage.
+    ///
+    /// Kimchi Premium: Compares KRW price (converted via official USD/KRW rate) vs overseas USD price
+    /// Tether Premium: Same as raw premium since KRW prices are already converted via USDT/KRW
+    ///
+    /// The kimchi premium shows the difference when using bank rate vs USDT rate for conversion.
+    fn calculate_kr_premiums(
+        source_quote: QuoteCurrency,
+        target_quote: QuoteCurrency,
+        source_price: FixedPoint,
+        target_price: FixedPoint,
+        usd_krw_rate: Option<f64>,
+        usdt_krw_rate: Option<f64>,
+    ) -> (i32, i32) {
+        let source_is_krw = source_quote == QuoteCurrency::KRW;
+        let target_is_krw = target_quote == QuoteCurrency::KRW;
+
+        // Raw premium (direct USD comparison)
+        let raw_premium = FixedPoint::premium_bps(source_price, target_price);
+
+        // If neither side is KRW, premiums are same as raw premium
+        if !source_is_krw && !target_is_krw {
+            return (raw_premium, raw_premium);
+        }
+
+        // Tether premium is same as raw premium since KRW prices are already
+        // converted to USD using USDT/KRW rate
+        let tether_premium = raw_premium;
+
+        // Kimchi premium: adjust for the difference between bank rate and USDT rate
+        // KRW price was converted: krw_original / usdt_krw = price_usd_stored
+        // Kimchi should use: krw_original / usd_krw = price_usd_kimchi
+        // Ratio: price_usd_kimchi / price_usd_stored = usdt_krw / usd_krw
+        let kimchi_premium = match (usd_krw_rate, usdt_krw_rate) {
+            (Some(usd_krw), Some(usdt_krw)) if usd_krw > 0.0 => {
+                // Adjustment factor: how much cheaper KRW appears when using bank rate
+                // If usdt_krw > usd_krw, USDT rate is higher, so KRW price converted via USDT looks cheaper
+                let rate_ratio = usdt_krw / usd_krw;
+
+                // Get prices in USD (as stored)
+                let (krw_price_usd, overseas_price_usd) = if source_is_krw {
+                    (source_price.to_f64(), target_price.to_f64())
+                } else {
+                    (target_price.to_f64(), source_price.to_f64())
+                };
+
+                // Adjust KRW price to what it would be using bank rate
+                let krw_price_via_bank = krw_price_usd * rate_ratio;
+
+                // Calculate premium
+                if source_is_krw {
+                    // Buy at KRW exchange (adjusted), sell at overseas
+                    // Premium = (overseas - krw_adjusted) / krw_adjusted * 10000
+                    ((overseas_price_usd - krw_price_via_bank) / krw_price_via_bank * 10000.0) as i32
+                } else {
+                    // Buy at overseas, sell at KRW exchange (adjusted)
+                    // Premium = (krw_adjusted - overseas) / overseas * 10000
+                    ((krw_price_via_bank - overseas_price_usd) / overseas_price_usd * 10000.0) as i32
+                }
+            }
+            _ => raw_premium,
+        };
+
+        (kimchi_premium, tether_premium)
     }
 
     pub fn add_step(&mut self, step: RouteStep) {

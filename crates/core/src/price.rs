@@ -1,6 +1,6 @@
 //! Price data structures for real-time market data.
 
-use crate::Exchange;
+use crate::{Exchange, QuoteCurrency};
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, Sub};
 
@@ -58,6 +58,8 @@ pub struct PriceTick {
     pub exchange: Exchange,      // 2 bytes
     /// Internal pair ID for fast lookup
     pub pair_id: u32,            // 4 bytes
+    /// Quote currency (USD, USDT, USDC, KRW, etc.)
+    quote_currency: u8,          // 1 byte
     /// Current price (fixed-point 18 decimals)
     price: u64,                  // 8 bytes
     /// 24h trading volume
@@ -71,10 +73,10 @@ pub struct PriceTick {
     /// Liquidity (TVL for DEX, depth for CEX)
     pub liquidity: u64,          // 8 bytes
 }
-// Total: 54 bytes
+// Total: 55 bytes
 
 impl PriceTick {
-    /// Create a new price tick.
+    /// Create a new price tick with default quote currency (USD).
     pub fn new(
         exchange: Exchange,
         pair_id: u32,
@@ -82,9 +84,22 @@ impl PriceTick {
         bid: FixedPoint,
         ask: FixedPoint,
     ) -> Self {
+        Self::with_quote(exchange, pair_id, price, bid, ask, QuoteCurrency::USD)
+    }
+
+    /// Create a new price tick with specified quote currency.
+    pub fn with_quote(
+        exchange: Exchange,
+        pair_id: u32,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        quote_currency: QuoteCurrency,
+    ) -> Self {
         Self {
             exchange,
             pair_id,
+            quote_currency: quote_currency as u8,
             price: price.0,
             volume_24h: 0,
             bid: bid.0,
@@ -161,6 +176,18 @@ impl PriceTick {
     #[inline]
     pub fn timestamp_ms(&self) -> u64 {
         self.timestamp_ms
+    }
+
+    /// Get quote currency (safe accessor for packed struct).
+    #[inline]
+    pub fn quote_currency(&self) -> QuoteCurrency {
+        QuoteCurrency::from_id(self.quote_currency).unwrap_or(QuoteCurrency::USD)
+    }
+
+    /// Check if this price is in a USD-equivalent currency.
+    #[inline]
+    pub fn is_usd_equivalent(&self) -> bool {
+        self.quote_currency().is_usd_equivalent()
     }
 }
 
@@ -240,8 +267,8 @@ mod tests {
     #[test]
     fn test_price_tick_size() {
         // Verify packed struct size for performance
-        // exchange(2) + pair_id(4) + price(8) + volume_24h(8) + bid(8) + ask(8) + timestamp_ms(8) + liquidity(8) = 54
-        assert_eq!(std::mem::size_of::<PriceTick>(), 54);
+        // exchange(2) + pair_id(4) + quote_currency(1) + price(8) + volume_24h(8) + bid(8) + ask(8) + timestamp_ms(8) + liquidity(8) = 55
+        assert_eq!(std::mem::size_of::<PriceTick>(), 55);
     }
 
     #[test]
@@ -274,6 +301,46 @@ mod tests {
         // Spread = (100.1 - 99.9) / 99.9 * 10000 ≈ 20 bps
         let spread = tick.spread_bps();
         assert!(spread >= 19 && spread <= 21); // Allow for rounding
+    }
+
+    #[test]
+    fn test_price_tick_quote_currency() {
+        use crate::QuoteCurrency;
+
+        // Default constructor uses USD
+        let tick_usd = PriceTick::new(
+            Exchange::Binance,
+            1,
+            FixedPoint::from_f64(100.0),
+            FixedPoint::from_f64(99.9),
+            FixedPoint::from_f64(100.1),
+        );
+        assert_eq!(tick_usd.quote_currency(), QuoteCurrency::USD);
+        assert!(tick_usd.is_usd_equivalent());
+
+        // with_quote constructor with USDT
+        let tick_usdt = PriceTick::with_quote(
+            Exchange::Binance,
+            1,
+            FixedPoint::from_f64(100.0),
+            FixedPoint::from_f64(99.9),
+            FixedPoint::from_f64(100.1),
+            QuoteCurrency::USDT,
+        );
+        assert_eq!(tick_usdt.quote_currency(), QuoteCurrency::USDT);
+        assert!(tick_usdt.is_usd_equivalent());
+
+        // with_quote constructor with KRW
+        let tick_krw = PriceTick::with_quote(
+            Exchange::Upbit,
+            1,
+            FixedPoint::from_f64(50000000.0),
+            FixedPoint::from_f64(49999000.0),
+            FixedPoint::from_f64(50001000.0),
+            QuoteCurrency::KRW,
+        );
+        assert_eq!(tick_krw.quote_currency(), QuoteCurrency::KRW);
+        assert!(!tick_krw.is_usd_equivalent());
     }
 
     // === OrderbookSnapshot tests ===

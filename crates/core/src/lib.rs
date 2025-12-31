@@ -7,6 +7,7 @@ pub mod exchange;
 pub mod execution;
 pub mod opportunity;
 pub mod price;
+pub mod quote_currency;
 
 pub use asset::*;
 pub use bridge::*;
@@ -15,3 +16,4 @@ pub use exchange::*;
 pub use execution::*;
 pub use opportunity::*;
 pub use price::*;
+pub use quote_currency::*;
