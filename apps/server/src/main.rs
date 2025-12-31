@@ -17,8 +17,8 @@ use tracing_subscriber::FmtSubscriber;
 
 use arbitrage_core::{Exchange, FixedPoint, PriceTick};
 use arbitrage_feeds::{
-    BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, FeedConfig, MarketDiscovery,
-    UpbitAdapter, WsClient, WsMessage,
+    BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, FeedConfig, GateIOAdapter,
+    MarketDiscovery, UpbitAdapter, WsClient, WsMessage,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -514,6 +514,45 @@ async fn run_bybit_feed(
     info!("Bybit feed processor stopped");
 }
 
+async fn run_gateio_feed(
+    state: SharedState,
+    broadcast_tx: BroadcastSender,
+    mut rx: mpsc::Receiver<WsMessage>,
+) {
+    info!("Starting Gate.io live feed processor");
+
+    while let Some(msg) = rx.recv().await {
+        if !state.is_running() {
+            break;
+        }
+
+        match msg {
+            WsMessage::Text(text) => {
+                // Parse ticker with symbol (auto-detects pair_id from symbol)
+                if let Ok((tick, symbol)) = GateIOAdapter::parse_ticker_with_symbol(&text) {
+                    let pair_id = tick.pair_id();
+                    state.update_price(Exchange::GateIO, pair_id, tick.price()).await;
+                    ws_server::broadcast_price(&broadcast_tx, Exchange::GateIO, pair_id, &symbol, &tick);
+                }
+            }
+            WsMessage::Binary(_) => {
+                // Gate.io uses JSON text, not binary
+            }
+            WsMessage::Connected => {
+                info!("Gate.io: Connected to WebSocket");
+            }
+            WsMessage::Disconnected => {
+                warn!("Gate.io: Disconnected from WebSocket");
+            }
+            WsMessage::Error(e) => {
+                warn!("Gate.io: Error - {}", e);
+            }
+        }
+    }
+
+    info!("Gate.io feed processor stopped");
+}
+
 /// Spawn live WebSocket feeds
 async fn spawn_live_feeds(
     state: SharedState,
@@ -526,7 +565,7 @@ async fn spawn_live_feeds(
     let all_markets = discovery.fetch_all().await;
 
     // Find common markets across exchanges we support for live feeds
-    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb", "Bybit"];
+    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb", "Bybit", "GateIO"];
     let common = MarketDiscovery::find_markets_on_n_exchanges(&all_markets, &exchanges, 2);
 
     // Get symbols for each exchange from common markets
@@ -535,6 +574,7 @@ async fn spawn_live_feeds(
     let mut upbit_symbols: Vec<String> = vec!["KRW-USDT".to_string()]; // Always include for exchange rate
     let mut bithumb_symbols: Vec<String> = Vec::new();
     let mut bybit_symbols: Vec<String> = Vec::new();
+    let mut gateio_symbols: Vec<String> = Vec::new();
 
     for (base, exchange_markets) in &common.common {
         for (exchange, market_info) in exchange_markets {
@@ -544,6 +584,7 @@ async fn spawn_live_feeds(
                 "Upbit" => upbit_symbols.push(market_info.symbol.clone()),
                 "Bithumb" => bithumb_symbols.push(market_info.symbol.clone()),
                 "Bybit" => bybit_symbols.push(market_info.symbol.clone()),
+                "GateIO" => gateio_symbols.push(market_info.symbol.clone()),
                 _ => {}
             }
         }
@@ -554,14 +595,16 @@ async fn spawn_live_feeds(
     // - Coinbase: supports many subscriptions per connection
     // - Upbit/Bithumb: supports many codes per connection
     // - Bybit: supports many tickers per connection
+    // - Gate.io: supports many tickers per connection
 
     info!(
-        "📡 Subscribing to live feeds: Binance={}, Coinbase={}, Upbit={}, Bithumb={}, Bybit={}",
+        "📡 Subscribing to live feeds: Binance={}, Coinbase={}, Upbit={}, Bithumb={}, Bybit={}, GateIO={}",
         binance_symbols.len(),
         coinbase_symbols.len(),
         upbit_symbols.len(),
         bithumb_symbols.len(),
-        bybit_symbols.len()
+        bybit_symbols.len(),
+        gateio_symbols.len()
     );
 
     // Register all symbols for opportunity detection
@@ -668,6 +711,26 @@ async fn spawn_live_feeds(
         }));
     }
 
+    // Gate.io
+    if !gateio_symbols.is_empty() {
+        let gateio_config = FeedConfig::for_exchange(Exchange::GateIO);
+        let (gateio_tx, gateio_rx) = mpsc::channel(1000);
+        let gateio_subscribe = GateIOAdapter::subscribe_message(&gateio_symbols);
+
+        let gateio_client = WsClient::new(gateio_config.clone(), gateio_tx);
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = gateio_client.run(Some(gateio_subscribe)).await {
+                warn!("Gate.io WebSocket error: {}", e);
+            }
+        }));
+
+        let gateio_state = state.clone();
+        let gateio_broadcast = broadcast_tx.clone();
+        handles.push(tokio::spawn(async move {
+            run_gateio_feed(gateio_state, gateio_broadcast, gateio_rx).await;
+        }));
+    }
+
     handles
 }
 
@@ -677,7 +740,7 @@ async fn run_market_discovery(state: SharedState, broadcast_tx: BroadcastSender)
     info!("Starting market discovery loop");
 
     let discovery = MarketDiscovery::new();
-    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb", "Bybit"];
+    let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb", "Bybit", "GateIO"];
 
     loop {
         info!("🔍 Fetching markets from exchanges...");
