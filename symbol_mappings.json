@@ -8,18 +8,32 @@
       "notes": ""
     },
     {
-      "exchange": "Binance",
-      "symbol": "GTC",
-      "canonical_name": "GTC(GitCoin)",
+      "exchange": "GateIO",
+      "symbol": "QI",
+      "canonical_name": "QI(QiSwap)",
       "exclude": false,
       "notes": ""
     },
     {
-      "exchange": "Bithumb",
-      "symbol": "GTC",
-      "canonical_name": "GTC(GitCoin)",
+      "exchange": "GateIO",
+      "symbol": "BIFI",
+      "canonical_name": "BIFI(BitcoinFile)",
       "exclude": false,
       "notes": ""
+    },
+    {
+      "exchange": "GateIO",
+      "symbol": "BEAM",
+      "canonical_name": "BEAM2",
+      "exclude": false,
+      "notes": "https://www.beam.mw/"
+    },
+    {
+      "exchange": "GateIO",
+      "symbol": "TST",
+      "canonical_name": "TST(TeleportDAO)",
+      "exclude": false,
+      "notes": "https://teleswap.xyz/"
     }
   ]
 }
