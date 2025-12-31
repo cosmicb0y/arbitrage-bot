@@ -2,6 +2,7 @@
 
 use crate::credentials::{self, Credentials};
 use crate::state::{AppState, BotStats, CommonMarketsData, ExchangeRateData, ExecutionConfig, OpportunityData, PriceData, WalletStatusData};
+use crate::symbol_mapping::{self, SymbolMapping, SymbolMappings};
 use std::sync::Arc;
 use tauri::State;
 use tracing::info;
@@ -132,6 +133,44 @@ pub async fn get_wallet_info(exchange: String) -> Result<crate::exchange_client:
 pub async fn get_all_wallets() -> Vec<crate::exchange_client::ExchangeWalletInfo> {
     info!("Fetching wallet info for all exchanges");
     crate::exchange_client::fetch_all_wallets().await
+}
+
+// ============ Symbol Mapping Commands ============
+
+/// Get all symbol mappings.
+#[tauri::command]
+pub fn get_symbol_mappings() -> SymbolMappings {
+    symbol_mapping::load_mappings()
+}
+
+/// Add or update a symbol mapping.
+#[tauri::command]
+pub fn upsert_symbol_mapping(mapping: SymbolMapping) -> Result<bool, String> {
+    let mut mappings = symbol_mapping::load_mappings();
+    mappings.upsert(mapping);
+    symbol_mapping::save_mappings(&mappings)?;
+    info!("Symbol mapping upserted");
+    Ok(true)
+}
+
+/// Remove a symbol mapping.
+#[tauri::command]
+pub fn remove_symbol_mapping(exchange: String, symbol: String) -> Result<bool, String> {
+    let mut mappings = symbol_mapping::load_mappings();
+    let removed = mappings.remove(&exchange, &symbol);
+    if removed {
+        symbol_mapping::save_mappings(&mappings)?;
+        info!("Symbol mapping removed: {}:{}", exchange, symbol);
+    }
+    Ok(removed)
+}
+
+/// Save all symbol mappings (bulk update).
+#[tauri::command]
+pub fn save_symbol_mappings(mappings: SymbolMappings) -> Result<bool, String> {
+    symbol_mapping::save_mappings(&mappings)?;
+    info!("All symbol mappings saved");
+    Ok(true)
 }
 
 #[cfg(test)]

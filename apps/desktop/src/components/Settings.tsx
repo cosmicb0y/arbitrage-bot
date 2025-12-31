@@ -1,13 +1,16 @@
 import { useState, useEffect } from "react";
-import { useConfig, useCredentials } from "../hooks/useTauri";
-import type { Credentials } from "../types";
+import { useConfig, useCredentials, useSymbolMappings, useCommonMarkets } from "../hooks/useTauri";
+import type { Credentials, SymbolMapping } from "../types";
 
 function Settings() {
   const { config, updateConfig } = useConfig();
   const { credentials, saveCredentials, loading: credentialsLoading } = useCredentials();
+  const { mappings, upsertMapping, removeMapping, loading: mappingsLoading } = useSymbolMappings();
+  const commonMarkets = useCommonMarkets();
   const [localConfig, setLocalConfig] = useState(config);
   const [saved, setSaved] = useState(false);
   const [credentialsSaved, setCredentialsSaved] = useState(false);
+  const [mappingSaved, setMappingSaved] = useState(false);
   const [activeExchange, setActiveExchange] = useState<"binance" | "coinbase" | "upbit" | "bithumb" | "bybit">("binance");
   const [editingCredentials, setEditingCredentials] = useState<Credentials>({
     binance: { api_key: "", secret_key: "" },
@@ -16,6 +19,15 @@ function Settings() {
     bithumb: { api_key: "", secret_key: "" },
     bybit: { api_key: "", secret_key: "" },
   });
+  // Symbol mapping state
+  const [newMapping, setNewMapping] = useState<SymbolMapping>({
+    exchange: "",
+    symbol: "",
+    canonical_name: "",
+    exclude: false,
+    notes: "",
+  });
+  const [showAddMapping, setShowAddMapping] = useState(false);
 
   // Update local state when config loads
   useEffect(() => {
@@ -344,6 +356,183 @@ function Settings() {
         )}
       </div>
 
+      {/* Symbol Mappings */}
+      <div className="bg-dark-800 rounded-lg border border-dark-700 p-6 space-y-4">
+        <div className="flex justify-between items-center">
+          <div>
+            <h3 className="font-medium text-white">Symbol Mappings</h3>
+            <p className="text-sm text-gray-500">
+              Handle cases where the same symbol represents different coins across exchanges.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowAddMapping(!showAddMapping)}
+            className="px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors"
+          >
+            {showAddMapping ? "Cancel" : "+ Add Mapping"}
+          </button>
+        </div>
+
+        {mappingSaved && (
+          <div className="bg-success-500/20 border border-success-500 rounded-lg p-3 text-sm text-success-500">
+            Symbol mapping saved successfully!
+          </div>
+        )}
+
+        {/* Add New Mapping Form */}
+        {showAddMapping && (
+          <div className="border border-dark-600 rounded-lg p-4 space-y-4 bg-dark-750">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Exchange
+                </label>
+                <select
+                  value={newMapping.exchange}
+                  onChange={(e) => setNewMapping({ ...newMapping, exchange: e.target.value })}
+                  className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-primary-500"
+                >
+                  <option value="">Select exchange...</option>
+                  {commonMarkets?.exchanges.map((ex) => (
+                    <option key={ex} value={ex}>{ex}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Symbol (on exchange)
+                </label>
+                <input
+                  type="text"
+                  value={newMapping.symbol}
+                  onChange={(e) => setNewMapping({ ...newMapping, symbol: e.target.value.toUpperCase() })}
+                  placeholder="e.g., GTC"
+                  className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Canonical Name
+                </label>
+                <input
+                  type="text"
+                  value={newMapping.canonical_name}
+                  onChange={(e) => setNewMapping({ ...newMapping, canonical_name: e.target.value })}
+                  placeholder="e.g., Gitcoin or GTC_BINANCE"
+                  className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Unique name to distinguish this coin from others with the same symbol
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Notes (optional)
+                </label>
+                <input
+                  type="text"
+                  value={newMapping.notes || ""}
+                  onChange={(e) => setNewMapping({ ...newMapping, notes: e.target.value })}
+                  placeholder="e.g., Gitcoin on Binance"
+                  className="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500"
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newMapping.exclude}
+                  onChange={(e) => setNewMapping({ ...newMapping, exclude: e.target.checked })}
+                  className="w-4 h-4 rounded border-dark-500 bg-dark-600 text-primary-500 focus:ring-primary-500"
+                />
+                <span className="text-sm text-gray-300">
+                  Exclude from arbitrage (different coin, should not be matched)
+                </span>
+              </label>
+              <button
+                onClick={async () => {
+                  if (newMapping.exchange && newMapping.symbol && newMapping.canonical_name) {
+                    const success = await upsertMapping(newMapping);
+                    if (success) {
+                      setMappingSaved(true);
+                      setTimeout(() => setMappingSaved(false), 2000);
+                      setNewMapping({
+                        exchange: "",
+                        symbol: "",
+                        canonical_name: "",
+                        exclude: false,
+                        notes: "",
+                      });
+                      setShowAddMapping(false);
+                    }
+                  }
+                }}
+                disabled={!newMapping.exchange || !newMapping.symbol || !newMapping.canonical_name}
+                className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+                  newMapping.exchange && newMapping.symbol && newMapping.canonical_name
+                    ? "bg-primary-600 hover:bg-primary-500 text-white"
+                    : "bg-dark-600 text-gray-500 cursor-not-allowed"
+                }`}
+              >
+                Save Mapping
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Existing Mappings List */}
+        {!mappingsLoading && mappings.mappings.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-sm text-gray-400 mb-2">
+              {mappings.mappings.length} mapping{mappings.mappings.length !== 1 ? "s" : ""} configured
+            </div>
+            <div className="divide-y divide-dark-700">
+              {mappings.mappings.map((mapping, idx) => (
+                <div key={`${mapping.exchange}-${mapping.symbol}-${idx}`} className="flex items-center justify-between py-3">
+                  <div className="flex items-center gap-4">
+                    <span className="px-2 py-1 text-xs rounded bg-dark-600 text-gray-300">
+                      {mapping.exchange}
+                    </span>
+                    <span className="font-mono text-primary-400">{mapping.symbol}</span>
+                    <span className="text-gray-500">→</span>
+                    <span className="text-white">{mapping.canonical_name}</span>
+                    {mapping.exclude && (
+                      <span className="px-2 py-0.5 text-xs rounded bg-danger-500/20 text-danger-400">
+                        Excluded
+                      </span>
+                    )}
+                    {mapping.notes && (
+                      <span className="text-sm text-gray-500 italic">({mapping.notes})</span>
+                    )}
+                  </div>
+                  <button
+                    onClick={async () => {
+                      await removeMapping(mapping.exchange, mapping.symbol);
+                    }}
+                    className="text-gray-500 hover:text-danger-400 transition-colors"
+                    title="Remove mapping"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!mappingsLoading && mappings.mappings.length === 0 && !showAddMapping && (
+          <div className="text-center py-6 text-gray-500">
+            <p>No symbol mappings configured.</p>
+            <p className="text-sm mt-1">
+              Add mappings when you notice the same symbol representing different coins across exchanges.
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Info Cards */}
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-dark-800 rounded-lg border border-dark-700 p-4">
@@ -354,6 +543,7 @@ function Settings() {
             <li>• Upbit</li>
             <li>• Bithumb</li>
             <li>• Bybit</li>
+            <li>• Gate.io</li>
           </ul>
         </div>
         <div className="bg-dark-800 rounded-lg border border-dark-700 p-4">

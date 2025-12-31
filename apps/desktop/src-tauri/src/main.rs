@@ -8,6 +8,7 @@ mod commands;
 mod credentials;
 mod exchange_client;
 mod state;
+mod symbol_mapping;
 
 use state::AppState;
 use std::sync::Arc;
@@ -64,6 +65,10 @@ fn main() {
             commands::save_credentials,
             commands::get_wallet_info,
             commands::get_all_wallets,
+            commands::get_symbol_mappings,
+            commands::upsert_symbol_mapping,
+            commands::remove_symbol_mapping,
+            commands::save_symbol_mappings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

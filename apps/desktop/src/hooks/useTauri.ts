@@ -12,6 +12,8 @@ import type {
   ExchangeWalletInfo,
   WsWalletStatusData,
   ExchangeWalletStatus,
+  SymbolMapping,
+  SymbolMappings,
 } from "../types";
 
 // Check if running inside Tauri
@@ -647,4 +649,70 @@ export function useWalletStatus() {
   }, []);
 
   return walletStatus;
+}
+
+// ============ Symbol Mappings ============
+
+const emptyMappings: SymbolMappings = { mappings: [] };
+
+export function useSymbolMappings() {
+  const [mappings, setMappings] = useState<SymbolMappings>(emptyMappings);
+  const [loading, setLoading] = useState(true);
+
+  const fetchMappings = useCallback(async () => {
+    if (!isTauri()) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const data = await invoke<SymbolMappings>("get_symbol_mappings");
+      setMappings(data);
+    } catch (e) {
+      console.error("Failed to fetch symbol mappings:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMappings();
+  }, [fetchMappings]);
+
+  const upsertMapping = useCallback(async (mapping: SymbolMapping): Promise<boolean> => {
+    if (!isTauri()) return false;
+    try {
+      await invoke("upsert_symbol_mapping", { mapping });
+      await fetchMappings();
+      return true;
+    } catch (e) {
+      console.error("Failed to upsert symbol mapping:", e);
+      return false;
+    }
+  }, [fetchMappings]);
+
+  const removeMapping = useCallback(async (exchange: string, symbol: string): Promise<boolean> => {
+    if (!isTauri()) return false;
+    try {
+      await invoke("remove_symbol_mapping", { exchange, symbol });
+      await fetchMappings();
+      return true;
+    } catch (e) {
+      console.error("Failed to remove symbol mapping:", e);
+      return false;
+    }
+  }, [fetchMappings]);
+
+  const saveMappings = useCallback(async (newMappings: SymbolMappings): Promise<boolean> => {
+    if (!isTauri()) return false;
+    try {
+      await invoke("save_symbol_mappings", { mappings: newMappings });
+      setMappings(newMappings);
+      return true;
+    } catch (e) {
+      console.error("Failed to save symbol mappings:", e);
+      return false;
+    }
+  }, []);
+
+  return { mappings, loading, upsertMapping, removeMapping, saveMappings, refetch: fetchMappings };
 }

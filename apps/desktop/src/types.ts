@@ -124,3 +124,16 @@ export interface ExchangeWalletStatus {
   wallet_status: AssetWalletStatus[];
   last_updated: number;
 }
+
+// Symbol mapping for handling same-symbol-different-coin cases
+export interface SymbolMapping {
+  exchange: string;
+  symbol: string;
+  canonical_name: string;
+  exclude: boolean;
+  notes?: string;
+}
+
+export interface SymbolMappings {
+  mappings: SymbolMapping[];
+}
