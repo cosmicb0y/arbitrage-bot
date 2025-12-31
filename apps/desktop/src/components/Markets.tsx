@@ -57,13 +57,7 @@ function getDepositWithdrawStatus(status: AssetWalletStatus | undefined): {
 }
 
 // Status badge component
-function StatusBadge({
-  status,
-  type,
-}: {
-  status: StatusType;
-  type: "deposit" | "withdraw";
-}) {
+function StatusBadge({ status }: { status: StatusType }) {
   const config = {
     normal: {
       label: "Normal",
@@ -72,7 +66,7 @@ function StatusBadge({
       icon: "✓",
     },
     partial: {
-      label: type === "deposit" ? "Partial Deposit" : "Partial Withdraw",
+      label: "Partial",
       bgClass: "bg-yellow-500/20",
       textClass: "text-yellow-400",
       icon: "!",
@@ -344,18 +338,18 @@ function Markets() {
         </div>
       </div>
 
-      <div className="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
-        <table className="w-full">
+      <div className="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden overflow-x-auto">
+        <table className="w-full table-fixed">
           <thead className="bg-dark-700">
             <tr>
-              <th className="text-left text-gray-400 text-sm p-4">Asset</th>
-              <th className="text-left text-gray-400 text-sm p-4">Coverage</th>
+              <th className="text-left text-gray-400 text-sm p-4 w-24">Asset</th>
+              <th className="text-left text-gray-400 text-sm p-4 w-20">Coverage</th>
               {visibleExchanges.map((exchange) => (
-                <th key={exchange} className="text-left text-gray-400 text-sm p-4" colSpan={2}>
-                  <div className="text-center">{exchange}</div>
+                <th key={exchange} className="text-center text-gray-400 text-sm p-4 w-40" colSpan={2}>
+                  <div>{exchange}</div>
                   <div className="flex justify-center gap-4 mt-1 text-xs font-normal">
-                    <span>Deposit</span>
-                    <span>Withdraw</span>
+                    <span className="w-16 text-center">Deposit</span>
+                    <span className="w-16 text-center">Withdraw</span>
                   </div>
                 </th>
               ))}
@@ -415,10 +409,10 @@ function Markets() {
                         if (!market) {
                           return (
                             <Fragment key={exchange}>
-                              <td className="p-4 text-center">
+                              <td className="p-4 text-center w-20">
                                 <span className="text-gray-600">-</span>
                               </td>
-                              <td className="p-4 text-center">
+                              <td className="p-4 text-center w-20">
                                 <span className="text-gray-600">-</span>
                               </td>
                             </Fragment>
@@ -427,17 +421,11 @@ function Markets() {
 
                         return (
                           <Fragment key={exchange}>
-                            <td className="p-4 text-center">
-                              <StatusBadge
-                                status={info.depositStatus}
-                                type="deposit"
-                              />
+                            <td className="p-4 text-center w-20">
+                              <StatusBadge status={info.depositStatus} />
                             </td>
-                            <td className="p-4 text-center">
-                              <StatusBadge
-                                status={info.withdrawStatus}
-                                type="withdraw"
-                              />
+                            <td className="p-4 text-center w-20">
+                              <StatusBadge status={info.withdrawStatus} />
                             </td>
                           </Fragment>
                         );
