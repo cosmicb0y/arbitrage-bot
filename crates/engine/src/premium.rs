@@ -2,7 +2,7 @@
 //!
 //! Calculates and tracks arbitrage premiums between all exchange pairs.
 
-use arbitrage_core::{Exchange, FixedPoint};
+use arbitrage_core::{Exchange, FixedPoint, QuoteCurrency};
 use std::collections::HashMap;
 
 /// Premium calculation configuration.
@@ -46,13 +46,15 @@ impl PremiumConfig {
 struct PriceEntry {
     price: FixedPoint,
     timestamp_ms: u64,
+    quote: QuoteCurrency,
 }
 
 /// Premium matrix for calculating arbitrage between exchanges.
 #[derive(Debug, Clone)]
 pub struct PremiumMatrix {
     pair_id: u32,
-    prices: HashMap<u16, PriceEntry>, // exchange_id -> price
+    /// Key: (exchange_id, quote_currency_id) to differentiate USDT vs USDC markets
+    prices: HashMap<(u16, u8), PriceEntry>,
 }
 
 impl PremiumMatrix {
@@ -79,25 +81,47 @@ impl PremiumMatrix {
         self.prices.len()
     }
 
-    /// Update price for an exchange.
+    /// Update price for an exchange with default quote currency (USD).
     pub fn update_price(&mut self, exchange: Exchange, price: FixedPoint) {
+        self.update_price_with_quote(exchange, price, QuoteCurrency::USD);
+    }
+
+    /// Update price for an exchange with specified quote currency.
+    pub fn update_price_with_quote(&mut self, exchange: Exchange, price: FixedPoint, quote: QuoteCurrency) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
 
+        // Use (exchange_id, quote_id) as key to differentiate USDT vs USDC markets
         self.prices.insert(
-            exchange as u16,
+            (exchange as u16, quote as u8),
             PriceEntry {
                 price,
                 timestamp_ms: now,
+                quote,
             },
         );
     }
 
-    /// Get price for an exchange.
+    /// Get price for an exchange (returns first matching price regardless of quote).
+    /// For multi-quote support, use get_price_with_quote instead.
     pub fn get_price(&self, exchange: Exchange) -> Option<FixedPoint> {
-        self.prices.get(&(exchange as u16)).map(|e| e.price)
+        self.prices.iter()
+            .find(|(&(ex_id, _), _)| ex_id == exchange as u16)
+            .map(|(_, entry)| entry.price)
+    }
+
+    /// Get price for an exchange with specific quote currency.
+    pub fn get_price_with_quote(&self, exchange: Exchange, quote: QuoteCurrency) -> Option<FixedPoint> {
+        self.prices.get(&(exchange as u16, quote as u8)).map(|e| e.price)
+    }
+
+    /// Get quote currency for an exchange (returns first matching quote).
+    pub fn get_quote(&self, exchange: Exchange) -> Option<QuoteCurrency> {
+        self.prices.iter()
+            .find(|(&(ex_id, _), _)| ex_id == exchange as u16)
+            .map(|(_, entry)| entry.quote)
     }
 
     /// Calculate premium between buy and sell exchanges.
@@ -117,17 +141,18 @@ impl PremiumMatrix {
 
         let mut best: Option<(Exchange, Exchange, i32)> = None;
 
-        for (&buy_id, buy_entry) in &self.prices {
-            for (&sell_id, sell_entry) in &self.prices {
-                if buy_id == sell_id {
+        for (&(buy_ex_id, _buy_quote_id), buy_entry) in &self.prices {
+            for (&(sell_ex_id, _sell_quote_id), sell_entry) in &self.prices {
+                // Skip same exchange AND same quote (same market)
+                if buy_ex_id == sell_ex_id && buy_entry.quote == sell_entry.quote {
                     continue;
                 }
 
                 let premium = FixedPoint::premium_bps(buy_entry.price, sell_entry.price);
 
                 if best.is_none() || premium > best.as_ref().unwrap().2 {
-                    let buy_ex = Exchange::from_id(buy_id)?;
-                    let sell_ex = Exchange::from_id(sell_id)?;
+                    let buy_ex = Exchange::from_id(buy_ex_id)?;
+                    let sell_ex = Exchange::from_id(sell_ex_id)?;
                     best = Some((buy_ex, sell_ex, premium));
                 }
             }
@@ -139,20 +164,30 @@ impl PremiumMatrix {
     /// Get all premium pairs.
     /// Returns Vec<(buy_exchange, sell_exchange, premium_bps)>.
     pub fn all_premiums(&self) -> Vec<(Exchange, Exchange, i32)> {
+        self.all_premiums_with_quotes()
+            .into_iter()
+            .map(|(buy_ex, sell_ex, _, _, premium)| (buy_ex, sell_ex, premium))
+            .collect()
+    }
+
+    /// Get all premium pairs with quote currencies.
+    /// Returns Vec<(buy_exchange, sell_exchange, buy_quote, sell_quote, premium_bps)>.
+    pub fn all_premiums_with_quotes(&self) -> Vec<(Exchange, Exchange, QuoteCurrency, QuoteCurrency, i32)> {
         let mut result = Vec::new();
 
-        for (&buy_id, buy_entry) in &self.prices {
-            for (&sell_id, sell_entry) in &self.prices {
-                if buy_id == sell_id {
+        for (&(buy_ex_id, _buy_quote_id), buy_entry) in &self.prices {
+            for (&(sell_ex_id, _sell_quote_id), sell_entry) in &self.prices {
+                // Skip same exchange AND same quote (same market)
+                if buy_ex_id == sell_ex_id && buy_entry.quote == sell_entry.quote {
                     continue;
                 }
 
                 if let (Some(buy_ex), Some(sell_ex)) = (
-                    Exchange::from_id(buy_id),
-                    Exchange::from_id(sell_id),
+                    Exchange::from_id(buy_ex_id),
+                    Exchange::from_id(sell_ex_id),
                 ) {
                     let premium = FixedPoint::premium_bps(buy_entry.price, sell_entry.price);
-                    result.push((buy_ex, sell_ex, premium));
+                    result.push((buy_ex, sell_ex, buy_entry.quote, sell_entry.quote, premium));
                 }
             }
         }

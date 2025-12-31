@@ -2,7 +2,7 @@
 //!
 //! Monitors price feeds and detects profitable arbitrage opportunities.
 
-use arbitrage_core::{ArbitrageOpportunity, Asset, Chain, Exchange, FixedPoint};
+use arbitrage_core::{ArbitrageOpportunity, Asset, Chain, Exchange, FixedPoint, QuoteCurrency};
 use crate::PremiumMatrix;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -107,16 +107,33 @@ impl OpportunityDetector {
         &self.detected
     }
 
-    /// Update price for an exchange/pair.
+    /// Update price for an exchange/pair with default quote (USD).
     pub fn update_price(&mut self, exchange: Exchange, pair_id: u32, price: FixedPoint) {
+        self.update_price_with_quote(exchange, pair_id, price, QuoteCurrency::USD);
+    }
+
+    /// Update price for an exchange/pair with specified quote currency.
+    pub fn update_price_with_quote(&mut self, exchange: Exchange, pair_id: u32, price: FixedPoint, quote: QuoteCurrency) {
         let matrix = self.matrices
             .entry(pair_id)
             .or_insert_with(|| PremiumMatrix::new(pair_id));
-        matrix.update_price(exchange, price);
+        matrix.update_price_with_quote(exchange, price, quote);
     }
 
     /// Detect opportunities for a specific pair.
     pub fn detect(&mut self, pair_id: u32) -> Vec<ArbitrageOpportunity> {
+        self.detect_with_rates(pair_id, None, None)
+    }
+
+    /// Detect opportunities for a specific pair with exchange rates for kimchi/tether premium.
+    /// - `usd_krw_rate`: USD/KRW exchange rate (e.g., 1450.0)
+    /// - `usdt_krw_rate`: USDT/KRW rate from Korean exchange (e.g., 1455.0)
+    pub fn detect_with_rates(
+        &mut self,
+        pair_id: u32,
+        usd_krw_rate: Option<f64>,
+        usdt_krw_rate: Option<f64>,
+    ) -> Vec<ArbitrageOpportunity> {
         let Some(matrix) = self.matrices.get(&pair_id) else {
             return Vec::new();
         };
@@ -124,20 +141,25 @@ impl OpportunityDetector {
         let mut opportunities = Vec::new();
         let asset = asset_for_pair_id(pair_id, &self.symbol_registry);
 
-        // Get all profitable pairs
-        let premiums = matrix.all_premiums();
-        for (buy_ex, sell_ex, premium) in premiums {
-            if premium >= self.config.min_premium_bps {
-                let buy_price = matrix.get_price(buy_ex).unwrap_or(FixedPoint(0));
-                let sell_price = matrix.get_price(sell_ex).unwrap_or(FixedPoint(0));
+        // Get all profitable pairs with quote currencies
+        let premiums = matrix.all_premiums_with_quotes();
 
-                let opp = ArbitrageOpportunity::new(
+        for (buy_ex, sell_ex, buy_quote, sell_quote, premium) in premiums {
+            if premium >= self.config.min_premium_bps {
+                let buy_price = matrix.get_price_with_quote(buy_ex, buy_quote).unwrap_or(FixedPoint(0));
+                let sell_price = matrix.get_price_with_quote(sell_ex, sell_quote).unwrap_or(FixedPoint(0));
+
+                let opp = ArbitrageOpportunity::with_quotes_and_rates(
                     OPPORTUNITY_ID.fetch_add(1, Ordering::SeqCst),
                     buy_ex,
                     sell_ex,
+                    buy_quote,
+                    sell_quote,
                     asset.clone(),
                     buy_price,
                     sell_price,
+                    usd_krw_rate,
+                    usdt_krw_rate,
                 );
 
                 opportunities.push(opp);
@@ -157,11 +179,20 @@ impl OpportunityDetector {
 
     /// Detect opportunities for all tracked pairs.
     pub fn detect_all(&mut self) -> Vec<ArbitrageOpportunity> {
+        self.detect_all_with_rates(None, None)
+    }
+
+    /// Detect opportunities for all tracked pairs with exchange rates.
+    pub fn detect_all_with_rates(
+        &mut self,
+        usd_krw_rate: Option<f64>,
+        usdt_krw_rate: Option<f64>,
+    ) -> Vec<ArbitrageOpportunity> {
         let pair_ids: Vec<u32> = self.matrices.keys().copied().collect();
         let mut all_opportunities = Vec::new();
 
         for pair_id in pair_ids {
-            all_opportunities.extend(self.detect(pair_id));
+            all_opportunities.extend(self.detect_with_rates(pair_id, usd_krw_rate, usdt_krw_rate));
         }
 
         all_opportunities
