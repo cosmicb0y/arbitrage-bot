@@ -9,6 +9,7 @@ pub mod discovery;
 pub mod error;
 pub mod feed;
 pub mod manager;
+pub mod symbol_mapping;
 pub mod websocket;
 
 pub use adapter::*;
@@ -17,4 +18,5 @@ pub use discovery::*;
 pub use error::*;
 pub use feed::*;
 pub use manager::*;
+pub use symbol_mapping::*;
 pub use websocket::*;

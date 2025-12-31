@@ -1,0 +1,25 @@
+{
+  "mappings": [
+    {
+      "exchange": "GateIO",
+      "symbol": "GTC",
+      "canonical_name": "GTC(Game.com)",
+      "exclude": false,
+      "notes": ""
+    },
+    {
+      "exchange": "Binance",
+      "symbol": "GTC",
+      "canonical_name": "GTC(GitCoin)",
+      "exclude": false,
+      "notes": ""
+    },
+    {
+      "exchange": "Bithumb",
+      "symbol": "GTC",
+      "canonical_name": "GTC(GitCoin)",
+      "exclude": false,
+      "notes": ""
+    }
+  ]
+}

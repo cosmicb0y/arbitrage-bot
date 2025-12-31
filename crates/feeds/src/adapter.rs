@@ -46,9 +46,11 @@ impl BinanceAdapter {
     /// Extracts base asset from trading pair (e.g., BTCUSDT -> BTC) and generates pair_id.
     pub fn symbol_to_pair_id(symbol: &str) -> Option<u32> {
         let symbol = symbol.to_uppercase();
-        // Extract base asset from USDT/BUSD pairs
+        // Extract base asset from USDT/USDC/BUSD pairs
         let base = if symbol.ends_with("USDT") {
             symbol.strip_suffix("USDT")
+        } else if symbol.ends_with("USDC") {
+            symbol.strip_suffix("USDC")
         } else if symbol.ends_with("BUSD") {
             symbol.strip_suffix("BUSD")
         } else {
@@ -63,11 +65,37 @@ impl BinanceAdapter {
         let symbol = symbol.to_uppercase();
         if symbol.ends_with("USDT") {
             symbol.strip_suffix("USDT").map(|s| s.to_string())
+        } else if symbol.ends_with("USDC") {
+            symbol.strip_suffix("USDC").map(|s| s.to_string())
         } else if symbol.ends_with("BUSD") {
             symbol.strip_suffix("BUSD").map(|s| s.to_string())
         } else {
             None
         }
+    }
+
+    /// Extract quote currency from trading pair (e.g., BTCUSDT -> USDT, BTCUSDC -> USDC).
+    pub fn extract_quote_currency(symbol: &str) -> Option<String> {
+        let symbol = symbol.to_uppercase();
+        if symbol.ends_with("USDT") {
+            Some("USDT".to_string())
+        } else if symbol.ends_with("USDC") {
+            Some("USDC".to_string())
+        } else if symbol.ends_with("BUSD") {
+            Some("BUSD".to_string())
+        } else if symbol.ends_with("USD") {
+            Some("USD".to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Extract both base and quote from trading pair.
+    /// Returns (base, quote) tuple.
+    pub fn extract_base_quote(symbol: &str) -> Option<(String, String)> {
+        let base = Self::extract_base_symbol(symbol)?;
+        let quote = Self::extract_quote_currency(symbol)?;
+        Some((base, quote))
     }
 
     /// Parse a 24hr ticker message from Binance.
@@ -98,11 +126,17 @@ impl BinanceAdapter {
 
     /// Parse a 24hr ticker message, returning both the tick and the base symbol.
     pub fn parse_ticker_with_symbol(json: &str) -> Result<(PriceTick, String), FeedError> {
+        let (tick, base, _quote) = Self::parse_ticker_with_base_quote(json)?;
+        Ok((tick, base))
+    }
+
+    /// Parse a 24hr ticker message, returning the tick, base symbol, and quote currency.
+    pub fn parse_ticker_with_base_quote(json: &str) -> Result<(PriceTick, String, String), FeedError> {
         let ticker: BinanceTicker = serde_json::from_str(json)?;
 
-        let symbol = Self::extract_base_symbol(&ticker.symbol)
+        let (base, quote) = Self::extract_base_quote(&ticker.symbol)
             .ok_or_else(|| FeedError::ParseError(format!("Unknown symbol: {}", ticker.symbol)))?;
-        let pair_id = symbol_to_pair_id(&symbol);
+        let pair_id = symbol_to_pair_id(&base);
 
         let price = ticker.close.parse::<f64>()
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
@@ -120,7 +154,7 @@ impl BinanceAdapter {
             FixedPoint::from_f64(price),
             FixedPoint::from_f64(bid),
             FixedPoint::from_f64(ask),
-        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), symbol))
+        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), base, quote))
     }
 
     /// Parse a book ticker message from Binance (best bid/ask only).
@@ -401,9 +435,33 @@ impl CoinbaseAdapter {
             product_id.strip_suffix("-USD").map(|s| s.to_string())
         } else if product_id.ends_with("-USDT") {
             product_id.strip_suffix("-USDT").map(|s| s.to_string())
+        } else if product_id.ends_with("-USDC") {
+            product_id.strip_suffix("-USDC").map(|s| s.to_string())
         } else {
             None
         }
+    }
+
+    /// Extract quote currency from product_id (e.g., BTC-USD -> USD, BTC-USDC -> USDC).
+    pub fn extract_quote_currency(product_id: &str) -> Option<String> {
+        let product_id = product_id.to_uppercase();
+        if product_id.ends_with("-USDT") {
+            Some("USDT".to_string())
+        } else if product_id.ends_with("-USDC") {
+            Some("USDC".to_string())
+        } else if product_id.ends_with("-USD") {
+            Some("USD".to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Extract both base and quote from product_id.
+    /// Returns (base, quote) tuple.
+    pub fn extract_base_quote(product_id: &str) -> Option<(String, String)> {
+        let base = Self::extract_base_symbol(product_id)?;
+        let quote = Self::extract_quote_currency(product_id)?;
+        Some((base, quote))
     }
 
     /// Parse a ticker message from Coinbase.
@@ -434,6 +492,12 @@ impl CoinbaseAdapter {
 
     /// Parse a ticker message, returning both the tick and the base symbol.
     pub fn parse_ticker_with_symbol(json: &str) -> Result<(PriceTick, String), FeedError> {
+        let (tick, base, _quote) = Self::parse_ticker_with_base_quote(json)?;
+        Ok((tick, base))
+    }
+
+    /// Parse a ticker message, returning the tick, base symbol, and quote currency.
+    pub fn parse_ticker_with_base_quote(json: &str) -> Result<(PriceTick, String, String), FeedError> {
         let ticker: CoinbaseTicker = serde_json::from_str(json)?;
 
         // Skip non-ticker messages
@@ -441,9 +505,9 @@ impl CoinbaseAdapter {
             return Err(FeedError::ParseError("Not a ticker message".to_string()));
         }
 
-        let symbol = Self::extract_base_symbol(&ticker.product_id)
+        let (base, quote) = Self::extract_base_quote(&ticker.product_id)
             .ok_or_else(|| FeedError::ParseError(format!("Unknown product: {}", ticker.product_id)))?;
-        let pair_id = symbol_to_pair_id(&symbol);
+        let pair_id = symbol_to_pair_id(&base);
 
         let price = ticker.price.parse::<f64>()
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
@@ -461,7 +525,7 @@ impl CoinbaseAdapter {
             FixedPoint::from_f64(price),
             FixedPoint::from_f64(bid),
             FixedPoint::from_f64(ask),
-        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), symbol))
+        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), base, quote))
     }
 
     /// Generate a subscription message for Coinbase WebSocket.
@@ -541,6 +605,26 @@ impl BybitAdapter {
         }
     }
 
+    /// Extract quote currency from trading pair (e.g., BTCUSDT -> USDT, BTCUSDC -> USDC).
+    pub fn extract_quote_currency(symbol: &str) -> Option<String> {
+        let symbol = symbol.to_uppercase();
+        if symbol.ends_with("USDT") {
+            Some("USDT".to_string())
+        } else if symbol.ends_with("USDC") {
+            Some("USDC".to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Extract both base and quote from trading pair.
+    /// Returns (base, quote) tuple.
+    pub fn extract_base_quote(symbol: &str) -> Option<(String, String)> {
+        let base = Self::extract_base_symbol(symbol)?;
+        let quote = Self::extract_quote_currency(symbol)?;
+        Some((base, quote))
+    }
+
     /// Parse a ticker message from Bybit.
     pub fn parse_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
         let msg: BybitTickerMessage = serde_json::from_str(json)?;
@@ -569,11 +653,17 @@ impl BybitAdapter {
 
     /// Parse a ticker message, returning both the tick and the base symbol.
     pub fn parse_ticker_with_symbol(json: &str) -> Result<(PriceTick, String), FeedError> {
+        let (tick, base, _quote) = Self::parse_ticker_with_base_quote(json)?;
+        Ok((tick, base))
+    }
+
+    /// Parse a ticker message, returning the tick, base symbol, and quote currency.
+    pub fn parse_ticker_with_base_quote(json: &str) -> Result<(PriceTick, String, String), FeedError> {
         let msg: BybitTickerMessage = serde_json::from_str(json)?;
 
-        let symbol = Self::extract_base_symbol(&msg.data.symbol)
+        let (base, quote) = Self::extract_base_quote(&msg.data.symbol)
             .ok_or_else(|| FeedError::ParseError(format!("Unknown symbol: {}", msg.data.symbol)))?;
-        let pair_id = symbol_to_pair_id(&symbol);
+        let pair_id = symbol_to_pair_id(&base);
 
         let price = msg.data.last_price.parse::<f64>()
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
@@ -590,7 +680,7 @@ impl BybitAdapter {
             FixedPoint::from_f64(price),
             FixedPoint::from_f64(bid),
             FixedPoint::from_f64(ask),
-        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), symbol))
+        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), base, quote))
     }
 
     /// Generate a subscription message for Bybit WebSocket.
@@ -833,11 +923,35 @@ impl GateIOAdapter {
         let pair = currency_pair.to_uppercase();
         if pair.ends_with("_USDT") {
             pair.strip_suffix("_USDT").map(|s| s.to_string())
+        } else if pair.ends_with("_USDC") {
+            pair.strip_suffix("_USDC").map(|s| s.to_string())
         } else if pair.ends_with("_USD") {
             pair.strip_suffix("_USD").map(|s| s.to_string())
         } else {
             None
         }
+    }
+
+    /// Extract quote currency from currency pair (e.g., BTC_USDT -> USDT, BTC_USDC -> USDC).
+    pub fn extract_quote_currency(currency_pair: &str) -> Option<String> {
+        let pair = currency_pair.to_uppercase();
+        if pair.ends_with("_USDT") {
+            Some("USDT".to_string())
+        } else if pair.ends_with("_USDC") {
+            Some("USDC".to_string())
+        } else if pair.ends_with("_USD") {
+            Some("USD".to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Extract both base and quote from currency pair.
+    /// Returns (base, quote) tuple.
+    pub fn extract_base_quote(currency_pair: &str) -> Option<(String, String)> {
+        let base = Self::extract_base_symbol(currency_pair)?;
+        let quote = Self::extract_quote_currency(currency_pair)?;
+        Some((base, quote))
     }
 
     /// Parse a ticker message from Gate.io.
@@ -873,6 +987,12 @@ impl GateIOAdapter {
 
     /// Parse a ticker message, returning both the tick and the base symbol.
     pub fn parse_ticker_with_symbol(json: &str) -> Result<(PriceTick, String), FeedError> {
+        let (tick, base, _quote) = Self::parse_ticker_with_base_quote(json)?;
+        Ok((tick, base))
+    }
+
+    /// Parse a ticker message, returning the tick, base symbol, and quote currency.
+    pub fn parse_ticker_with_base_quote(json: &str) -> Result<(PriceTick, String, String), FeedError> {
         let msg: GateIOTickerMessage = serde_json::from_str(json)?;
 
         // Skip non-update messages
@@ -880,9 +1000,9 @@ impl GateIOAdapter {
             return Err(FeedError::ParseError("Not an update message".to_string()));
         }
 
-        let symbol = Self::extract_base_symbol(&msg.result.currency_pair)
+        let (base, quote) = Self::extract_base_quote(&msg.result.currency_pair)
             .ok_or_else(|| FeedError::ParseError(format!("Unknown pair: {}", msg.result.currency_pair)))?;
-        let pair_id = symbol_to_pair_id(&symbol);
+        let pair_id = symbol_to_pair_id(&base);
 
         let price = msg.result.last.parse::<f64>()
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
@@ -890,7 +1010,7 @@ impl GateIOAdapter {
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
         let ask = msg.result.lowest_ask.parse::<f64>()
             .map_err(|e| FeedError::ParseError(e.to_string()))?;
-        // quote_volume is already in USDT
+        // quote_volume is already in quote currency (USDT or USDC)
         let volume_usd = msg.result.quote_volume.parse::<f64>().unwrap_or(0.0);
 
         Ok((PriceTick::new(
@@ -899,7 +1019,7 @@ impl GateIOAdapter {
             FixedPoint::from_f64(price),
             FixedPoint::from_f64(bid),
             FixedPoint::from_f64(ask),
-        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), symbol))
+        ).with_volume_24h(FixedPoint::from_f64(volume_usd)), base, quote))
     }
 
     /// Generate a subscription message for Gate.io WebSocket.
@@ -1143,5 +1263,46 @@ mod tests {
         assert_eq!(GateIOAdapter::extract_base_symbol("BTC_USDT"), Some("BTC".to_string()));
         assert_eq!(GateIOAdapter::extract_base_symbol("ETH_USDT"), Some("ETH".to_string()));
         assert_eq!(GateIOAdapter::extract_base_symbol("BTCUSDT"), None);
+    }
+
+    // === Quote currency extraction tests ===
+
+    #[test]
+    fn test_binance_extract_quote_currency() {
+        assert_eq!(BinanceAdapter::extract_quote_currency("BTCUSDT"), Some("USDT".to_string()));
+        assert_eq!(BinanceAdapter::extract_quote_currency("BTCUSDC"), Some("USDC".to_string()));
+        assert_eq!(BinanceAdapter::extract_quote_currency("BTCBUSD"), Some("BUSD".to_string()));
+        assert_eq!(BinanceAdapter::extract_quote_currency("ETHUSDT"), Some("USDT".to_string()));
+        assert_eq!(BinanceAdapter::extract_quote_currency("INVALID"), None);
+    }
+
+    #[test]
+    fn test_binance_extract_base_quote() {
+        assert_eq!(BinanceAdapter::extract_base_quote("BTCUSDT"), Some(("BTC".to_string(), "USDT".to_string())));
+        assert_eq!(BinanceAdapter::extract_base_quote("ETHUSDC"), Some(("ETH".to_string(), "USDC".to_string())));
+        assert_eq!(BinanceAdapter::extract_base_quote("SOLBUSD"), Some(("SOL".to_string(), "BUSD".to_string())));
+    }
+
+    #[test]
+    fn test_coinbase_extract_quote_currency() {
+        assert_eq!(CoinbaseAdapter::extract_quote_currency("BTC-USD"), Some("USD".to_string()));
+        assert_eq!(CoinbaseAdapter::extract_quote_currency("BTC-USDT"), Some("USDT".to_string()));
+        assert_eq!(CoinbaseAdapter::extract_quote_currency("BTC-USDC"), Some("USDC".to_string()));
+        assert_eq!(CoinbaseAdapter::extract_quote_currency("INVALID"), None);
+    }
+
+    #[test]
+    fn test_bybit_extract_quote_currency() {
+        assert_eq!(BybitAdapter::extract_quote_currency("BTCUSDT"), Some("USDT".to_string()));
+        assert_eq!(BybitAdapter::extract_quote_currency("BTCUSDC"), Some("USDC".to_string()));
+        assert_eq!(BybitAdapter::extract_quote_currency("BTCEUR"), None);
+    }
+
+    #[test]
+    fn test_gateio_extract_quote_currency() {
+        assert_eq!(GateIOAdapter::extract_quote_currency("BTC_USDT"), Some("USDT".to_string()));
+        assert_eq!(GateIOAdapter::extract_quote_currency("BTC_USDC"), Some("USDC".to_string()));
+        assert_eq!(GateIOAdapter::extract_quote_currency("BTC_USD"), Some("USD".to_string()));
+        assert_eq!(GateIOAdapter::extract_quote_currency("BTC_EUR"), None);
     }
 }

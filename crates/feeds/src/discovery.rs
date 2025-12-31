@@ -3,6 +3,7 @@
 //! Fetches available markets from exchanges via REST APIs
 //! and finds common trading pairs across exchanges.
 
+use crate::symbol_mapping::SymbolMappings;
 use crate::FeedError;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -23,14 +24,37 @@ pub struct MarketInfo {
 
 impl MarketInfo {
     /// Get normalized pair key (e.g., "BTC/USD")
+    /// Note: This normalizes USDT/USDC/BUSD -> USD for comparison
     pub fn pair_key(&self) -> String {
         format!("{}/{}", self.base, self.normalized_quote())
+    }
+
+    /// Get pair key with exact quote (e.g., "BTC/USDT", "BTC/USDC")
+    pub fn exact_pair_key(&self) -> String {
+        format!("{}/{}", self.base, self.quote)
     }
 
     /// Normalize quote currency (USD, USDT, USDC -> USD)
     pub fn normalized_quote(&self) -> &str {
         match self.quote.as_str() {
             "USDT" | "USDC" | "BUSD" => "USD",
+            other => other,
+        }
+    }
+
+    /// Check if this is a USD-equivalent quote (USD, USDT, USDC, BUSD)
+    pub fn is_usd_equivalent(&self) -> bool {
+        matches!(self.quote.as_str(), "USD" | "USDT" | "USDC" | "BUSD")
+    }
+
+    /// Get quote category for grouping
+    /// USD/USDT -> "USDT" (most common)
+    /// USDC -> "USDC"
+    /// KRW -> "KRW"
+    pub fn quote_category(&self) -> &str {
+        match self.quote.as_str() {
+            "USD" | "USDT" | "BUSD" => "USDT",
+            "USDC" => "USDC",
             other => other,
         }
     }
@@ -51,6 +75,10 @@ pub struct CommonMarkets {
     /// Base assets that are available on 2+ exchanges
     /// Maps base asset -> list of (exchange, market_info)
     pub common: HashMap<String, Vec<(String, MarketInfo)>>,
+    /// Markets grouped by (base, quote_category)
+    /// Key: "BTC/USDT", "BTC/USDC", "BTC/KRW"
+    /// This allows comparing USDT markets separately from USDC markets
+    pub by_quote: HashMap<String, Vec<(String, MarketInfo)>>,
     /// Exchanges that were compared
     pub exchanges: Vec<String>,
     /// Minimum number of exchanges required (for filtering)
@@ -76,6 +104,27 @@ impl CommonMarkets {
     /// Get the number of exchanges a market is available on
     pub fn exchange_count(&self, base: &str) -> usize {
         self.common.get(base).map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// Get markets by quote category (e.g., "BTC/USDT", "BTC/USDC", "BTC/KRW")
+    pub fn get_by_quote(&self, key: &str) -> Option<&Vec<(String, MarketInfo)>> {
+        self.by_quote.get(key)
+    }
+
+    /// Get all quote-specific market keys (e.g., ["BTC/USDT", "BTC/USDC", "ETH/USDT"])
+    pub fn quote_market_keys(&self) -> Vec<String> {
+        self.by_quote.keys().cloned().collect()
+    }
+
+    /// Get available quote categories for a base asset
+    /// e.g., for "BTC" -> ["USDT", "USDC", "KRW"]
+    pub fn quote_categories_for_base(&self, base: &str) -> Vec<String> {
+        let prefix = format!("{}/", base);
+        self.by_quote
+            .keys()
+            .filter(|k| k.starts_with(&prefix))
+            .map(|k| k.strip_prefix(&prefix).unwrap().to_string())
+            .collect()
     }
 }
 
@@ -131,7 +180,13 @@ impl MarketDiscovery {
         let markets: Vec<MarketInfo> = resp
             .symbols
             .into_iter()
-            .filter(|s| s.quote_asset == "USDT" || s.quote_asset == "BUSD")
+            .filter(|s| {
+                // Include USDT/USDC/BUSD quoted markets
+                s.quote_asset == "USDT" || s.quote_asset == "USDC" || s.quote_asset == "BUSD"
+                // Also include stablecoin/USD pairs for exchange rate tracking
+                || (s.base_asset == "USDT" && s.quote_asset == "USD")
+                || (s.base_asset == "USDC" && (s.quote_asset == "USD" || s.quote_asset == "USDT"))
+            })
             .map(|s| MarketInfo {
                 base: s.base_asset,
                 quote: s.quote_asset,
@@ -140,7 +195,7 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Binance: fetched {} USDT/BUSD markets", markets.len());
+        debug!("Binance: fetched {} markets (USDT/USDC/BUSD + stablecoin pairs)", markets.len());
 
         Ok(ExchangeMarkets {
             markets,
@@ -171,7 +226,12 @@ impl MarketDiscovery {
 
         let markets: Vec<MarketInfo> = resp
             .into_iter()
-            .filter(|p| p.quote_currency == "USD" || p.quote_currency == "USDT")
+            .filter(|p| {
+                // Include native USD, USDT, and USDC markets
+                p.quote_currency == "USD" || p.quote_currency == "USDT" || p.quote_currency == "USDC"
+                // Also include stablecoin pairs for exchange rate tracking
+                || (p.base_currency == "USDT" && (p.quote_currency == "USD" || p.quote_currency == "USDC"))
+            })
             .map(|p| MarketInfo {
                 base: p.base_currency,
                 quote: p.quote_currency,
@@ -180,7 +240,7 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Coinbase: fetched {} USD/USDT markets", markets.len());
+        debug!("Coinbase: fetched {} markets (USD/USDT/USDC)", markets.len());
 
         Ok(ExchangeMarkets {
             markets,
@@ -323,7 +383,12 @@ impl MarketDiscovery {
             .result
             .list
             .into_iter()
-            .filter(|s| s.quote_coin == "USDT" || s.quote_coin == "USDC")
+            .filter(|s| {
+                // Include USDT/USDC quoted markets
+                s.quote_coin == "USDT" || s.quote_coin == "USDC"
+                // Also include USDC/USDT pair for exchange rate tracking
+                || (s.base_coin == "USDC" && s.quote_coin == "USDT")
+            })
             .map(|s| MarketInfo {
                 base: s.base_coin,
                 quote: s.quote_coin,
@@ -332,7 +397,7 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Bybit: fetched {} USDT/USDC markets", markets.len());
+        debug!("Bybit: fetched {} markets (USDT/USDC + stablecoin pairs)", markets.len());
 
         Ok(ExchangeMarkets {
             markets,
@@ -372,7 +437,12 @@ impl MarketDiscovery {
         let markets: Vec<MarketInfo> = resp
             .data
             .into_iter()
-            .filter(|s| s.quote_ccy == "USDT" || s.quote_ccy == "USDC")
+            .filter(|s| {
+                // Include USDT/USDC quoted markets
+                s.quote_ccy == "USDT" || s.quote_ccy == "USDC"
+                // Also include USDC/USDT pair for exchange rate tracking
+                || (s.base_ccy == "USDC" && s.quote_ccy == "USDT")
+            })
             .map(|s| MarketInfo {
                 base: s.base_ccy,
                 quote: s.quote_ccy,
@@ -381,7 +451,7 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("OKX: fetched {} USDT/USDC markets", markets.len());
+        debug!("OKX: fetched {} markets (USDT/USDC + stablecoin pairs)", markets.len());
 
         Ok(ExchangeMarkets {
             markets,
@@ -412,7 +482,13 @@ impl MarketDiscovery {
 
         let markets: Vec<MarketInfo> = resp
             .into_iter()
-            .filter(|p| p.quote == "USDT" || p.quote == "USD")
+            .filter(|p| {
+                // Include USDT/USDC/USD quoted markets
+                p.quote == "USDT" || p.quote == "USDC" || p.quote == "USD"
+                // Also include stablecoin pairs for exchange rate tracking
+                || (p.base == "USDT" && p.quote == "USD")
+                || (p.base == "USDC" && (p.quote == "USD" || p.quote == "USDT"))
+            })
             .map(|p| MarketInfo {
                 base: p.base,
                 quote: p.quote,
@@ -421,7 +497,7 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Gate.io: fetched {} USDT/USD markets", markets.len());
+        debug!("Gate.io: fetched {} markets (USDT/USDC/USD + stablecoin pairs)", markets.len());
 
         Ok(ExchangeMarkets {
             markets,
@@ -458,7 +534,12 @@ impl MarketDiscovery {
         let markets: Vec<MarketInfo> = resp
             .result
             .into_iter()
-            .filter(|(_, p)| p.quote == "USD" || p.quote == "ZUSD" || p.quote == "USDT")
+            .filter(|(_, p)| {
+                // Include USD/USDT quoted markets
+                p.quote == "USD" || p.quote == "ZUSD" || p.quote == "USDT"
+                // Also include USDC/USDT pair for exchange rate tracking
+                || (normalize_kraken_asset(&p.base) == "USDC" && p.quote == "USDT")
+            })
             .map(|(symbol, p)| {
                 // Normalize Kraken's weird asset names (XXBT -> BTC, XETH -> ETH)
                 let base = normalize_kraken_asset(&p.base);
@@ -472,7 +553,7 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Kraken: fetched {} USD/USDT markets", markets.len());
+        debug!("Kraken: fetched {} markets (USD/USDT + stablecoin pairs)", markets.len());
 
         Ok(ExchangeMarkets {
             markets,
@@ -571,6 +652,18 @@ impl MarketDiscovery {
         exchanges: &[&str],
         min_exchanges: usize,
     ) -> CommonMarkets {
+        Self::find_markets_on_n_exchanges_with_mappings(all_markets, exchanges, min_exchanges, None)
+    }
+
+    /// Find markets available on at least `min_exchanges` exchanges.
+    /// Applies symbol mappings to exclude mismatched symbols and group by canonical_name.
+    /// Returns markets sorted by exchange count (descending).
+    pub fn find_markets_on_n_exchanges_with_mappings(
+        all_markets: &HashMap<String, ExchangeMarkets>,
+        exchanges: &[&str],
+        min_exchanges: usize,
+        symbol_mappings: Option<&SymbolMappings>,
+    ) -> CommonMarkets {
         // Collect all unique base assets across all exchanges
         let mut all_bases: HashSet<String> = HashSet::new();
         for ex in exchanges {
@@ -583,26 +676,89 @@ impl MarketDiscovery {
             }
         }
 
-        // Build result with market info for each base that appears on min_exchanges or more
+        // Build result with market info grouped by canonical_name
+        // If a symbol has mappings with different canonical names, they will be grouped separately
         let mut common: HashMap<String, Vec<(String, MarketInfo)>> = HashMap::new();
+        let mut excluded_count = 0;
+        let mut remapped_count = 0;
 
         for base in &all_bases {
-            let mut markets_for_base = Vec::new();
+            // Check if this symbol has mappings with different canonical names
+            let has_mappings = symbol_mappings
+                .map(|m| m.mappings.iter().any(|mapping| mapping.symbol.eq_ignore_ascii_case(base)))
+                .unwrap_or(false);
 
-            for ex in exchanges {
-                if let Some(ex_markets) = all_markets.get(*ex) {
-                    if let Some(market) = ex_markets
-                        .markets
-                        .iter()
-                        .find(|m| &m.base == base && m.trading_enabled)
-                    {
-                        markets_for_base.push((ex.to_string(), market.clone()));
+            if has_mappings {
+                // Group by canonical_name instead of original symbol
+                // This handles cases like GTC -> GTC(Gitcoin) vs GTC -> GTC(Game.com)
+                let mut canonical_groups: HashMap<String, Vec<(String, MarketInfo)>> = HashMap::new();
+
+                for ex in exchanges {
+                    // Check if this symbol should be excluded for this exchange
+                    if let Some(mappings) = symbol_mappings {
+                        if mappings.is_excluded(ex, base) {
+                            debug!(
+                                "Excluding {}/{} from arbitrage (symbol mapping)",
+                                ex, base
+                            );
+                            excluded_count += 1;
+                            continue;
+                        }
+                    }
+
+                    if let Some(ex_markets) = all_markets.get(*ex) {
+                        if let Some(market) = ex_markets
+                            .markets
+                            .iter()
+                            .find(|m| &m.base == base && m.trading_enabled)
+                        {
+                            // Get canonical name for this exchange/symbol pair
+                            let canonical = symbol_mappings
+                                .map(|m| m.canonical_name(ex, base))
+                                .unwrap_or_else(|| base.clone());
+
+                            canonical_groups
+                                .entry(canonical)
+                                .or_default()
+                                .push((ex.to_string(), market.clone()));
+                        }
                     }
                 }
-            }
 
-            if markets_for_base.len() >= min_exchanges {
-                common.insert(base.clone(), markets_for_base);
+                // Add each canonical group that meets min_exchanges requirement
+                for (canonical_name, markets_for_canonical) in canonical_groups {
+                    if markets_for_canonical.len() >= min_exchanges {
+                        if canonical_name != *base {
+                            remapped_count += 1;
+                            debug!(
+                                "Using canonical name '{}' for symbol '{}' ({} exchanges)",
+                                canonical_name,
+                                base,
+                                markets_for_canonical.len()
+                            );
+                        }
+                        common.insert(canonical_name, markets_for_canonical);
+                    }
+                }
+            } else {
+                // No mappings - use original symbol
+                let mut markets_for_base = Vec::new();
+
+                for ex in exchanges {
+                    if let Some(ex_markets) = all_markets.get(*ex) {
+                        if let Some(market) = ex_markets
+                            .markets
+                            .iter()
+                            .find(|m| &m.base == base && m.trading_enabled)
+                        {
+                            markets_for_base.push((ex.to_string(), market.clone()));
+                        }
+                    }
+                }
+
+                if markets_for_base.len() >= min_exchanges {
+                    common.insert(base.clone(), markets_for_base);
+                }
             }
         }
 
@@ -610,20 +766,96 @@ impl MarketDiscovery {
         let all_count = common.values().filter(|v| v.len() == exchanges.len()).count();
         let partial_count = common.len() - all_count;
 
-        info!(
-            "Found {} markets on {}+ exchanges ({} on all {}, {} on 2+ but not all)",
-            common.len(),
-            min_exchanges,
-            all_count,
-            exchanges.len(),
-            partial_count
-        );
+        if excluded_count > 0 || remapped_count > 0 {
+            info!(
+                "Found {} markets on {}+ exchanges ({} on all {}, {} on 2+ but not all, {} excluded, {} remapped by symbol mappings)",
+                common.len(),
+                min_exchanges,
+                all_count,
+                exchanges.len(),
+                partial_count,
+                excluded_count,
+                remapped_count
+            );
+        } else {
+            info!(
+                "Found {} markets on {}+ exchanges ({} on all {}, {} on 2+ but not all)",
+                common.len(),
+                min_exchanges,
+                all_count,
+                exchanges.len(),
+                partial_count
+            );
+        }
+
+        // Build by_quote map: group by (base, quote_category)
+        // This allows comparing USDT markets separately from USDC markets
+        let by_quote = Self::build_by_quote_map(all_markets, exchanges, min_exchanges, symbol_mappings);
 
         CommonMarkets {
             common,
+            by_quote,
             exchanges: exchanges.iter().map(|s| s.to_string()).collect(),
             min_exchanges,
         }
+    }
+
+    /// Build markets grouped by (base, quote_category).
+    /// e.g., "BTC/USDT" -> [(Binance, MarketInfo), (Bybit, MarketInfo)]
+    ///       "BTC/USDC" -> [(Coinbase, MarketInfo), (Bybit, MarketInfo)]
+    fn build_by_quote_map(
+        all_markets: &HashMap<String, ExchangeMarkets>,
+        exchanges: &[&str],
+        min_exchanges: usize,
+        symbol_mappings: Option<&SymbolMappings>,
+    ) -> HashMap<String, Vec<(String, MarketInfo)>> {
+        let mut by_quote: HashMap<String, Vec<(String, MarketInfo)>> = HashMap::new();
+
+        // Collect all (base, quote_category) pairs
+        for ex in exchanges {
+            if let Some(ex_markets) = all_markets.get(*ex) {
+                for market in &ex_markets.markets {
+                    if !market.trading_enabled {
+                        continue;
+                    }
+
+                    // Check exclusions
+                    if let Some(mappings) = symbol_mappings {
+                        if mappings.is_excluded(ex, &market.base) {
+                            continue;
+                        }
+                    }
+
+                    // Get canonical name
+                    let canonical = symbol_mappings
+                        .map(|m| m.canonical_name(ex, &market.base))
+                        .unwrap_or_else(|| market.base.clone());
+
+                    // Create key like "BTC/USDT" or "BTC/USDC" or "BTC/KRW"
+                    let quote_cat = market.quote_category();
+                    let key = format!("{}/{}", canonical, quote_cat);
+
+                    by_quote
+                        .entry(key)
+                        .or_default()
+                        .push((ex.to_string(), market.clone()));
+                }
+            }
+        }
+
+        // Filter to only keep markets on min_exchanges or more
+        by_quote.retain(|_, markets| markets.len() >= min_exchanges);
+
+        let usdt_count = by_quote.keys().filter(|k| k.ends_with("/USDT")).count();
+        let usdc_count = by_quote.keys().filter(|k| k.ends_with("/USDC")).count();
+        let krw_count = by_quote.keys().filter(|k| k.ends_with("/KRW")).count();
+
+        info!(
+            "By quote: {} USDT markets, {} USDC markets, {} KRW markets on {}+ exchanges",
+            usdt_count, usdc_count, krw_count, min_exchanges
+        );
+
+        by_quote
     }
 }
 
