@@ -13,6 +13,8 @@ interface PriceChanges {
 const getOppKey = (opp: { symbol: string; source_exchange: string; target_exchange: string }) =>
   `${opp.symbol}-${opp.source_exchange}-${opp.target_exchange}`;
 
+type PremiumMode = "kimchi" | "tether";
+
 function Opportunities() {
   const { opportunities: rawOpportunities, executeOpportunity } = useOpportunities();
   const prices = usePrices();
@@ -23,6 +25,7 @@ function Opportunities() {
   const prevDataRef = useRef<Map<OppKey, { source: number; target: number; spread: number }>>(new Map());
   const [minVolume, setMinVolume] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState("");
+  const [premiumMode, setPremiumMode] = useState<PremiumMode>("tether");
 
   // Build wallet status lookup: exchange -> asset -> { canDeposit, canWithdraw }
   const walletStatusMap = useMemo(() => {
@@ -51,7 +54,20 @@ function Opportunities() {
     return map;
   }, [prices]);
 
-  // Sort and filter opportunities
+  // Helper to get sort premium based on mode
+  const getSortPremium = (opp: typeof rawOpportunities[0]): number => {
+    const hasKRW = opp.source_quote === "KRW" || opp.target_quote === "KRW";
+    if (!hasKRW) return opp.premium_bps;
+
+    if (premiumMode === "kimchi") {
+      return opp.kimchi_premium_bps ?? opp.premium_bps;
+    } else if (premiumMode === "tether") {
+      return opp.tether_premium_bps ?? opp.premium_bps;
+    }
+    return opp.premium_bps;
+  };
+
+  // Sort and filter opportunities (show all, no premium mode filtering)
   const opportunities = useMemo(() => {
     const query = searchQuery.toUpperCase();
     return [...rawOpportunities]
@@ -70,8 +86,8 @@ function Opportunities() {
         }
         return true;
       })
-      .sort((a, b) => b.premium_bps - a.premium_bps);
-  }, [rawOpportunities, searchQuery, minVolume, volumeBySymbol]);
+      .sort((a, b) => getSortPremium(b) - getSortPremium(a));
+  }, [rawOpportunities, searchQuery, minVolume, volumeBySymbol, premiumMode]);
 
   // Detect price changes
   useEffect(() => {
@@ -143,11 +159,61 @@ function Opportunities() {
     });
   };
 
+  // Get the appropriate premium value based on mode and whether it's a KRW trade
+  const getDisplayPremium = (opp: typeof opportunities[0]): number => {
+    const hasKRW = opp.source_quote === "KRW" || opp.target_quote === "KRW";
+
+    if (!hasKRW) {
+      // Non-KRW trades always show raw premium
+      return opp.premium_bps;
+    }
+
+    // KRW trades: show 김프 or 테프 based on mode
+    if (premiumMode === "kimchi") {
+      return opp.kimchi_premium_bps ?? opp.premium_bps;
+    }
+    // tether mode
+    return opp.tether_premium_bps ?? opp.premium_bps;
+  };
+
+  // Get premium label for display (only for KRW trades)
+  const getPremiumLabel = (opp: typeof opportunities[0]): string | null => {
+    const hasKRW = opp.source_quote === "KRW" || opp.target_quote === "KRW";
+    if (!hasKRW) return null;
+    return premiumMode === "kimchi" ? "김프" : "테프";
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-semibold">Arbitrage Opportunities</h2>
         <div className="flex items-center gap-4">
+          {/* Premium Mode Toggle (김프/테프 for KRW trades) */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">KRW:</span>
+            <div className="flex bg-dark-700 rounded-lg p-0.5">
+              <button
+                onClick={() => setPremiumMode("kimchi")}
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  premiumMode === "kimchi"
+                    ? "bg-yellow-600 text-white"
+                    : "text-gray-400 hover:text-white"
+                }`}
+              >
+                김프
+              </button>
+              <button
+                onClick={() => setPremiumMode("tether")}
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  premiumMode === "tether"
+                    ? "bg-green-600 text-white"
+                    : "text-gray-400 hover:text-white"
+                }`}
+              >
+                테프
+              </button>
+            </div>
+          </div>
           <input
             type="text"
             placeholder="Search symbol or exchange..."
@@ -182,8 +248,8 @@ function Opportunities() {
       <div className="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
         <table className="w-full table-fixed">
           <colgroup>
-            <col className="w-24" />
-            <col className="w-48" />
+            <col className="w-20" />
+            <col className="w-72" />
             <col className="w-24" />
             <col className="w-28" />
             <col className="w-28" />
@@ -225,13 +291,33 @@ function Opportunities() {
                   </td>
                   <td className="p-4">
                     <div className="flex items-center space-x-2">
-                      <span className="text-success-500 font-medium">
-                        {opp.source_exchange}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-success-500 font-medium">
+                          {opp.source_exchange}
+                        </span>
+                        <span className={`text-xs px-1 py-0.5 rounded ${
+                          opp.source_quote === 'KRW' ? 'bg-yellow-500/20 text-yellow-400' :
+                          opp.source_quote === 'USDC' ? 'bg-blue-500/20 text-blue-400' :
+                          opp.source_quote === 'USDT' ? 'bg-green-500/20 text-green-400' :
+                          'bg-gray-500/20 text-gray-400'
+                        }`}>
+                          {opp.source_quote || 'USD'}
+                        </span>
+                      </div>
                       <span className="text-gray-500">→</span>
-                      <span className="text-primary-500 font-medium">
-                        {opp.target_exchange}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-primary-500 font-medium">
+                          {opp.target_exchange}
+                        </span>
+                        <span className={`text-xs px-1 py-0.5 rounded ${
+                          opp.target_quote === 'KRW' ? 'bg-yellow-500/20 text-yellow-400' :
+                          opp.target_quote === 'USDC' ? 'bg-blue-500/20 text-blue-400' :
+                          opp.target_quote === 'USDT' ? 'bg-green-500/20 text-green-400' :
+                          'bg-gray-500/20 text-gray-400'
+                        }`}>
+                          {opp.target_quote || 'USD'}
+                        </span>
+                      </div>
                     </div>
                   </td>
                   <td className="p-4 text-center">
@@ -274,17 +360,32 @@ function Opportunities() {
                     </span>
                   </td>
                   <td className="p-4 text-right">
-                    <span
-                      className={`font-mono font-bold ${
-                        opp.premium_bps >= 50
-                          ? "text-success-500"
-                          : opp.premium_bps >= 30
-                            ? "text-yellow-500"
-                            : "text-gray-400"
-                      } ${getChangeClass(changes?.spread)}`}
-                    >
-                      +{(opp.premium_bps / 100).toFixed(2)}%
-                    </span>
+                    {(() => {
+                      const displayPremium = getDisplayPremium(opp);
+                      const premiumLabel = getPremiumLabel(opp);
+                      return (
+                        <div className="flex flex-col items-end">
+                          <span
+                            className={`font-mono font-bold ${
+                              displayPremium >= 50
+                                ? "text-success-500"
+                                : displayPremium >= 30
+                                  ? "text-yellow-500"
+                                  : "text-gray-400"
+                            } ${getChangeClass(changes?.spread)}`}
+                          >
+                            {displayPremium >= 0 ? "+" : ""}{(displayPremium / 100).toFixed(2)}%
+                          </span>
+                          {premiumLabel && (
+                            <span className={`text-xs mt-0.5 ${
+                              premiumMode === "kimchi" ? "text-yellow-500" : "text-green-500"
+                            }`}>
+                              {premiumLabel}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="p-4 text-center">
                     <div className="flex items-center justify-center">

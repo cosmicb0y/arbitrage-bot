@@ -5,6 +5,16 @@ import type { AssetWalletStatus, NetworkStatus } from "../types";
 type FilterMode = "all" | "common" | "partial";
 type StatusType = "normal" | "partial" | "suspended" | "unknown";
 
+// Extract original symbol from canonical name
+// e.g., "GTC(GitCoin)" -> "GTC", "BTC" -> "BTC"
+function extractOriginalSymbol(canonicalName: string): string {
+  const parenIndex = canonicalName.indexOf("(");
+  if (parenIndex > 0) {
+    return canonicalName.substring(0, parenIndex);
+  }
+  return canonicalName;
+}
+
 // Calculate deposit/withdraw status separately
 function getDepositWithdrawStatus(status: AssetWalletStatus | undefined): {
   depositStatus: StatusType;
@@ -360,11 +370,14 @@ function Markets() {
               filteredBases.map(({ base, count }) => {
                 const markets = commonMarkets.markets[base] || [];
                 const isComplete = count === exchangeCount;
+                // Extract original symbol for wallet status lookup (e.g., "GTC(GitCoin)" -> "GTC")
+                const originalSymbol = extractOriginalSymbol(base);
 
                 // Collect status info for visible exchanges
                 const exchangeStatusInfo = visibleExchanges.map((exchange) => {
                   const market = markets.find((m) => m.exchange === exchange);
-                  const status = walletStatusMap[exchange]?.[base];
+                  // Wallet status uses original symbol, not canonical name
+                  const status = walletStatusMap[exchange]?.[originalSymbol];
                   const info = getDepositWithdrawStatus(status);
                   return { exchange, market, status, info };
                 });
