@@ -11,6 +11,7 @@ type QuoteFilter = "all" | "USDT" | "USDC";
 function getExchangeTradeUrl(exchange: string, symbol: string, quote: string): string | null {
   const q = quote || "USD";
 
+  // Exchange names come from Rust Debug format (e.g., "GateIO", "Okx")
   switch (exchange) {
     case "Binance":
       // https://www.binance.com/en/trade/BTC_USDT?type=spot
@@ -28,7 +29,7 @@ function getExchangeTradeUrl(exchange: string, symbol: string, quote: string): s
       // https://www.coinbase.com/advanced-trade/spot/BTC-USD
       return `https://www.coinbase.com/advanced-trade/spot/${symbol}-${q}`;
 
-    case "Gate.io":
+    case "GateIO":
       // https://www.gate.com/trade/BTC_USDT
       return `https://www.gate.com/trade/${symbol}_${q}`;
 
@@ -40,7 +41,7 @@ function getExchangeTradeUrl(exchange: string, symbol: string, quote: string): s
       // https://pro.kraken.com/app/trade/btc-usd
       return `https://pro.kraken.com/app/trade/${symbol.toLowerCase()}-${q.toLowerCase()}`;
 
-    case "OKX":
+    case "Okx":
       // https://www.okx.com/trade-spot/btc-usdt
       return `https://www.okx.com/trade-spot/${symbol.toLowerCase()}-${q.toLowerCase()}`;
 
