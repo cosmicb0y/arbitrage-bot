@@ -5,7 +5,7 @@ use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -1414,6 +1414,211 @@ pub async fn fetch_bybit_wallet() -> Result<ExchangeWalletInfo, String> {
 }
 
 // ============================================================================
+// Gate.io Client (API V4)
+// ============================================================================
+
+/// Sign Gate.io API request using HMAC-SHA512.
+fn sign_gateio(timestamp: &str, method: &str, path: &str, query: &str, body: &str, secret: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::{Sha512, Digest};
+
+    // Body hash (SHA512 of body content)
+    let body_hash = if body.is_empty() {
+        // Empty body hash
+        let mut hasher = Sha512::new();
+        hasher.update(b"");
+        hex::encode(hasher.finalize())
+    } else {
+        let mut hasher = Sha512::new();
+        hasher.update(body.as_bytes());
+        hex::encode(hasher.finalize())
+    };
+
+    // Signature string: METHOD\nPATH\nQUERY\nBODY_HASH\nTIMESTAMP
+    let sign_string = format!("{}\n{}\n{}\n{}\n{}", method, path, query, body_hash, timestamp);
+
+    let mut mac = Hmac::<Sha512>::new_from_slice(secret.as_bytes())
+        .expect("HMAC can take key of any size");
+    mac.update(sign_string.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Gate.io wallet status response
+#[derive(Debug, Deserialize)]
+struct GateIOCurrency {
+    currency: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    deposit_disabled: bool,
+    #[serde(default)]
+    withdraw_disabled: bool,
+    #[serde(default)]
+    chain: String,
+}
+
+/// Fetch Gate.io wallet status
+pub async fn fetch_gateio_wallet_status() -> Result<Vec<AssetWalletStatus>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build client: {}", e))?;
+
+    // Public API - no auth required
+    let resp = client
+        .get("https://api.gateio.ws/api/v4/spot/currencies")
+        .send()
+        .await
+        .map_err(|e| format!("Gate.io currencies request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let error_text = resp.text().await.unwrap_or_default();
+        return Err(format!("Gate.io currencies API error: {}", error_text));
+    }
+
+    let currencies: Vec<GateIOCurrency> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Gate.io currencies: {}", e))?;
+
+    let wallet_status: Vec<AssetWalletStatus> = currencies
+        .into_iter()
+        .map(|c| {
+            let can_deposit = !c.deposit_disabled;
+            let can_withdraw = !c.withdraw_disabled;
+
+            let network = if c.chain.is_empty() {
+                c.currency.clone()
+            } else {
+                c.chain.clone()
+            };
+
+            AssetWalletStatus {
+                asset: c.currency.clone(),
+                name: if c.name.is_empty() { c.currency } else { c.name },
+                networks: vec![NetworkStatus {
+                    network: network.clone(),
+                    name: network,
+                    deposit_enabled: can_deposit,
+                    withdraw_enabled: can_withdraw,
+                    min_withdraw: 0.0,
+                    withdraw_fee: 0.0,
+                    confirms_required: 0,
+                }],
+                can_deposit,
+                can_withdraw,
+            }
+        })
+        .collect();
+
+    info!("Fetched Gate.io wallet status: {} assets", wallet_status.len());
+    Ok(wallet_status)
+}
+
+/// Gate.io balance response
+#[derive(Debug, Deserialize)]
+struct GateIOSpotAccount {
+    currency: String,
+    available: String,
+    locked: String,
+}
+
+/// Fetch Gate.io balances
+async fn fetch_gateio_balances() -> Result<Vec<AssetBalance>, String> {
+    let creds = credentials::load_credentials();
+
+    if creds.gateio.api_key.is_empty() || creds.gateio.secret_key.is_empty() {
+        info!("Gate.io API keys not configured for balance query");
+        return Ok(Vec::new());
+    }
+
+    let client = Client::new();
+    let timestamp = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs())
+    .to_string();
+
+    let method = "GET";
+    let path = "/api/v4/spot/accounts";
+    let query = "";
+    let body = "";
+
+    let signature = sign_gateio(&timestamp, method, path, query, body, &creds.gateio.secret_key);
+
+    let resp = client
+        .get("https://api.gateio.ws/api/v4/spot/accounts")
+        .header("KEY", &creds.gateio.api_key)
+        .header("SIGN", signature)
+        .header("Timestamp", &timestamp)
+        .send()
+        .await
+        .map_err(|e| format!("Gate.io balance request failed: {}", e))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        return Err(format!("Gate.io balance API error: status={}, body={}", status, body));
+    }
+
+    let accounts: Vec<GateIOSpotAccount> = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse Gate.io balance: {}", e))?;
+
+    let balances: Vec<AssetBalance> = accounts
+        .into_iter()
+        .filter_map(|acc| {
+            let available: f64 = acc.available.parse().unwrap_or(0.0);
+            let locked: f64 = acc.locked.parse().unwrap_or(0.0);
+            let total = available + locked;
+
+            if total > 0.0 {
+                Some(AssetBalance {
+                    asset: acc.currency,
+                    free: available,
+                    locked,
+                    total,
+                    usd_value: None,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    info!("Gate.io fetched {} balances with value", balances.len());
+    Ok(balances)
+}
+
+/// Fetch Gate.io wallet with balances and status
+pub async fn fetch_gateio_wallet() -> Result<ExchangeWalletInfo, String> {
+    // Fetch wallet status first
+    let wallet_status = fetch_gateio_wallet_status().await.unwrap_or_else(|e| {
+        warn!("Failed to fetch Gate.io wallet status: {}", e);
+        Vec::new()
+    });
+
+    // Fetch balances
+    let balances = fetch_gateio_balances().await.unwrap_or_else(|e| {
+        warn!("Failed to fetch Gate.io balances: {}", e);
+        Vec::new()
+    });
+
+    info!(
+        "Fetched Gate.io wallet: {} balances, {} assets with status",
+        balances.len(),
+        wallet_status.len()
+    );
+
+    Ok(ExchangeWalletInfo {
+        exchange: "GateIO".to_string(),
+        balances,
+        wallet_status,
+        last_updated: timestamp_ms(),
+    })
+}
+
+// ============================================================================
 // Aggregate function
 // ============================================================================
 
@@ -1421,12 +1626,13 @@ pub async fn fetch_all_wallets() -> Vec<ExchangeWalletInfo> {
     let mut results = Vec::new();
 
     // Fetch in parallel
-    let (binance, upbit, bithumb, coinbase, bybit) = tokio::join!(
+    let (binance, upbit, bithumb, coinbase, bybit, gateio) = tokio::join!(
         fetch_binance_wallet(),
         fetch_upbit_wallet(),
         fetch_bithumb_wallet(),
         fetch_coinbase_wallet(),
-        fetch_bybit_wallet()
+        fetch_bybit_wallet(),
+        fetch_gateio_wallet()
     );
 
     if let Ok(info) = binance {
@@ -1442,6 +1648,9 @@ pub async fn fetch_all_wallets() -> Vec<ExchangeWalletInfo> {
         results.push(info);
     }
     if let Ok(info) = bybit {
+        results.push(info);
+    }
+    if let Ok(info) = gateio {
         results.push(info);
     }
 
