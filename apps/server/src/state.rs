@@ -1,7 +1,7 @@
 //! Application state management.
 
 use crate::config::AppConfig;
-use arbitrage_core::{symbol_to_pair_id, ArbitrageOpportunity, Exchange, FixedPoint};
+use arbitrage_core::{symbol_to_pair_id, ArbitrageOpportunity, Exchange, FixedPoint, QuoteCurrency};
 use arbitrage_engine::{DetectorConfig, OpportunityDetector, PremiumMatrix};
 use arbitrage_feeds::{CommonMarkets, PriceAggregator};
 use dashmap::DashMap;
@@ -100,7 +100,16 @@ pub struct AppState {
     pub running: AtomicBool,
     /// USDT/KRW price from Upbit (for KRW to USD conversion).
     /// Stored as FixedPoint (e.g., 1438.5 KRW per USDT).
-    usdt_krw_price: AtomicU64,
+    upbit_usdt_krw: AtomicU64,
+    /// USDT/KRW price from Bithumb.
+    /// Stored as FixedPoint.
+    bithumb_usdt_krw: AtomicU64,
+    /// USDT/USD price (e.g., 1.0001 USD per USDT).
+    /// Stored as FixedPoint.
+    usdt_usd_price: AtomicU64,
+    /// USDC/USDT price for USDC/USD calculation.
+    /// Stored as FixedPoint.
+    usdc_usdt_price: AtomicU64,
     /// Common markets across exchanges.
     pub common_markets: RwLock<Option<CommonMarkets>>,
 }
@@ -118,24 +127,78 @@ impl AppState {
             opportunities: RwLock::new(Vec::new()),
             stats: BotStats::new(),
             running: AtomicBool::new(false),
-            usdt_krw_price: AtomicU64::new(0), // 0 means not yet received
+            upbit_usdt_krw: AtomicU64::new(0), // 0 means not yet received
+            bithumb_usdt_krw: AtomicU64::new(0), // 0 means not yet received
+            usdt_usd_price: AtomicU64::new(FixedPoint::from_f64(1.0).0), // Default 1:1
+            usdc_usdt_price: AtomicU64::new(FixedPoint::from_f64(1.0).0), // Default 1:1
             common_markets: RwLock::new(None),
         }
     }
 
     /// Update USDT/KRW price from Upbit.
-    pub fn update_usdt_krw_price(&self, price: FixedPoint) {
-        self.usdt_krw_price.store(price.0, Ordering::Relaxed);
+    pub fn update_upbit_usdt_krw(&self, price: FixedPoint) {
+        self.upbit_usdt_krw.store(price.0, Ordering::Relaxed);
     }
 
-    /// Get USDT/KRW price. Returns None if not yet received.
-    pub fn get_usdt_krw_price(&self) -> Option<FixedPoint> {
-        let price = self.usdt_krw_price.load(Ordering::Relaxed);
+    /// Get Upbit USDT/KRW price. Returns None if not yet received.
+    pub fn get_upbit_usdt_krw(&self) -> Option<FixedPoint> {
+        let price = self.upbit_usdt_krw.load(Ordering::Relaxed);
         if price == 0 {
             None
         } else {
             Some(FixedPoint(price))
         }
+    }
+
+    /// Update USDT/KRW price from Bithumb.
+    pub fn update_bithumb_usdt_krw(&self, price: FixedPoint) {
+        self.bithumb_usdt_krw.store(price.0, Ordering::Relaxed);
+    }
+
+    /// Get Bithumb USDT/KRW price. Returns None if not yet received.
+    pub fn get_bithumb_usdt_krw(&self) -> Option<FixedPoint> {
+        let price = self.bithumb_usdt_krw.load(Ordering::Relaxed);
+        if price == 0 {
+            None
+        } else {
+            Some(FixedPoint(price))
+        }
+    }
+
+    /// Get USDT/KRW price for a specific exchange.
+    pub fn get_usdt_krw_for_exchange(&self, exchange: Exchange) -> Option<FixedPoint> {
+        match exchange {
+            Exchange::Upbit => self.get_upbit_usdt_krw(),
+            Exchange::Bithumb => self.get_bithumb_usdt_krw(),
+            _ => None, // Non-KRW exchanges don't need USDT/KRW
+        }
+    }
+
+    /// Update USDT/USD price from exchange feed.
+    pub fn update_usdt_usd_price(&self, price: FixedPoint) {
+        self.usdt_usd_price.store(price.0, Ordering::Relaxed);
+    }
+
+    /// Get USDT/USD price.
+    pub fn get_usdt_usd_price(&self) -> FixedPoint {
+        FixedPoint(self.usdt_usd_price.load(Ordering::Relaxed))
+    }
+
+    /// Update USDC/USDT price from exchange feed.
+    pub fn update_usdc_usdt_price(&self, price: FixedPoint) {
+        self.usdc_usdt_price.store(price.0, Ordering::Relaxed);
+    }
+
+    /// Get USDC/USDT price.
+    pub fn get_usdc_usdt_price(&self) -> FixedPoint {
+        FixedPoint(self.usdc_usdt_price.load(Ordering::Relaxed))
+    }
+
+    /// Get USDC/USD price (calculated from USDC/USDT * USDT/USD).
+    pub fn get_usdc_usd_price(&self) -> FixedPoint {
+        let usdc_usdt = self.get_usdc_usdt_price().to_f64();
+        let usdt_usd = self.get_usdt_usd_price().to_f64();
+        FixedPoint::from_f64(usdc_usdt * usdt_usd)
     }
 
     /// Update common markets.
@@ -164,16 +227,21 @@ impl AppState {
         self.running.load(Ordering::SeqCst)
     }
 
-    /// Update price from a feed.
+    /// Update price from a feed with default quote (USD).
     pub async fn update_price(&self, exchange: Exchange, pair_id: u32, price: FixedPoint) {
+        self.update_price_with_quote(exchange, pair_id, price, QuoteCurrency::USD).await;
+    }
+
+    /// Update price from a feed with specified quote currency.
+    pub async fn update_price_with_quote(&self, exchange: Exchange, pair_id: u32, price: FixedPoint, quote: QuoteCurrency) {
         // Update price aggregator
-        let tick = arbitrage_core::PriceTick::new(exchange, pair_id, price, price, price);
+        let tick = arbitrage_core::PriceTick::with_quote(exchange, pair_id, price, price, price, quote);
         self.prices.update(tick);
 
-        // Update detector
+        // Update detector with quote
         {
             let mut detector = self.detector.write().await;
-            detector.update_price(exchange, pair_id, price);
+            detector.update_price_with_quote(exchange, pair_id, price, quote);
         }
 
         self.stats.record_price_update();
@@ -220,7 +288,14 @@ impl AppState {
     /// Returns all detected opportunities (both new and updated).
     pub async fn detect_opportunities(&self, pair_id: u32) -> Vec<ArbitrageOpportunity> {
         let mut detector = self.detector.write().await;
-        let opps = detector.detect(pair_id);
+
+        // Get exchange rates for kimchi/tether premium calculation
+        // Use Upbit's USDT/KRW as both usd_krw and usdt_krw base
+        let usdt_krw = self.get_upbit_usdt_krw().map(|p| p.to_f64());
+        // For kimchi premium, we use the API rate if available, otherwise fall back to USDT/KRW
+        let usd_krw = crate::exchange_rate::get_api_rate().or(usdt_krw);
+
+        let opps = detector.detect_with_rates(pair_id, usd_krw, usdt_krw);
 
         if !opps.is_empty() {
             // Store recent opportunities (deduplicate by exchange pair)

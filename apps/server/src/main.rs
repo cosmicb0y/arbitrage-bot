@@ -12,13 +12,13 @@ use clap::Parser;
 use config::{AppConfig, ExecutionMode};
 use state::{create_state, SharedState};
 use std::time::Duration;
-use tracing::{info, warn, Level};
+use tracing::{debug, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use arbitrage_core::{Exchange, FixedPoint, PriceTick};
+use arbitrage_core::{Exchange, FixedPoint, PriceTick, QuoteCurrency};
 use arbitrage_feeds::{
-    BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, FeedConfig, GateIOAdapter,
-    MarketDiscovery, UpbitAdapter, WsClient, WsMessage,
+    load_mappings, BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, FeedConfig,
+    GateIOAdapter, MarketDiscovery, SymbolMappings, UpbitAdapter, WsClient, WsMessage,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -209,25 +209,25 @@ async fn run_stats_reporter(state: SharedState, broadcast_tx: BroadcastSender) {
     }
 }
 
-/// Convert Upbit KRW price to USD using exchange rate API.
+/// Convert KRW price to USD using exchange-specific USDT/KRW rate.
+/// Uses USDT/KRW from the same exchange, then converts via USDT/USD.
 /// Returns None if exchange rate is not available yet.
-fn convert_krw_to_usd(krw_price: FixedPoint) -> Option<FixedPoint> {
-    let rate = exchange_rate::get_api_rate()?;
-    if rate > 0.0 {
-        Some(FixedPoint::from_f64(krw_price.to_f64() / rate))
-    } else {
-        None
-    }
-}
+fn convert_krw_to_usd_for_exchange(
+    krw_price: FixedPoint,
+    exchange: Exchange,
+    state: &SharedState,
+) -> Option<FixedPoint> {
+    // Get exchange-specific USDT/KRW rate
+    let usdt_krw = state.get_usdt_krw_for_exchange(exchange)?;
+    let usdt_usd = state.get_usdt_usd_price();
 
-/// Convert Upbit KRW price tick to USD.
-/// Returns None if exchange rate is not available yet.
-fn convert_upbit_tick_to_usd(tick: &PriceTick) -> Option<PriceTick> {
-    let price_usd = convert_krw_to_usd(tick.price())?;
-    let bid_usd = convert_krw_to_usd(tick.bid())?;
-    let ask_usd = convert_krw_to_usd(tick.ask())?;
+    // KRW -> USDT -> USD
+    // price_usdt = krw_price / usdt_krw
+    // price_usd = price_usdt * usdt_usd
+    let price_usdt = krw_price.to_f64() / usdt_krw.to_f64();
+    let price_usd = price_usdt * usdt_usd.to_f64();
 
-    Some(PriceTick::new(tick.exchange(), tick.pair_id(), price_usd, bid_usd, ask_usd))
+    Some(FixedPoint::from_f64(price_usd))
 }
 
 /// Process Upbit ticker data by market code.
@@ -236,32 +236,35 @@ fn process_upbit_ticker(
     price: FixedPoint,
     state: &SharedState,
     broadcast_tx: &BroadcastSender,
+    symbol_mappings: &SymbolMappings,
 ) {
     // Handle USDT/KRW for exchange rate
     if UpbitAdapter::is_usdt_market(code) {
-        state.update_usdt_krw_price(price);
+        state.update_upbit_usdt_krw(price);
         let rate = price.to_f64();
-        ws_server::broadcast_exchange_rate(broadcast_tx, rate);
-        tracing::debug!("Updated USDT/KRW rate: {:.2}", rate);
+        ws_server::broadcast_exchange_rate(broadcast_tx, state, rate);
+        tracing::debug!("Updated Upbit USDT/KRW rate: {:.2}", rate);
         return;
     }
 
     // Handle trading pairs - extract symbol from code (e.g., "KRW-BTC" -> "BTC")
     if let Some(symbol) = UpbitAdapter::extract_base_symbol(code) {
-        let pair_id = arbitrage_core::symbol_to_pair_id(&symbol);
+        // Use canonical name if mapping exists
+        let display_symbol = symbol_mappings.canonical_name("Upbit", &symbol);
+        let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
 
-        // Convert KRW to USD and broadcast
+        // Convert KRW to USD using Upbit's USDT/KRW rate
         // Skip if exchange rate is not available yet
-        if let Some(price_usd) = convert_krw_to_usd(price) {
+        if let Some(price_usd) = convert_krw_to_usd_for_exchange(price, Exchange::Upbit, state) {
             let tick_usd = PriceTick::new(Exchange::Upbit, pair_id, price_usd, price_usd, price_usd);
 
-            // Update state asynchronously (fire and forget for now)
+            // Update state asynchronously with KRW quote
             let state_clone = state.clone();
             tokio::spawn(async move {
-                state_clone.update_price(Exchange::Upbit, pair_id, price_usd).await;
+                state_clone.update_price_with_quote(Exchange::Upbit, pair_id, price_usd, QuoteCurrency::KRW).await;
             });
 
-            ws_server::broadcast_price(broadcast_tx, Exchange::Upbit, pair_id, &symbol, &tick_usd);
+            ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Upbit, pair_id, &display_symbol, Some("KRW"), &tick_usd);
         }
     }
 }
@@ -271,6 +274,7 @@ async fn run_upbit_feed(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
+    symbol_mappings: Arc<SymbolMappings>,
 ) {
     info!("Starting Upbit live feed processor");
 
@@ -283,18 +287,18 @@ async fn run_upbit_feed(
             WsMessage::Text(text) => {
                 // Parse ticker with market code
                 if let Ok((code, price)) = UpbitAdapter::parse_ticker_with_code(&text) {
-                    process_upbit_ticker(&code, price, &state, &broadcast_tx);
+                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
                 }
             }
             WsMessage::Binary(data) => {
                 // Upbit sends binary MessagePack data
                 if let Ok((code, price)) = UpbitAdapter::parse_ticker_binary_with_code(&data) {
-                    process_upbit_ticker(&code, price, &state, &broadcast_tx);
+                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
                 } else {
                     // Fallback: try parsing as UTF-8 JSON
                     if let Ok(text) = String::from_utf8(data) {
                         if let Ok((code, price)) = UpbitAdapter::parse_ticker_with_code(&text) {
-                            process_upbit_ticker(&code, price, &state, &broadcast_tx);
+                            process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
                         }
                     }
                 }
@@ -319,6 +323,7 @@ async fn run_binance_feed(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
+    symbol_mappings: Arc<SymbolMappings>,
 ) {
     info!("Starting Binance live feed processor");
 
@@ -329,11 +334,25 @@ async fn run_binance_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Auto-detect symbol and pair_id from message
-                if let Ok((tick, symbol)) = BinanceAdapter::parse_ticker_with_symbol(&text) {
-                    let pair_id = tick.pair_id();
-                    state.update_price(Exchange::Binance, pair_id, tick.price()).await;
-                    ws_server::broadcast_price(&broadcast_tx, Exchange::Binance, pair_id, &symbol, &tick);
+                // Auto-detect symbol, quote currency, and pair_id from message
+                if let Ok((tick, symbol, quote)) = BinanceAdapter::parse_ticker_with_base_quote(&text) {
+                    // Check for stablecoin rate updates
+                    if symbol == "USDT" && quote == "USD" {
+                        state.update_usdt_usd_price(tick.price());
+                        continue;
+                    }
+                    if symbol == "USDC" && quote == "USDT" {
+                        state.update_usdc_usdt_price(tick.price());
+                        continue;
+                    }
+
+                    // Use canonical name if mapping exists
+                    let display_symbol = symbol_mappings.canonical_name("Binance", &symbol);
+                    let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                    let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+
+                    state.update_price_with_quote(Exchange::Binance, pair_id, tick.price(), quote_currency).await;
+                    ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Binance, pair_id, &display_symbol, Some(&quote), &tick);
                 }
             }
             WsMessage::Connected => {
@@ -357,6 +376,7 @@ async fn run_coinbase_feed(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
+    symbol_mappings: Arc<SymbolMappings>,
 ) {
     info!("Starting Coinbase live feed processor");
 
@@ -367,11 +387,16 @@ async fn run_coinbase_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Auto-detect product and pair_id from message
-                if let Ok((tick, symbol)) = CoinbaseAdapter::parse_ticker_with_symbol(&text) {
-                    let pair_id = tick.pair_id();
-                    state.update_price(Exchange::Coinbase, pair_id, tick.price()).await;
-                    ws_server::broadcast_price(&broadcast_tx, Exchange::Coinbase, pair_id, &symbol, &tick);
+                // Auto-detect product, quote currency, and pair_id from message
+                if let Ok((tick, symbol, quote)) = CoinbaseAdapter::parse_ticker_with_base_quote(&text) {
+                    // Use canonical name if mapping exists
+                    let display_symbol = symbol_mappings.canonical_name("Coinbase", &symbol);
+                    let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                    // Treat Coinbase USD as USDC (native USD markets behave like USDC)
+                    let normalized_quote = if quote == "USD" { "USDC" } else { &quote };
+                    let quote_currency = QuoteCurrency::from_str(normalized_quote).unwrap_or(QuoteCurrency::USDC);
+                    state.update_price_with_quote(Exchange::Coinbase, pair_id, tick.price(), quote_currency).await;
+                    ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Coinbase, pair_id, &display_symbol, Some(normalized_quote), &tick);
                 }
             }
             WsMessage::Connected => {
@@ -396,32 +421,35 @@ fn process_bithumb_ticker(
     price: FixedPoint,
     state: &SharedState,
     broadcast_tx: &BroadcastSender,
+    symbol_mappings: &SymbolMappings,
 ) {
-    // Handle USDT/KRW for exchange rate (if Bithumb has it)
+    // Handle USDT/KRW for exchange rate
     if BithumbAdapter::is_usdt_market(code) {
-        state.update_usdt_krw_price(price);
+        state.update_bithumb_usdt_krw(price);
         let rate = price.to_f64();
-        ws_server::broadcast_exchange_rate(broadcast_tx, rate);
-        tracing::debug!("Updated USDT/KRW rate from Bithumb: {:.2}", rate);
+        ws_server::broadcast_exchange_rate(broadcast_tx, state, rate);
+        tracing::debug!("Updated Bithumb USDT/KRW rate: {:.2}", rate);
         return;
     }
 
     // Handle trading pairs - extract symbol from code (e.g., "KRW-BTC" -> "BTC")
     if let Some(symbol) = BithumbAdapter::extract_base_symbol(code) {
-        let pair_id = arbitrage_core::symbol_to_pair_id(&symbol);
+        // Use canonical name if mapping exists
+        let display_symbol = symbol_mappings.canonical_name("Bithumb", &symbol);
+        let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
 
-        // Convert KRW to USD and broadcast
+        // Convert KRW to USD using Bithumb's USDT/KRW rate
         // Skip if exchange rate is not available yet
-        if let Some(price_usd) = convert_krw_to_usd(price) {
+        if let Some(price_usd) = convert_krw_to_usd_for_exchange(price, Exchange::Bithumb, state) {
             let tick_usd = PriceTick::new(Exchange::Bithumb, pair_id, price_usd, price_usd, price_usd);
 
-            // Update state asynchronously (fire and forget for now)
+            // Update state asynchronously with KRW quote
             let state_clone = state.clone();
             tokio::spawn(async move {
-                state_clone.update_price(Exchange::Bithumb, pair_id, price_usd).await;
+                state_clone.update_price_with_quote(Exchange::Bithumb, pair_id, price_usd, QuoteCurrency::KRW).await;
             });
 
-            ws_server::broadcast_price(broadcast_tx, Exchange::Bithumb, pair_id, &symbol, &tick_usd);
+            ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Bithumb, pair_id, &display_symbol, Some("KRW"), &tick_usd);
         }
     }
 }
@@ -431,6 +459,7 @@ async fn run_bithumb_feed(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
+    symbol_mappings: Arc<SymbolMappings>,
 ) {
     info!("Starting Bithumb live feed processor");
 
@@ -443,18 +472,18 @@ async fn run_bithumb_feed(
             WsMessage::Text(text) => {
                 // Parse ticker with market code
                 if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
-                    process_bithumb_ticker(&code, price, &state, &broadcast_tx);
+                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
                 }
             }
             WsMessage::Binary(data) => {
                 // Bithumb sends binary MessagePack data
                 if let Ok((code, price)) = BithumbAdapter::parse_ticker_binary_with_code(&data) {
-                    process_bithumb_ticker(&code, price, &state, &broadcast_tx);
+                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
                 } else {
                     // Fallback: try parsing as UTF-8 JSON
                     if let Ok(text) = String::from_utf8(data) {
                         if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
-                            process_bithumb_ticker(&code, price, &state, &broadcast_tx);
+                            process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
                         }
                     }
                 }
@@ -479,6 +508,7 @@ async fn run_bybit_feed(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
+    symbol_mappings: Arc<SymbolMappings>,
 ) {
     info!("Starting Bybit live feed processor");
 
@@ -489,11 +519,14 @@ async fn run_bybit_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Parse ticker with symbol (auto-detects pair_id from symbol)
-                if let Ok((tick, symbol)) = BybitAdapter::parse_ticker_with_symbol(&text) {
-                    let pair_id = tick.pair_id();
-                    state.update_price(Exchange::Bybit, pair_id, tick.price()).await;
-                    ws_server::broadcast_price(&broadcast_tx, Exchange::Bybit, pair_id, &symbol, &tick);
+                // Parse ticker with symbol and quote currency (auto-detects pair_id from symbol)
+                if let Ok((tick, symbol, quote)) = BybitAdapter::parse_ticker_with_base_quote(&text) {
+                    // Use canonical name if mapping exists
+                    let display_symbol = symbol_mappings.canonical_name("Bybit", &symbol);
+                    let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                    let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+                    state.update_price_with_quote(Exchange::Bybit, pair_id, tick.price(), quote_currency).await;
+                    ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Bybit, pair_id, &display_symbol, Some(&quote), &tick);
                 }
             }
             WsMessage::Binary(_) => {
@@ -518,6 +551,7 @@ async fn run_gateio_feed(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
+    symbol_mappings: Arc<SymbolMappings>,
 ) {
     info!("Starting Gate.io live feed processor");
 
@@ -528,11 +562,14 @@ async fn run_gateio_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Parse ticker with symbol (auto-detects pair_id from symbol)
-                if let Ok((tick, symbol)) = GateIOAdapter::parse_ticker_with_symbol(&text) {
-                    let pair_id = tick.pair_id();
-                    state.update_price(Exchange::GateIO, pair_id, tick.price()).await;
-                    ws_server::broadcast_price(&broadcast_tx, Exchange::GateIO, pair_id, &symbol, &tick);
+                // Parse ticker with symbol and quote currency (auto-detects pair_id from symbol)
+                if let Ok((tick, symbol, quote)) = GateIOAdapter::parse_ticker_with_base_quote(&text) {
+                    // Use canonical name if mapping exists
+                    let display_symbol = symbol_mappings.canonical_name("GateIO", &symbol);
+                    let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                    let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+                    state.update_price_with_quote(Exchange::GateIO, pair_id, tick.price(), quote_currency).await;
+                    ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::GateIO, pair_id, &display_symbol, Some(&quote), &tick);
                 }
             }
             WsMessage::Binary(_) => {
@@ -557,6 +594,7 @@ async fn run_gateio_feed(
 async fn spawn_live_feeds(
     state: SharedState,
     broadcast_tx: BroadcastSender,
+    symbol_mappings: &SymbolMappings,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::new();
 
@@ -565,30 +603,68 @@ async fn spawn_live_feeds(
     let all_markets = discovery.fetch_all().await;
 
     // Find common markets across exchanges we support for live feeds
+    // Apply symbol mappings to exclude mismatched symbols
     let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb", "Bybit", "GateIO"];
-    let common = MarketDiscovery::find_markets_on_n_exchanges(&all_markets, &exchanges, 2);
+    let common = MarketDiscovery::find_markets_on_n_exchanges_with_mappings(
+        &all_markets,
+        &exchanges,
+        2,
+        Some(symbol_mappings),
+    );
 
-    // Get symbols for each exchange from common markets
-    let mut binance_symbols: Vec<String> = Vec::new();
-    let mut coinbase_symbols: Vec<String> = Vec::new();
-    let mut upbit_symbols: Vec<String> = vec!["KRW-USDT".to_string()]; // Always include for exchange rate
-    let mut bithumb_symbols: Vec<String> = Vec::new();
-    let mut bybit_symbols: Vec<String> = Vec::new();
-    let mut gateio_symbols: Vec<String> = Vec::new();
+    // Get symbols for each exchange from by_quote markets (includes both USDT and USDC)
+    // This ensures we subscribe to all quote variants (BTC-USDT, BTC-USDC, etc.)
+    use std::collections::HashSet;
+    let mut binance_set: HashSet<String> = HashSet::new();
+    let mut coinbase_set: HashSet<String> = HashSet::new();
+    let mut upbit_set: HashSet<String> = HashSet::new();
+    let mut bithumb_set: HashSet<String> = HashSet::new();
+    let mut bybit_set: HashSet<String> = HashSet::new();
+    let mut gateio_set: HashSet<String> = HashSet::new();
 
-    for (base, exchange_markets) in &common.common {
+    // Always include USDT for exchange rate
+    upbit_set.insert("KRW-USDT".to_string());
+
+    // Use by_quote to get all quote variants (USDT, USDC, KRW)
+    // by_quote already filters to markets on 2+ exchanges
+    for (key, exchange_markets) in &common.by_quote {
         for (exchange, market_info) in exchange_markets {
             match exchange.as_str() {
-                "Binance" => binance_symbols.push(market_info.symbol.to_lowercase()),
-                "Coinbase" => coinbase_symbols.push(market_info.symbol.clone()),
-                "Upbit" => upbit_symbols.push(market_info.symbol.clone()),
-                "Bithumb" => bithumb_symbols.push(market_info.symbol.clone()),
-                "Bybit" => bybit_symbols.push(market_info.symbol.clone()),
-                "GateIO" => gateio_symbols.push(market_info.symbol.clone()),
+                "Binance" => { binance_set.insert(market_info.symbol.to_lowercase()); }
+                "Coinbase" => { coinbase_set.insert(market_info.symbol.clone()); }
+                "Upbit" => { upbit_set.insert(market_info.symbol.clone()); }
+                "Bithumb" => { bithumb_set.insert(market_info.symbol.clone()); }
+                "Bybit" => { bybit_set.insert(market_info.symbol.clone()); }
+                "GateIO" => { gateio_set.insert(market_info.symbol.clone()); }
                 _ => {}
             }
         }
+        // Log each market group for debugging
+        if key.starts_with("BTC/") || key.starts_with("ETH/") {
+            debug!(
+                "📊 {} -> {} exchanges: {:?}",
+                key,
+                exchange_markets.len(),
+                exchange_markets.iter().map(|(ex, m)| format!("{}:{}", ex, m.symbol)).collect::<Vec<_>>()
+            );
+        }
     }
+
+    // Log by_quote stats
+    let usdt_markets = common.by_quote.keys().filter(|k| k.ends_with("/USDT")).count();
+    let usdc_markets = common.by_quote.keys().filter(|k| k.ends_with("/USDC")).count();
+    let krw_markets = common.by_quote.keys().filter(|k| k.ends_with("/KRW")).count();
+    info!(
+        "📊 By quote markets: {} USDT, {} USDC, {} KRW (on 2+ exchanges)",
+        usdt_markets, usdc_markets, krw_markets
+    );
+
+    let binance_symbols: Vec<String> = binance_set.into_iter().collect();
+    let coinbase_symbols: Vec<String> = coinbase_set.into_iter().collect();
+    let upbit_symbols: Vec<String> = upbit_set.into_iter().collect();
+    let bithumb_symbols: Vec<String> = bithumb_set.into_iter().collect();
+    let bybit_symbols: Vec<String> = bybit_set.into_iter().collect();
+    let gateio_symbols: Vec<String> = gateio_set.into_iter().collect();
 
     // Subscribe to all common markets
     // - Binance: supports up to 1024 streams per connection
@@ -610,11 +686,20 @@ async fn spawn_live_feeds(
     // Register all symbols for opportunity detection
     state.register_common_markets(&common).await;
 
+    // Convert symbol_mappings to Arc for sharing across tasks
+    let symbol_mappings_arc = Arc::new(symbol_mappings.clone());
+
     // Binance
     if !binance_symbols.is_empty() {
         let binance_config = FeedConfig::for_exchange(Exchange::Binance);
         let (binance_tx, binance_rx) = mpsc::channel(1000);
-        let binance_subscribe = BinanceAdapter::subscribe_message(&binance_symbols);
+
+        // Add stablecoin rate symbols to subscription
+        let mut all_binance_symbols = binance_symbols.clone();
+        all_binance_symbols.push("USDTUSD".to_string());
+        all_binance_symbols.push("USDCUSDT".to_string());
+
+        let binance_subscribe = BinanceAdapter::subscribe_message(&all_binance_symbols);
 
         let binance_client = WsClient::new(binance_config.clone(), binance_tx);
         handles.push(tokio::spawn(async move {
@@ -625,8 +710,9 @@ async fn spawn_live_feeds(
 
         let binance_state = state.clone();
         let binance_broadcast = broadcast_tx.clone();
+        let binance_mappings = symbol_mappings_arc.clone();
         handles.push(tokio::spawn(async move {
-            run_binance_feed(binance_state, binance_broadcast, binance_rx).await;
+            run_binance_feed(binance_state, binance_broadcast, binance_rx, binance_mappings).await;
         }));
     }
 
@@ -645,8 +731,9 @@ async fn spawn_live_feeds(
 
         let coinbase_state = state.clone();
         let coinbase_broadcast = broadcast_tx.clone();
+        let coinbase_mappings = symbol_mappings_arc.clone();
         handles.push(tokio::spawn(async move {
-            run_coinbase_feed(coinbase_state, coinbase_broadcast, coinbase_rx).await;
+            run_coinbase_feed(coinbase_state, coinbase_broadcast, coinbase_rx, coinbase_mappings).await;
         }));
     }
 
@@ -665,8 +752,9 @@ async fn spawn_live_feeds(
 
         let upbit_state = state.clone();
         let upbit_broadcast = broadcast_tx.clone();
+        let upbit_mappings = symbol_mappings_arc.clone();
         handles.push(tokio::spawn(async move {
-            run_upbit_feed(upbit_state, upbit_broadcast, upbit_rx).await;
+            run_upbit_feed(upbit_state, upbit_broadcast, upbit_rx, upbit_mappings).await;
         }));
     }
 
@@ -685,8 +773,9 @@ async fn spawn_live_feeds(
 
         let bithumb_state = state.clone();
         let bithumb_broadcast = broadcast_tx.clone();
+        let bithumb_mappings = symbol_mappings_arc.clone();
         handles.push(tokio::spawn(async move {
-            run_bithumb_feed(bithumb_state, bithumb_broadcast, bithumb_rx).await;
+            run_bithumb_feed(bithumb_state, bithumb_broadcast, bithumb_rx, bithumb_mappings).await;
         }));
     }
 
@@ -706,8 +795,9 @@ async fn spawn_live_feeds(
 
         let bybit_state = state.clone();
         let bybit_broadcast = broadcast_tx.clone();
+        let bybit_mappings = symbol_mappings_arc.clone();
         handles.push(tokio::spawn(async move {
-            run_bybit_feed(bybit_state, bybit_broadcast, bybit_rx).await;
+            run_bybit_feed(bybit_state, bybit_broadcast, bybit_rx, bybit_mappings).await;
         }));
     }
 
@@ -726,8 +816,9 @@ async fn spawn_live_feeds(
 
         let gateio_state = state.clone();
         let gateio_broadcast = broadcast_tx.clone();
+        let gateio_mappings = symbol_mappings_arc.clone();
         handles.push(tokio::spawn(async move {
-            run_gateio_feed(gateio_state, gateio_broadcast, gateio_rx).await;
+            run_gateio_feed(gateio_state, gateio_broadcast, gateio_rx, gateio_mappings).await;
         }));
     }
 
@@ -736,20 +827,40 @@ async fn spawn_live_feeds(
 
 /// Run market discovery loop - periodically fetches markets from exchanges
 /// and broadcasts common markets to clients.
-async fn run_market_discovery(state: SharedState, broadcast_tx: BroadcastSender) {
+async fn run_market_discovery(
+    state: SharedState,
+    broadcast_tx: BroadcastSender,
+    symbol_mappings: Arc<SymbolMappings>,
+) {
     info!("Starting market discovery loop");
 
     let discovery = MarketDiscovery::new();
     let exchanges = ["Binance", "Coinbase", "Upbit", "Bithumb", "Bybit", "GateIO"];
 
     loop {
-        info!("🔍 Fetching markets from exchanges...");
+        // Reload symbol mappings on each iteration (in case they were updated)
+        let current_mappings = load_mappings();
+        let excluded_count = current_mappings.excluded_pairs().len();
+        if excluded_count > 0 {
+            info!(
+                "🔍 Fetching markets from exchanges... ({} symbols excluded by mappings)",
+                excluded_count
+            );
+        } else {
+            info!("🔍 Fetching markets from exchanges...");
+        }
 
         let all_markets = discovery.fetch_all().await;
 
         if all_markets.len() >= 2 {
             // Find markets available on 2+ exchanges (not just all exchanges)
-            let common = MarketDiscovery::find_markets_on_n_exchanges(&all_markets, &exchanges, 2);
+            // Apply symbol mappings to exclude mismatched symbols
+            let common = MarketDiscovery::find_markets_on_n_exchanges_with_mappings(
+                &all_markets,
+                &exchanges,
+                2,
+                Some(&current_mappings),
+            );
 
             // Count markets by availability
             let on_all = common.common.values().filter(|v| v.len() == exchanges.len()).count();
@@ -817,6 +928,21 @@ async fn main() {
     info!("  Live Feeds: {}", args.live);
     info!("  WebSocket Port: {}", args.ws_port);
 
+    // Load symbol mappings for filtering mismatched coins
+    let symbol_mappings = Arc::new(load_mappings());
+    let excluded_count = symbol_mappings.excluded_pairs().len();
+    if excluded_count > 0 {
+        info!(
+            "  Symbol Mappings: {} excluded pairs loaded",
+            excluded_count
+        );
+        for (exchange, symbol) in symbol_mappings.excluded_pairs() {
+            info!("    - {}/{} excluded", exchange, symbol);
+        }
+    } else {
+        info!("  Symbol Mappings: none configured");
+    }
+
     // Create config
     let mut config = AppConfig::default();
     config.detector.min_premium_bps = args.min_premium;
@@ -841,7 +967,7 @@ async fn main() {
         Ok(rate) => {
             info!("Initial USD/KRW exchange rate: {:.2}", rate);
             // Broadcast to any already-connected clients
-            ws_server::broadcast_exchange_rate(&broadcast_tx, rate);
+            ws_server::broadcast_exchange_rate(&broadcast_tx, &state, rate);
         }
         Err(e) => {
             warn!("Failed to fetch initial exchange rate, using default: {}", e);
@@ -875,8 +1001,9 @@ async fn main() {
 
     // Start exchange rate updater for Upbit KRW to USD conversion
     let rate_broadcast = broadcast_tx.clone();
+    let rate_state = state.clone();
     tokio::spawn(async move {
-        exchange_rate::run_exchange_rate_updater(rate_broadcast).await;
+        exchange_rate::run_exchange_rate_updater(rate_broadcast, rate_state).await;
     });
 
     // Start wallet status updater for deposit/withdraw availability
@@ -888,14 +1015,15 @@ async fn main() {
     // Start market discovery loop
     let discovery_state = state.clone();
     let discovery_broadcast = broadcast_tx.clone();
+    let discovery_mappings = symbol_mappings.clone();
     tokio::spawn(async move {
-        run_market_discovery(discovery_state, discovery_broadcast).await;
+        run_market_discovery(discovery_state, discovery_broadcast, discovery_mappings).await;
     });
 
     // Spawn price source (live or simulated)
     let feed_handles: Vec<tokio::task::JoinHandle<()>> = if args.live {
         info!("📡 Using LIVE WebSocket feeds");
-        spawn_live_feeds(state.clone(), broadcast_tx.clone()).await
+        spawn_live_feeds(state.clone(), broadcast_tx.clone(), &symbol_mappings).await
     } else {
         info!("🎮 Using SIMULATED price feeds");
         let price_state = state.clone();

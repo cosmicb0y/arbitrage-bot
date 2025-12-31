@@ -33,6 +33,9 @@ pub struct WsPriceData {
     pub ask: f64,
     pub volume_24h: f64,
     pub timestamp: u64,
+    /// Quote currency (e.g., "USDT", "USDC", "USD", "KRW")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
 }
 
 /// Stats data for WebSocket broadcast.
@@ -52,7 +55,16 @@ pub struct WsOpportunityData {
     pub symbol: String,
     pub source_exchange: String,
     pub target_exchange: String,
+    /// Quote currency at source exchange (e.g., "USDT", "USDC", "KRW")
+    pub source_quote: String,
+    /// Quote currency at target exchange (e.g., "USDT", "USDC", "KRW")
+    pub target_quote: String,
+    /// Raw premium in basis points (direct price comparison)
     pub premium_bps: i32,
+    /// Kimchi premium: KRW converted via USD/KRW rate
+    pub kimchi_premium_bps: i32,
+    /// Tether premium: KRW converted via USDT/KRW rate
+    pub tether_premium_bps: i32,
     pub source_price: f64,
     pub target_price: f64,
     pub net_profit_bps: i32,
@@ -63,11 +75,19 @@ pub struct WsOpportunityData {
 /// Exchange rate data for WebSocket broadcast.
 #[derive(Debug, Clone, Serialize)]
 pub struct WsExchangeRateData {
-    /// USDT/KRW price from Upbit
+    /// USDT/KRW price from Upbit (for backward compatibility & kimchi premium)
     pub usd_krw: f64,
-    /// USD/KRW rate from exchange rate API (optional)
+    /// USDT/KRW from Upbit
+    pub upbit_usdt_krw: f64,
+    /// USDT/KRW from Bithumb
+    pub bithumb_usdt_krw: f64,
+    /// USD/KRW rate from exchange rate API (optional, for reference)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_rate: Option<f64>,
+    /// USDT/USD price from exchange feed
+    pub usdt_usd: f64,
+    /// USDC/USD price (calculated from USDC/USDT * USDT/USD)
+    pub usdc_usd: f64,
     pub timestamp: u64,
 }
 
@@ -203,7 +223,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
     // Send initial data
     let initial_prices = collect_prices(&state.app_state).await;
     let initial_stats = collect_stats(&state.app_state);
-    let initial_rate = collect_exchange_rate();
+    let initial_rate = collect_exchange_rate(&state.app_state);
     let initial_opportunities = collect_opportunities(&state.app_state).await;
     let initial_common_markets = collect_common_markets(&state.app_state).await;
     let initial_wallet_status = collect_wallet_status();
@@ -307,6 +327,7 @@ async fn collect_prices(state: &SharedState) -> Vec<WsPriceData> {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_millis() as u64,
+                    quote: None, // Legacy: quote currency not tracked in aggregator
                 });
             }
         }
@@ -328,10 +349,17 @@ fn collect_stats(state: &SharedState) -> WsStatsData {
 }
 
 /// Collect current exchange rate if loaded.
-fn collect_exchange_rate() -> Option<WsExchangeRateData> {
+fn collect_exchange_rate(state: &SharedState) -> Option<WsExchangeRateData> {
+    let upbit_usdt_krw = state.get_upbit_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+    let bithumb_usdt_krw = state.get_bithumb_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+
     exchange_rate::get_usd_krw_rate().map(|usd_krw| WsExchangeRateData {
         usd_krw,
+        upbit_usdt_krw,
+        bithumb_usdt_krw,
         api_rate: exchange_rate::get_api_rate(),
+        usdt_usd: state.get_usdt_usd_price().to_f64(),
+        usdc_usd: state.get_usdc_usd_price().to_f64(),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -392,18 +420,24 @@ async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
         .unwrap()
         .as_millis() as u64;
 
-    opps.iter().map(|opp| WsOpportunityData {
+    let result: Vec<WsOpportunityData> = opps.iter().map(|opp| WsOpportunityData {
         id: opp.id,
         symbol: opp.asset.symbol.to_string(),
         source_exchange: format!("{:?}", opp.source_exchange),
         target_exchange: format!("{:?}", opp.target_exchange),
+        source_quote: opp.source_quote.as_str().to_string(),
+        target_quote: opp.target_quote.as_str().to_string(),
         premium_bps: opp.premium_bps,
+        kimchi_premium_bps: opp.kimchi_premium_bps,
+        tether_premium_bps: opp.tether_premium_bps,
         source_price: FixedPoint(opp.source_price).to_f64(),
         target_price: FixedPoint(opp.target_price).to_f64(),
         net_profit_bps: (opp.net_profit_estimate / 100) as i32,
         confidence_score: opp.confidence_score,
         timestamp: now,
-    }).collect()
+    }).collect();
+
+    result
 }
 
 /// Collect current common markets from state.
@@ -437,6 +471,11 @@ async fn collect_common_markets(state: &SharedState) -> Option<WsCommonMarketsDa
 
 /// Broadcast a single price update (event-driven).
 pub fn broadcast_price(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, symbol: &str, tick: &PriceTick) {
+    broadcast_price_with_quote(tx, exchange, pair_id, symbol, None, tick);
+}
+
+/// Broadcast a single price update with quote currency (event-driven).
+pub fn broadcast_price_with_quote(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, symbol: &str, quote: Option<&str>, tick: &PriceTick) {
     let price_data = WsPriceData {
         exchange: format!("{:?}", exchange),
         symbol: symbol.to_string(),
@@ -449,6 +488,7 @@ pub fn broadcast_price(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, s
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64,
+        quote: quote.map(|q| q.to_string()),
     };
 
     let _ = tx.send(WsServerMessage::Price(price_data));
@@ -467,7 +507,11 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, opp: &arbitrage_core::Arbitra
         symbol: opp.asset.symbol.to_string(),
         source_exchange: format!("{:?}", opp.source_exchange),
         target_exchange: format!("{:?}", opp.target_exchange),
+        source_quote: opp.source_quote.as_str().to_string(),
+        target_quote: opp.target_quote.as_str().to_string(),
         premium_bps: opp.premium_bps,
+        kimchi_premium_bps: opp.kimchi_premium_bps,
+        tether_premium_bps: opp.tether_premium_bps,
         source_price: FixedPoint(opp.source_price).to_f64(),
         target_price: FixedPoint(opp.target_price).to_f64(),
         net_profit_bps: (opp.net_profit_estimate / 100) as i32, // Convert to bps approximation
@@ -482,10 +526,17 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, opp: &arbitrage_core::Arbitra
 }
 
 /// Broadcast exchange rate update to all clients.
-pub fn broadcast_exchange_rate(tx: &BroadcastSender, usd_krw: f64) {
+pub fn broadcast_exchange_rate(tx: &BroadcastSender, state: &SharedState, usd_krw: f64) {
+    let upbit_usdt_krw = state.get_upbit_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+    let bithumb_usdt_krw = state.get_bithumb_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+
     let rate_data = WsExchangeRateData {
         usd_krw,
+        upbit_usdt_krw,
+        bithumb_usdt_krw,
         api_rate: exchange_rate::get_api_rate(),
+        usdt_usd: state.get_usdt_usd_price().to_f64(),
+        usdc_usd: state.get_usdc_usd_price().to_f64(),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
