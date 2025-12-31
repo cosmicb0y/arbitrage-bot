@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, Fragment, useEffect, useRef } from "react";
 import { useCommonMarkets, useWalletStatus } from "../hooks/useTauri";
 import type { AssetWalletStatus, NetworkStatus } from "../types";
 
@@ -110,6 +110,25 @@ function Markets() {
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   // Track expanded rows: "asset-exchange" format
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  // Track which exchanges to show (empty = all)
+  const [selectedExchanges, setSelectedExchanges] = useState<Set<string>>(new Set());
+  const [showExchangeFilter, setShowExchangeFilter] = useState(false);
+  const filterRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
+        setShowExchangeFilter(false);
+      }
+    };
+    if (showExchangeFilter) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showExchangeFilter]);
 
   const toggleRow = (key: string) => {
     setExpandedRows((prev) => {
@@ -121,6 +140,28 @@ function Markets() {
       }
       return next;
     });
+  };
+
+  const toggleExchange = (exchange: string) => {
+    setSelectedExchanges((prev) => {
+      const next = new Set(prev);
+      if (next.has(exchange)) {
+        next.delete(exchange);
+      } else {
+        next.add(exchange);
+      }
+      return next;
+    });
+  };
+
+  const selectAllExchanges = () => {
+    setSelectedExchanges(new Set());
+  };
+
+  const clearAllExchanges = () => {
+    if (commonMarkets) {
+      setSelectedExchanges(new Set(commonMarkets.exchanges));
+    }
   };
 
   // Build lookup map: exchange -> asset -> status
@@ -147,6 +188,14 @@ function Markets() {
   }
 
   const exchangeCount = commonMarkets.exchanges.length;
+
+  // Filter exchanges to display
+  const visibleExchanges = useMemo(() => {
+    if (selectedExchanges.size === 0) {
+      return commonMarkets.exchanges;
+    }
+    return commonMarkets.exchanges.filter((e) => !selectedExchanges.has(e));
+  }, [commonMarkets.exchanges, selectedExchanges]);
 
   // Calculate exchange count for each base
   const basesWithCount = commonMarkets.common_bases.map((base) => ({
@@ -236,8 +285,62 @@ function Markets() {
           onChange={(e) => setSearchTerm(e.target.value)}
           className="flex-1 bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-primary-500"
         />
-        <div className="text-sm text-gray-400">
-          Exchanges: {commonMarkets.exchanges.join(", ")}
+        <div className="relative" ref={filterRef}>
+          <button
+            onClick={() => setShowExchangeFilter(!showExchangeFilter)}
+            className={`px-3 py-2 text-sm rounded-lg border transition-colors flex items-center gap-2 ${
+              selectedExchanges.size > 0
+                ? "bg-primary-600 border-primary-500 text-white"
+                : "bg-dark-700 border-dark-600 text-gray-400 hover:bg-dark-600"
+            }`}
+          >
+            <span>Exchanges</span>
+            <span className="text-xs bg-dark-600 px-1.5 py-0.5 rounded">
+              {visibleExchanges.length}/{exchangeCount}
+            </span>
+            <span className={`transition-transform ${showExchangeFilter ? "rotate-180" : ""}`}>
+              ▼
+            </span>
+          </button>
+          {showExchangeFilter && (
+            <div className="absolute right-0 mt-2 w-56 bg-dark-800 border border-dark-600 rounded-lg shadow-xl z-50">
+              <div className="p-2 border-b border-dark-600 flex justify-between">
+                <button
+                  onClick={selectAllExchanges}
+                  className="text-xs text-primary-400 hover:text-primary-300"
+                >
+                  Show All
+                </button>
+                <button
+                  onClick={clearAllExchanges}
+                  className="text-xs text-gray-400 hover:text-gray-300"
+                >
+                  Hide All
+                </button>
+              </div>
+              <div className="p-2 space-y-1 max-h-64 overflow-y-auto">
+                {commonMarkets.exchanges.map((exchange) => {
+                  const isVisible = !selectedExchanges.has(exchange);
+                  return (
+                    <label
+                      key={exchange}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-dark-700 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isVisible}
+                        onChange={() => toggleExchange(exchange)}
+                        className="w-4 h-4 rounded border-dark-500 bg-dark-600 text-primary-500 focus:ring-primary-500 focus:ring-offset-0"
+                      />
+                      <span className={isVisible ? "text-gray-200" : "text-gray-500"}>
+                        {exchange}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -247,7 +350,7 @@ function Markets() {
             <tr>
               <th className="text-left text-gray-400 text-sm p-4">Asset</th>
               <th className="text-left text-gray-400 text-sm p-4">Coverage</th>
-              {commonMarkets.exchanges.map((exchange) => (
+              {visibleExchanges.map((exchange) => (
                 <th key={exchange} className="text-left text-gray-400 text-sm p-4" colSpan={2}>
                   <div className="text-center">{exchange}</div>
                   <div className="flex justify-center gap-4 mt-1 text-xs font-normal">
@@ -264,8 +367,8 @@ function Markets() {
                 const markets = commonMarkets.markets[base] || [];
                 const isComplete = count === exchangeCount;
 
-                // Collect status info for all exchanges
-                const exchangeStatusInfo = commonMarkets.exchanges.map((exchange) => {
+                // Collect status info for visible exchanges
+                const exchangeStatusInfo = visibleExchanges.map((exchange) => {
                   const market = markets.find((m) => m.exchange === exchange);
                   const status = walletStatusMap[exchange]?.[base];
                   const info = getDepositWithdrawStatus(status);
@@ -343,10 +446,10 @@ function Markets() {
                     {/* Expanded network details */}
                     {expandedRows.has(base) && (
                       <tr key={`${base}-expanded`} className="bg-dark-750">
-                        <td colSpan={2 + commonMarkets.exchanges.length * 2} className="p-0">
+                        <td colSpan={2 + visibleExchanges.length * 2} className="p-0">
                           <div className="px-6 py-3 bg-dark-850">
                             <div className="text-xs text-gray-400 mb-2">Network Details</div>
-                            <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${commonMarkets.exchanges.length}, 1fr)` }}>
+                            <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${visibleExchanges.length}, 1fr)` }}>
                               {exchangeStatusInfo.map(({ exchange, market, info }) => (
                                 <div key={exchange} className="space-y-1">
                                   <div className="text-xs font-medium text-gray-300 mb-2">
@@ -408,7 +511,7 @@ function Markets() {
             ) : (
               <tr>
                 <td
-                  colSpan={2 + commonMarkets.exchanges.length * 2}
+                  colSpan={2 + visibleExchanges.length * 2}
                   className="p-8 text-center text-gray-400"
                 >
                   No markets found matching "{searchTerm}"
