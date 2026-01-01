@@ -45,3 +45,9 @@ coverage/
 tmp/
 temp/
 *.tmp
+
+# Temporary network mapping files (keep network_name_mapping.json)
+network_by_exchange.json
+network_mappings.json
+network_mappings_1.json
+network_name_mapping_complete.json

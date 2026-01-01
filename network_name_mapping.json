@@ -1,0 +1,1042 @@
+{
+  "Ethereum": {
+    "Binance": "ETH",
+    "Bithumb": "ETH",
+    "Bybit": "ETH",
+    "Coinbase": "ethereum",
+    "GateIO": "ETH",
+    "Upbit": "ETH"
+  },
+  "Bitcoin": {
+    "Binance": "BTC",
+    "Bithumb": "BTC",
+    "Bybit": "BTC",
+    "Coinbase": "bitcoin",
+    "GateIO": "BTC",
+    "Upbit": "BTC"
+  },
+  "Solana": {
+    "Binance": "SOL",
+    "Bithumb": "SOL",
+    "Bybit": "SOL",
+    "Coinbase": "solana",
+    "GateIO": "SOL",
+    "Upbit": "SOL"
+  },
+  "BSC (BNB Chain)": {
+    "Binance": "BSC",
+    "Bithumb": "BSC",
+    "Bybit": "BSC",
+    "Coinbase": "bsc",
+    "GateIO": "BSC",
+    "Upbit": null
+  },
+  "Tron": {
+    "Binance": "TRX",
+    "Bithumb": "TRX",
+    "Bybit": "TRX",
+    "Coinbase": null,
+    "GateIO": "TRX",
+    "Upbit": "TRX"
+  },
+  "Polygon": {
+    "Binance": "MATIC",
+    "Bithumb": "POL",
+    "Bybit": "MATIC",
+    "Coinbase": "polygon",
+    "GateIO": "MATIC",
+    "Upbit": "POL"
+  },
+  "Arbitrum": {
+    "Binance": "ARBITRUM",
+    "Bithumb": "ARB_ETH",
+    "Bybit": "ARBI",
+    "Coinbase": "arbitrum",
+    "GateIO": "ARBEVM",
+    "Upbit": "ARBITRUM"
+  },
+  "Optimism": {
+    "Binance": "OPTIMISM",
+    "Bithumb": "OP_ETH",
+    "Bybit": "OP",
+    "Coinbase": "optimism",
+    "GateIO": "OPETH",
+    "Upbit": "OPTIMISM"
+  },
+  "Base": {
+    "Binance": "BASE",
+    "Bithumb": "BASE_ETH",
+    "Bybit": "BASE",
+    "Coinbase": "base",
+    "GateIO": "BASEEVM",
+    "Upbit": "BASENET"
+  },
+  "zkSync Era": {
+    "Binance": "ZKSYNCERA",
+    "Bithumb": "ZK_ETH",
+    "Bybit": "ZKSYNC",
+    "Coinbase": "zksync",
+    "GateIO": "ZKSERA",
+    "Upbit": null
+  },
+  "Linea": {
+    "Binance": "LINEA",
+    "Bithumb": "LINEA",
+    "Bybit": "LINEA",
+    "Coinbase": null,
+    "GateIO": "LINEAETH",
+    "Upbit": "LINEANET"
+  },
+  "Scroll": {
+    "Binance": "SCROLL",
+    "Bithumb": "SCROLL_ETH",
+    "Bybit": "SCROLL",
+    "Coinbase": null,
+    "GateIO": "SCROLLETH",
+    "Upbit": "SCROLLNET"
+  },
+  "Manta": {
+    "Binance": "MANTA",
+    "Bithumb": "MANTA_ETH",
+    "Bybit": "MANTA",
+    "Coinbase": null,
+    "GateIO": "MANTAETH",
+    "Upbit": null
+  },
+  "StarkNet": {
+    "Binance": "STARKNET",
+    "Bithumb": "STRK",
+    "Bybit": "STARKNET",
+    "Coinbase": null,
+    "GateIO": "STRKETH",
+    "Upbit": "STRK"
+  },
+  "Mantle": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "MANTLE",
+    "Coinbase": null,
+    "GateIO": "MNT",
+    "Upbit": null
+  },
+  "Taiko": {
+    "Binance": null,
+    "Bithumb": "TAIKO_ETH",
+    "Bybit": "TAIKO",
+    "Coinbase": null,
+    "GateIO": "TAIKOETH",
+    "Upbit": "TAIKONET"
+  },
+  "Blast": {
+    "Binance": null,
+    "Bithumb": "BLAST_ETH",
+    "Bybit": "BLAST",
+    "Coinbase": "blast",
+    "GateIO": "BLASTETH",
+    "Upbit": "BLASTNET"
+  },
+  "Mode": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "MODE",
+    "Coinbase": null,
+    "GateIO": "MODEETH",
+    "Upbit": null
+  },
+  "opBNB": {
+    "Binance": "OPBNB",
+    "Bithumb": null,
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "OPBNB",
+    "Upbit": null
+  },
+  "Arbitrum Nova": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "ARBINOVA",
+    "Coinbase": null,
+    "GateIO": "ARBNOVA",
+    "Upbit": null
+  },
+  "Zeta": {
+    "Binance": null,
+    "Bithumb": "ZETA",
+    "Bybit": "ZETA",
+    "Coinbase": null,
+    "GateIO": "ZETA",
+    "Upbit": "ZETA"
+  },
+  "Swell": {
+    "Binance": null,
+    "Bithumb": "SWELL_ETH",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "SWELL",
+    "Upbit": "SWELLNET"
+  },
+  "ZRC": {
+    "Binance": null,
+    "Bithumb": "ZRC_ETH",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "ZRC",
+    "Upbit": null
+  },
+  "Avalanche": {
+    "Binance": "AVAX",
+    "Bithumb": "AVAX",
+    "Bybit": "XAVAX",
+    "Coinbase": "avacchain",
+    "GateIO": "AVAX",
+    "Upbit": "AVAX"
+  },
+  "Avalanche C-Chain": {
+    "Binance": "AVAXC",
+    "Bithumb": null,
+    "Bybit": "CAVAX",
+    "Coinbase": null,
+    "GateIO": "AVAX_C",
+    "Upbit": null
+  },
+  "Cosmos": {
+    "Binance": "ATOM",
+    "Bithumb": "ATOM",
+    "Bybit": "ATOM",
+    "Coinbase": "cosmos",
+    "GateIO": "ATOM",
+    "Upbit": "ATOM"
+  },
+  "Sui": {
+    "Binance": "SUI",
+    "Bithumb": "SUI",
+    "Bybit": "SUI",
+    "Coinbase": "sui",
+    "GateIO": "SUI",
+    "Upbit": "SUI"
+  },
+  "Aptos": {
+    "Binance": "APT",
+    "Bithumb": "APT",
+    "Bybit": "APTOS",
+    "Coinbase": "aptos",
+    "GateIO": "APT",
+    "Upbit": "APT"
+  },
+  "Near": {
+    "Binance": "NEAR",
+    "Bithumb": "NEAR",
+    "Bybit": "NEAR",
+    "Coinbase": "near",
+    "GateIO": "NEAR",
+    "Upbit": "NEAR"
+  },
+  "Sei": {
+    "Binance": "SEI",
+    "Bithumb": null,
+    "Bybit": "SEI",
+    "Coinbase": "sei",
+    "GateIO": "SEI",
+    "Upbit": "SEI"
+  },
+  "Sei EVM": {
+    "Binance": "SEIEVM",
+    "Bithumb": "SEIEVM",
+    "Bybit": "SEIEVM",
+    "Coinbase": null,
+    "GateIO": "SEIEVM",
+    "Upbit": null
+  },
+  "Celestia": {
+    "Binance": null,
+    "Bithumb": "TIA",
+    "Bybit": "CELESTIA",
+    "Coinbase": "celestia",
+    "GateIO": "TIA",
+    "Upbit": "TIA"
+  },
+  "Kaia (ex-Klaytn)": {
+    "Binance": "KAIA",
+    "Bithumb": "KAIA",
+    "Bybit": "KLAY",
+    "Coinbase": null,
+    "GateIO": "KAIA",
+    "Upbit": "KAIA"
+  },
+  "TON": {
+    "Binance": "TON",
+    "Bithumb": "TON",
+    "Bybit": "TON",
+    "Coinbase": "ton",
+    "GateIO": "TON",
+    "Upbit": null
+  },
+  "Algorand": {
+    "Binance": "ALGO",
+    "Bithumb": "ALGO",
+    "Bybit": "ALGO",
+    "Coinbase": "algorand",
+    "GateIO": "ALGO",
+    "Upbit": "ALGO"
+  },
+  "Cardano": {
+    "Binance": "ADA",
+    "Bithumb": "ADA",
+    "Bybit": "ADA",
+    "Coinbase": "cardano",
+    "GateIO": "ADA",
+    "Upbit": "ADA"
+  },
+  "Polkadot": {
+    "Binance": null,
+    "Bithumb": "DOT",
+    "Bybit": "DOTAH",
+    "Coinbase": "polkadot",
+    "GateIO": "DOTSM",
+    "Upbit": "DOT"
+  },
+  "Kusama": {
+    "Binance": "KUSAMA",
+    "Bithumb": "KSM",
+    "Bybit": "KSMAH",
+    "Coinbase": "kusama",
+    "GateIO": "KSMSM",
+    "Upbit": null
+  },
+  "Injective": {
+    "Binance": "INJ",
+    "Bithumb": "INJ",
+    "Bybit": "INJ",
+    "Coinbase": null,
+    "GateIO": "INJ",
+    "Upbit": "INJ"
+  },
+  "Osmosis": {
+    "Binance": "OSMO",
+    "Bithumb": "OSMO",
+    "Bybit": null,
+    "Coinbase": "osmosis",
+    "GateIO": "OSMO",
+    "Upbit": null
+  },
+  "dYdX": {
+    "Binance": "DYDX",
+    "Bithumb": "DYDX",
+    "Bybit": "DYDX",
+    "Coinbase": null,
+    "GateIO": "DYDX",
+    "Upbit": null
+  },
+  "Bera": {
+    "Binance": "BERA",
+    "Bithumb": "BERA",
+    "Bybit": "BERA",
+    "Coinbase": "berachain",
+    "GateIO": "BERA",
+    "Upbit": "BERA"
+  },
+  "Init": {
+    "Binance": "INIT",
+    "Bithumb": "INIT",
+    "Bybit": "INIT",
+    "Coinbase": null,
+    "GateIO": "INIT",
+    "Upbit": "INIT"
+  },
+  "Sonic": {
+    "Binance": "SONIC",
+    "Bithumb": "S",
+    "Bybit": "SONIC",
+    "Coinbase": "sonic",
+    "GateIO": "S",
+    "Upbit": null
+  },
+  "Move": {
+    "Binance": "MOVE",
+    "Bithumb": null,
+    "Bybit": "MOVE",
+    "Coinbase": null,
+    "GateIO": "MOVE",
+    "Upbit": null
+  },
+  "Story": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "STORY",
+    "Coinbase": "story",
+    "GateIO": "IP",
+    "Upbit": "IP"
+  },
+  "World Chain": {
+    "Binance": "WLD",
+    "Bithumb": "WLD_ETH",
+    "Bybit": null,
+    "Coinbase": "worldchain",
+    "GateIO": "WLD",
+    "Upbit": "WLDCHAIN"
+  },
+  "Monad": {
+    "Binance": null,
+    "Bithumb": "MON",
+    "Bybit": "MONAD",
+    "Coinbase": "monad",
+    "GateIO": "MON",
+    "Upbit": "MON"
+  },
+  "Litecoin": {
+    "Binance": "LTC",
+    "Bithumb": null,
+    "Bybit": "LTC",
+    "Coinbase": "litecoin",
+    "GateIO": "LTC",
+    "Upbit": null
+  },
+  "Dogecoin": {
+    "Binance": "DOGE",
+    "Bithumb": "DOGE",
+    "Bybit": "DOGE",
+    "Coinbase": "dogecoin",
+    "GateIO": "DOGE",
+    "Upbit": "DOGE"
+  },
+  "XRP": {
+    "Binance": "XRP",
+    "Bithumb": "XRP",
+    "Bybit": "XRP",
+    "Coinbase": "ripple",
+    "GateIO": "XRP",
+    "Upbit": "XRP"
+  },
+  "Stellar": {
+    "Binance": "XLM",
+    "Bithumb": "XLM",
+    "Bybit": "XLM",
+    "Coinbase": "stellar",
+    "GateIO": "XLM",
+    "Upbit": "XLM"
+  },
+  "Hedera": {
+    "Binance": "HBAR",
+    "Bithumb": "HBAR",
+    "Bybit": "HBAR",
+    "Coinbase": "hedera",
+    "GateIO": "HBAR",
+    "Upbit": "HBAR"
+  },
+  "EOS": {
+    "Binance": "EOS",
+    "Bithumb": null,
+    "Bybit": "EOS",
+    "Coinbase": "eosio",
+    "GateIO": "EOS",
+    "Upbit": null
+  },
+  "Filecoin": {
+    "Binance": "FIL",
+    "Bithumb": "FIL",
+    "Bybit": "FIL",
+    "Coinbase": "filecoin",
+    "GateIO": "FIL",
+    "Upbit": "FIL"
+  },
+  "Ethereum Classic": {
+    "Binance": "ETC",
+    "Bithumb": "ETC",
+    "Bybit": "ETC",
+    "Coinbase": "ethereumclassic",
+    "GateIO": "ETC",
+    "Upbit": "ETC"
+  },
+  "Bitcoin Cash": {
+    "Binance": "BCH",
+    "Bithumb": "BCH",
+    "Bybit": "BCH",
+    "Coinbase": "bitcoincash",
+    "GateIO": "BCH",
+    "Upbit": "BCH"
+  },
+  "Ronin": {
+    "Binance": "RON",
+    "Bithumb": "RON",
+    "Bybit": null,
+    "Coinbase": "ronin",
+    "GateIO": "RON",
+    "Upbit": null
+  },
+  "ICP": {
+    "Binance": "ICP",
+    "Bithumb": "ICP",
+    "Bybit": "ICP",
+    "Coinbase": "dfinity",
+    "GateIO": "ICP",
+    "Upbit": null
+  },
+  "Tezos": {
+    "Binance": "XTZ",
+    "Bithumb": "XTZ",
+    "Bybit": "XTZ",
+    "Coinbase": "tezos",
+    "GateIO": "XTZ",
+    "Upbit": "XTZ"
+  },
+  "Stacks": {
+    "Binance": "STX",
+    "Bithumb": "STX",
+    "Bybit": "STX",
+    "Coinbase": "stacks",
+    "GateIO": "STX",
+    "Upbit": "STX"
+  },
+  "Theta": {
+    "Binance": "THETA",
+    "Bithumb": "THETA",
+    "Bybit": "THETA",
+    "Coinbase": null,
+    "GateIO": "THETA",
+    "Upbit": "THETA"
+  },
+  "VeChain": {
+    "Binance": "VET",
+    "Bithumb": "VET",
+    "Bybit": "VECHAIN",
+    "Coinbase": "vechain",
+    "GateIO": "VET",
+    "Upbit": "VET"
+  },
+  "Kava": {
+    "Binance": "KAVA",
+    "Bithumb": "KAVA",
+    "Bybit": "KAVA",
+    "Coinbase": "kava",
+    "GateIO": "KAVA",
+    "Upbit": "KAVA"
+  },
+  "Kava EVM": {
+    "Binance": "KAVAEVM",
+    "Bithumb": null,
+    "Bybit": "KAVAEVM",
+    "Coinbase": null,
+    "GateIO": "KAVAEVM",
+    "Upbit": null
+  },
+  "Chiliz": {
+    "Binance": "CHZ2",
+    "Bithumb": "CHZ",
+    "Bybit": "CHILIZ",
+    "Coinbase": null,
+    "GateIO": "CHZ2",
+    "Upbit": "CHZ"
+  },
+  "ICON": {
+    "Binance": "ICX",
+    "Bithumb": "ICX",
+    "Bybit": "ICX",
+    "Coinbase": null,
+    "GateIO": "ICX",
+    "Upbit": "ICX"
+  },
+  "NEO": {
+    "Binance": "NEO",
+    "Bithumb": "NEO",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": null,
+    "Upbit": "NEO"
+  },
+  "Waves": {
+    "Binance": "WAVES",
+    "Bithumb": "WAVES",
+    "Bybit": "WAVES",
+    "Coinbase": null,
+    "GateIO": "WAVES",
+    "Upbit": "WAVES"
+  },
+  "Flow": {
+    "Binance": "FLOW",
+    "Bithumb": "FLOW",
+    "Bybit": "FLOW",
+    "Coinbase": "flow",
+    "GateIO": "FLOW",
+    "Upbit": "FLOW"
+  },
+  "Flare": {
+    "Binance": "FLR",
+    "Bithumb": "FLR",
+    "Bybit": "FLR",
+    "Coinbase": "flare",
+    "GateIO": "FLR",
+    "Upbit": "FLR"
+  },
+  "Mina": {
+    "Binance": "MINA",
+    "Bithumb": "MINA",
+    "Bybit": "MINA",
+    "Coinbase": "mina",
+    "GateIO": "MINA",
+    "Upbit": "MINA"
+  },
+  "Celo": {
+    "Binance": "CELO",
+    "Bithumb": "CELO",
+    "Bybit": "CELO",
+    "Coinbase": null,
+    "GateIO": "CELO",
+    "Upbit": "CELO"
+  },
+  "Moonbeam": {
+    "Binance": "GLMR",
+    "Bithumb": null,
+    "Bybit": "GLMR",
+    "Coinbase": null,
+    "GateIO": "GLMR",
+    "Upbit": "GLMR"
+  },
+  "Moonriver": {
+    "Binance": "MOVR",
+    "Bithumb": null,
+    "Bybit": "MOVR",
+    "Coinbase": null,
+    "GateIO": "MOVR",
+    "Upbit": null
+  },
+  "Astar": {
+    "Binance": "ASTR",
+    "Bithumb": "ASTR",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "ASTR",
+    "Upbit": "ASTR"
+  },
+  "Elrond/MultiversX": {
+    "Binance": "EGLD",
+    "Bithumb": "EGLD",
+    "Bybit": "EGLD",
+    "Coinbase": "elrond",
+    "GateIO": "EGLD",
+    "Upbit": "EGLD"
+  },
+  "WAX": {
+    "Binance": "WAX",
+    "Bithumb": "WAXP",
+    "Bybit": "WAXP",
+    "Coinbase": null,
+    "GateIO": "WAXP",
+    "Upbit": "WAXP"
+  },
+  "Ravencoin": {
+    "Binance": "RVN",
+    "Bithumb": "RVN",
+    "Bybit": "RVN",
+    "Coinbase": null,
+    "GateIO": "RVN",
+    "Upbit": "RVN"
+  },
+  "Zilliqa": {
+    "Binance": "ZIL",
+    "Bithumb": "ZIL",
+    "Bybit": "ZIL",
+    "Coinbase": null,
+    "GateIO": "ZIL",
+    "Upbit": "ZIL"
+  },
+  "Casper": {
+    "Binance": null,
+    "Bithumb": "CSPR",
+    "Bybit": "CSPR",
+    "Coinbase": null,
+    "GateIO": "CSPR",
+    "Upbit": null
+  },
+  "Enjin": {
+    "Binance": "ENJ",
+    "Bithumb": "ENJ",
+    "Bybit": "ENJIN",
+    "Coinbase": null,
+    "GateIO": "ENJ",
+    "Upbit": "ENJ"
+  },
+  "Oasis": {
+    "Binance": "ROSE",
+    "Bithumb": null,
+    "Bybit": "ROSE",
+    "Coinbase": "oasis",
+    "GateIO": "ROSE",
+    "Upbit": null
+  },
+  "Arweave": {
+    "Binance": "AR",
+    "Bithumb": "AR",
+    "Bybit": "AR",
+    "Coinbase": null,
+    "GateIO": "AR",
+    "Upbit": null
+  },
+  "THORChain": {
+    "Binance": "RUNE",
+    "Bithumb": null,
+    "Bybit": "RUNE",
+    "Coinbase": null,
+    "GateIO": "RUNE",
+    "Upbit": null
+  },
+  "Siacoin": {
+    "Binance": "SC",
+    "Bithumb": "SC",
+    "Bybit": "SC",
+    "Coinbase": null,
+    "GateIO": "SC",
+    "Upbit": "SC"
+  },
+  "Qtum": {
+    "Binance": "QTUM",
+    "Bithumb": "QTUM",
+    "Bybit": "QTUM",
+    "Coinbase": null,
+    "GateIO": "QTUM",
+    "Upbit": "QTUM"
+  },
+  "IoTeX": {
+    "Binance": "IOTX",
+    "Bithumb": "IOTX",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "IOTX",
+    "Upbit": "IOTX"
+  },
+  "Nervos CKB": {
+    "Binance": "CKB",
+    "Bithumb": "CKB",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "CKB",
+    "Upbit": "CKB"
+  },
+  "Bittensor": {
+    "Binance": "TAO",
+    "Bithumb": "TAO",
+    "Bybit": null,
+    "Coinbase": "bittensor",
+    "GateIO": "TAO",
+    "Upbit": null
+  },
+  "Vana": {
+    "Binance": "VANA",
+    "Bithumb": "VANA",
+    "Bybit": "VANA",
+    "Coinbase": null,
+    "GateIO": "VANA",
+    "Upbit": "VANA"
+  },
+  "Immutable X": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "IMMUTABLE",
+    "Coinbase": null,
+    "GateIO": "IMX",
+    "Upbit": null
+  },
+  "Plume": {
+    "Binance": "PLUME",
+    "Bithumb": null,
+    "Bybit": "PLUME",
+    "Coinbase": null,
+    "GateIO": "PLUME",
+    "Upbit": null
+  },
+  "Xai": {
+    "Binance": "XAI",
+    "Bithumb": null,
+    "Bybit": "XAI",
+    "Coinbase": null,
+    "GateIO": null,
+    "Upbit": null
+  },
+  "Dymension": {
+    "Binance": "DYM",
+    "Bithumb": null,
+    "Bybit": "DYM",
+    "Coinbase": null,
+    "GateIO": "DYM",
+    "Upbit": null
+  },
+  "XION": {
+    "Binance": null,
+    "Bithumb": "XION",
+    "Bybit": "XION",
+    "Coinbase": null,
+    "GateIO": "XION",
+    "Upbit": null
+  },
+  "Core": {
+    "Binance": null,
+    "Bithumb": "CORE",
+    "Bybit": "CORE",
+    "Coinbase": null,
+    "GateIO": "CORE",
+    "Upbit": null
+  },
+  "Merlin": {
+    "Binance": null,
+    "Bithumb": "MERL_BTC",
+    "Bybit": "MERLIN",
+    "Coinbase": null,
+    "GateIO": "MERLBTC",
+    "Upbit": null
+  },
+  "Metis": {
+    "Binance": "METIS",
+    "Bithumb": null,
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "METIS",
+    "Upbit": null
+  },
+  "Cronos": {
+    "Binance": null,
+    "Bithumb": "CRO",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "CRO",
+    "Upbit": "CRO"
+  },
+  "Avail": {
+    "Binance": null,
+    "Bithumb": "AVAIL",
+    "Bybit": "AVAIL",
+    "Coinbase": null,
+    "GateIO": "AVAIL",
+    "Upbit": null
+  },
+  "Hyperliquid": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "HYPEREVM",
+    "Coinbase": null,
+    "GateIO": "HYPE",
+    "Upbit": null
+  },
+  "Supra": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "SUPRA",
+    "Coinbase": null,
+    "GateIO": "SUPRA",
+    "Upbit": null
+  },
+  "Plasma": {
+    "Binance": "PLASMA",
+    "Bithumb": null,
+    "Bybit": "PLASMA",
+    "Coinbase": "plasma",
+    "GateIO": null,
+    "Upbit": null
+  },
+  "Unichain": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": null,
+    "Coinbase": "unichain",
+    "GateIO": null,
+    "Upbit": null
+  },
+  "Vara": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": null,
+    "Coinbase": "vara",
+    "GateIO": "VARA",
+    "Upbit": null
+  },
+  "Akash": {
+    "Binance": null,
+    "Bithumb": "AKT",
+    "Bybit": null,
+    "Coinbase": "akash",
+    "GateIO": "AKT",
+    "Upbit": "AKT"
+  },
+  "Noble": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": null,
+    "Coinbase": "noble",
+    "GateIO": null,
+    "Upbit": null
+  },
+  "Axelar": {
+    "Binance": "AXL",
+    "Bithumb": null,
+    "Bybit": "AXL",
+    "Coinbase": "axelar",
+    "GateIO": null,
+    "Upbit": null
+  },
+  "Somnia": {
+    "Binance": "SOMI",
+    "Bithumb": "SOMI",
+    "Bybit": "SOMNIA",
+    "Coinbase": null,
+    "GateIO": "SOMI",
+    "Upbit": "SOMI"
+  },
+  "Sophon": {
+    "Binance": "SOPH",
+    "Bithumb": "SOPH",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "SOPH",
+    "Upbit": "SOPH"
+  },
+  "Dash": {
+    "Binance": "DASH",
+    "Bithumb": null,
+    "Bybit": null,
+    "Coinbase": "dash",
+    "GateIO": "DASH",
+    "Upbit": null
+  },
+  "ZCash": {
+    "Binance": "ZEC",
+    "Bithumb": null,
+    "Bybit": null,
+    "Coinbase": "zcash",
+    "GateIO": "ZEC",
+    "Upbit": null
+  },
+  "DigiByte": {
+    "Binance": "DGB",
+    "Bithumb": null,
+    "Bybit": "DGB",
+    "Coinbase": null,
+    "GateIO": "DGB",
+    "Upbit": "DGB"
+  },
+  "Decred": {
+    "Binance": "DCR",
+    "Bithumb": null,
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "DCR",
+    "Upbit": null
+  },
+  "Hive": {
+    "Binance": "HIVE",
+    "Bithumb": "HIVE",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "HIVE",
+    "Upbit": "HIVE"
+  },
+  "Steem": {
+    "Binance": "STEEM",
+    "Bithumb": "STEEM",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "STEEM",
+    "Upbit": "STEEM"
+  },
+  "Stratis": {
+    "Binance": "STRAX",
+    "Bithumb": "STRAX",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "STRAX",
+    "Upbit": "STRAX"
+  },
+  "Pokt Network": {
+    "Binance": null,
+    "Bithumb": "POKT",
+    "Bybit": "POKT",
+    "Coinbase": null,
+    "GateIO": "POKT",
+    "Upbit": "POKT"
+  },
+  "OAS": {
+    "Binance": null,
+    "Bithumb": "OAS",
+    "Bybit": "OAS",
+    "Coinbase": null,
+    "GateIO": "OAS",
+    "Upbit": "OAS"
+  },
+  "Peaq": {
+    "Binance": null,
+    "Bithumb": "PEAQ",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "PEAQ",
+    "Upbit": null
+  },
+  "Nibiru": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "NIBI",
+    "Coinbase": null,
+    "GateIO": "NIBI",
+    "Upbit": null
+  },
+  "Nillion": {
+    "Binance": "NIL",
+    "Bithumb": "NIL",
+    "Bybit": "NILLION",
+    "Coinbase": null,
+    "GateIO": "NIL",
+    "Upbit": null
+  },
+  "BounceBit": {
+    "Binance": "BB",
+    "Bithumb": "BB",
+    "Bybit": "BOUNCEBIT",
+    "Coinbase": null,
+    "GateIO": "BB",
+    "Upbit": null
+  },
+  "IOTA": {
+    "Binance": "IOTA",
+    "Bithumb": "IOTA",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": null,
+    "Upbit": "IOTA"
+  },
+  "Ontology": {
+    "Binance": "ONT",
+    "Bithumb": "ONT",
+    "Bybit": null,
+    "Coinbase": null,
+    "GateIO": "ONG",
+    "Upbit": "ONT"
+  },
+  "Symbol": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "XYM",
+    "Coinbase": null,
+    "GateIO": "XYM",
+    "Upbit": "XYM"
+  },
+  "Zircuit": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "ZIRCUIT",
+    "Coinbase": null,
+    "GateIO": null,
+    "Upbit": null
+  },
+  "WEMIX": {
+    "Binance": null,
+    "Bithumb": null,
+    "Bybit": "WEMIX",
+    "Coinbase": null,
+    "GateIO": "WEMIX",
+    "Upbit": null
+  },
+  "Mantra": {
+    "Binance": "MANTRA",
+    "Bithumb": "OM",
+    "Bybit": "MANTRA",
+    "Coinbase": null,
+    "GateIO": "OM",
+    "Upbit": "OM"
+  }
+}
