@@ -68,12 +68,16 @@ pub struct PriceTick {
     bid: u64,                    // 8 bytes
     /// Best ask price
     ask: u64,                    // 8 bytes
+    /// Best bid size (quantity available at best bid)
+    bid_size: u64,               // 8 bytes
+    /// Best ask size (quantity available at best ask)
+    ask_size: u64,               // 8 bytes
     /// Timestamp in milliseconds
     pub timestamp_ms: u64,       // 8 bytes
     /// Liquidity (TVL for DEX, depth for CEX)
     pub liquidity: u64,          // 8 bytes
 }
-// Total: 55 bytes
+// Total: 71 bytes
 
 impl PriceTick {
     /// Create a new price tick with default quote currency (USD).
@@ -104,6 +108,37 @@ impl PriceTick {
             volume_24h: 0,
             bid: bid.0,
             ask: ask.0,
+            bid_size: 0,
+            ask_size: 0,
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+            liquidity: 0,
+        }
+    }
+
+    /// Create a new price tick with bid/ask sizes (orderbook depth).
+    pub fn with_depth(
+        exchange: Exchange,
+        pair_id: u32,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+        quote_currency: QuoteCurrency,
+    ) -> Self {
+        Self {
+            exchange,
+            pair_id,
+            quote_currency: quote_currency as u8,
+            price: price.0,
+            volume_24h: 0,
+            bid: bid.0,
+            ask: ask.0,
+            bid_size: bid_size.0,
+            ask_size: ask_size.0,
             timestamp_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -128,6 +163,26 @@ impl PriceTick {
     #[inline]
     pub fn ask(&self) -> FixedPoint {
         FixedPoint(self.ask)
+    }
+
+    /// Get bid size as FixedPoint.
+    #[inline]
+    pub fn bid_size(&self) -> FixedPoint {
+        FixedPoint(self.bid_size)
+    }
+
+    /// Get ask size as FixedPoint.
+    #[inline]
+    pub fn ask_size(&self) -> FixedPoint {
+        FixedPoint(self.ask_size)
+    }
+
+    /// Set bid/ask sizes (builder pattern).
+    #[inline]
+    pub fn with_sizes(mut self, bid_size: FixedPoint, ask_size: FixedPoint) -> Self {
+        self.bid_size = bid_size.0;
+        self.ask_size = ask_size.0;
+        self
     }
 
     /// Calculate bid-ask spread in basis points.
@@ -267,8 +322,8 @@ mod tests {
     #[test]
     fn test_price_tick_size() {
         // Verify packed struct size for performance
-        // exchange(2) + pair_id(4) + quote_currency(1) + price(8) + volume_24h(8) + bid(8) + ask(8) + timestamp_ms(8) + liquidity(8) = 55
-        assert_eq!(std::mem::size_of::<PriceTick>(), 55);
+        // exchange(2) + pair_id(4) + quote_currency(1) + price(8) + volume_24h(8) + bid(8) + ask(8) + bid_size(8) + ask_size(8) + timestamp_ms(8) + liquidity(8) = 71
+        assert_eq!(std::mem::size_of::<PriceTick>(), 71);
     }
 
     #[test]
