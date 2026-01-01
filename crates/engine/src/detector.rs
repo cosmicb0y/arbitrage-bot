@@ -102,6 +102,11 @@ impl OpportunityDetector {
         pair_ids
     }
 
+    /// Get symbol for a pair_id from the registry.
+    pub fn pair_id_to_symbol(&self, pair_id: u32) -> Option<String> {
+        self.symbol_registry.get(&pair_id).cloned()
+    }
+
     /// Get detected opportunities.
     pub fn opportunities(&self) -> &[ArbitrageOpportunity] {
         &self.detected
@@ -113,11 +118,28 @@ impl OpportunityDetector {
     }
 
     /// Update price for an exchange/pair with specified quote currency.
+    /// Uses mid price as bid/ask when only price is available.
     pub fn update_price_with_quote(&mut self, exchange: Exchange, pair_id: u32, price: FixedPoint, quote: QuoteCurrency) {
+        self.update_price_with_bid_ask(exchange, pair_id, price, price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0), quote);
+    }
+
+    /// Update price for an exchange/pair with bid/ask from orderbook.
+    /// This enables accurate premium calculation using best bid/ask prices.
+    pub fn update_price_with_bid_ask(
+        &mut self,
+        exchange: Exchange,
+        pair_id: u32,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
         let matrix = self.matrices
             .entry(pair_id)
             .or_insert_with(|| PremiumMatrix::new(pair_id));
-        matrix.update_price_with_quote(exchange, price, quote);
+        matrix.update_price_with_bid_ask(exchange, price, bid, ask, bid_size, ask_size, quote);
     }
 
     /// Detect opportunities for a specific pair.
@@ -141,14 +163,21 @@ impl OpportunityDetector {
         let mut opportunities = Vec::new();
         let asset = asset_for_pair_id(pair_id, &self.symbol_registry);
 
-        // Get all profitable pairs with quote currencies
-        let premiums = matrix.all_premiums_with_quotes();
+        // Use all_premiums_with_depth to get accurate bid/ask prices and sizes for premium calculation
+        let premiums = matrix.all_premiums_with_depth();
 
-        for (buy_ex, sell_ex, buy_quote, sell_quote, premium) in premiums {
+        for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_size, sell_bid_size, premium) in premiums {
+            // Skip opportunities without orderbook depth data
+            // If both sides have zero depth, we can't verify the opportunity is real
+            if buy_ask_size.0 == 0 && sell_bid_size.0 == 0 {
+                continue;
+            }
+
             if premium >= self.config.min_premium_bps {
-                let buy_price = matrix.get_price_with_quote(buy_ex, buy_quote).unwrap_or(FixedPoint(0));
-                let sell_price = matrix.get_price_with_quote(sell_ex, sell_quote).unwrap_or(FixedPoint(0));
-
+                // For display: source_price is buy_ask (price we pay to buy)
+                //              target_price is sell_bid (price we receive when selling)
+                //              source_depth is buy_ask_size (how much we can buy at this price)
+                //              target_depth is sell_bid_size (how much we can sell at this price)
                 let opp = ArbitrageOpportunity::with_quotes_and_rates(
                     OPPORTUNITY_ID.fetch_add(1, Ordering::SeqCst),
                     buy_ex,
@@ -156,11 +185,11 @@ impl OpportunityDetector {
                     buy_quote,
                     sell_quote,
                     asset.clone(),
-                    buy_price,
-                    sell_price,
+                    buy_ask,   // source_price: the ask price we pay to buy
+                    sell_bid,  // target_price: the bid price we receive when selling
                     usd_krw_rate,
                     usdt_krw_rate,
-                );
+                ).with_depth(buy_ask_size, sell_bid_size);
 
                 opportunities.push(opp);
             }
@@ -212,6 +241,7 @@ impl OpportunityDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arbitrage_core::QuoteCurrency;
 
     #[test]
     fn test_detector_config_default() {
@@ -236,9 +266,21 @@ mod tests {
         };
         let mut detector = OpportunityDetector::new(config);
 
-        // Add prices with 1% spread (100 bps)
-        detector.update_price(Exchange::Binance, 1, FixedPoint::from_f64(50000.0));
-        detector.update_price(Exchange::Coinbase, 1, FixedPoint::from_f64(50500.0));
+        // Add prices with 1% spread (100 bps) and orderbook depth
+        detector.update_price_with_bid_ask(
+            Exchange::Binance, 1,
+            FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(49999.0), FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            QuoteCurrency::USD,
+        );
+        detector.update_price_with_bid_ask(
+            Exchange::Coinbase, 1,
+            FixedPoint::from_f64(50500.0),
+            FixedPoint::from_f64(50500.0), FixedPoint::from_f64(50501.0),
+            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            QuoteCurrency::USD,
+        );
 
         let opps = detector.detect(1);
         assert!(!opps.is_empty());
@@ -268,8 +310,21 @@ mod tests {
         };
         let mut detector = OpportunityDetector::new(config);
 
-        detector.update_price(Exchange::Binance, 1, FixedPoint::from_f64(50000.0));
-        detector.update_price(Exchange::Coinbase, 1, FixedPoint::from_f64(50500.0));
+        // Use bid/ask with depth for proper opportunity detection
+        detector.update_price_with_bid_ask(
+            Exchange::Binance, 1,
+            FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(49999.0), FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            QuoteCurrency::USD,
+        );
+        detector.update_price_with_bid_ask(
+            Exchange::Coinbase, 1,
+            FixedPoint::from_f64(50500.0),
+            FixedPoint::from_f64(50500.0), FixedPoint::from_f64(50501.0),
+            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            QuoteCurrency::USD,
+        );
 
         let opps = detector.detect(1);
         let opp = &opps[0];
@@ -287,13 +342,37 @@ mod tests {
         };
         let mut detector = OpportunityDetector::new(config);
 
-        // Pair 1: BTC
-        detector.update_price(Exchange::Binance, 1, FixedPoint::from_f64(50000.0));
-        detector.update_price(Exchange::Coinbase, 1, FixedPoint::from_f64(50500.0));
+        // Pair 1: BTC with depth
+        detector.update_price_with_bid_ask(
+            Exchange::Binance, 1,
+            FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(49999.0), FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            QuoteCurrency::USD,
+        );
+        detector.update_price_with_bid_ask(
+            Exchange::Coinbase, 1,
+            FixedPoint::from_f64(50500.0),
+            FixedPoint::from_f64(50500.0), FixedPoint::from_f64(50501.0),
+            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            QuoteCurrency::USD,
+        );
 
-        // Pair 2: ETH
-        detector.update_price(Exchange::Binance, 2, FixedPoint::from_f64(3000.0));
-        detector.update_price(Exchange::Coinbase, 2, FixedPoint::from_f64(3050.0));
+        // Pair 2: ETH with depth
+        detector.update_price_with_bid_ask(
+            Exchange::Binance, 2,
+            FixedPoint::from_f64(3000.0),
+            FixedPoint::from_f64(2999.0), FixedPoint::from_f64(3000.0),
+            FixedPoint::from_f64(10.0), FixedPoint::from_f64(10.0),
+            QuoteCurrency::USD,
+        );
+        detector.update_price_with_bid_ask(
+            Exchange::Coinbase, 2,
+            FixedPoint::from_f64(3050.0),
+            FixedPoint::from_f64(3050.0), FixedPoint::from_f64(3051.0),
+            FixedPoint::from_f64(10.0), FixedPoint::from_f64(10.0),
+            QuoteCurrency::USD,
+        );
 
         let btc_opps = detector.detect(1);
         let eth_opps = detector.detect(2);
@@ -314,9 +393,21 @@ mod tests {
         let pair_id = detector.register_symbol("DOGE");
         assert!(pair_id > 0);
 
-        // Update prices for the dynamic symbol
-        detector.update_price(Exchange::Binance, pair_id, FixedPoint::from_f64(0.10));
-        detector.update_price(Exchange::Coinbase, pair_id, FixedPoint::from_f64(0.102));
+        // Update prices for the dynamic symbol with depth
+        detector.update_price_with_bid_ask(
+            Exchange::Binance, pair_id,
+            FixedPoint::from_f64(0.10),
+            FixedPoint::from_f64(0.0999), FixedPoint::from_f64(0.10),
+            FixedPoint::from_f64(10000.0), FixedPoint::from_f64(10000.0),
+            QuoteCurrency::USD,
+        );
+        detector.update_price_with_bid_ask(
+            Exchange::Coinbase, pair_id,
+            FixedPoint::from_f64(0.102),
+            FixedPoint::from_f64(0.102), FixedPoint::from_f64(0.1021),
+            FixedPoint::from_f64(10000.0), FixedPoint::from_f64(10000.0),
+            QuoteCurrency::USD,
+        );
 
         let opps = detector.detect(pair_id);
         assert!(!opps.is_empty());

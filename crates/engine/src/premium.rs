@@ -45,6 +45,14 @@ impl PremiumConfig {
 #[derive(Debug, Clone, Copy)]
 struct PriceEntry {
     price: FixedPoint,
+    /// Best bid price (highest buy order)
+    bid: FixedPoint,
+    /// Best ask price (lowest sell order)
+    ask: FixedPoint,
+    /// Best bid size (quantity available at best bid)
+    bid_size: FixedPoint,
+    /// Best ask size (quantity available at best ask)
+    ask_size: FixedPoint,
     timestamp_ms: u64,
     quote: QuoteCurrency,
 }
@@ -87,7 +95,23 @@ impl PremiumMatrix {
     }
 
     /// Update price for an exchange with specified quote currency.
+    /// Uses mid price as bid/ask when only price is available.
     pub fn update_price_with_quote(&mut self, exchange: Exchange, price: FixedPoint, quote: QuoteCurrency) {
+        self.update_price_with_bid_ask(exchange, price, price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0), quote);
+    }
+
+    /// Update price for an exchange with bid/ask from orderbook (no size info).
+    /// This enables accurate premium calculation using best bid/ask.
+    pub fn update_price_with_bid_ask(
+        &mut self,
+        exchange: Exchange,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -98,6 +122,10 @@ impl PremiumMatrix {
             (exchange as u16, quote as u8),
             PriceEntry {
                 price,
+                bid,
+                ask,
+                bid_size,
+                ask_size,
                 timestamp_ms: now,
                 quote,
             },
@@ -117,6 +145,16 @@ impl PremiumMatrix {
         self.prices.get(&(exchange as u16, quote as u8)).map(|e| e.price)
     }
 
+    /// Get bid price for an exchange with specific quote currency.
+    pub fn get_bid_with_quote(&self, exchange: Exchange, quote: QuoteCurrency) -> Option<FixedPoint> {
+        self.prices.get(&(exchange as u16, quote as u8)).map(|e| e.bid)
+    }
+
+    /// Get ask price for an exchange with specific quote currency.
+    pub fn get_ask_with_quote(&self, exchange: Exchange, quote: QuoteCurrency) -> Option<FixedPoint> {
+        self.prices.get(&(exchange as u16, quote as u8)).map(|e| e.ask)
+    }
+
     /// Get quote currency for an exchange (returns first matching quote).
     pub fn get_quote(&self, exchange: Exchange) -> Option<QuoteCurrency> {
         self.prices.iter()
@@ -124,15 +162,25 @@ impl PremiumMatrix {
             .map(|(_, entry)| entry.quote)
     }
 
-    /// Calculate premium between buy and sell exchanges.
-    /// Returns basis points: (sell - buy) / buy * 10000
+    /// Calculate premium between buy and sell exchanges using orderbook prices.
+    /// Uses ask price for buying (lowest sell order) and bid price for selling (highest buy order).
+    /// Returns basis points: (sell_bid - buy_ask) / buy_ask * 10000
     pub fn get_premium(&self, buy_exchange: Exchange, sell_exchange: Exchange) -> Option<i32> {
-        let buy_price = self.get_price(buy_exchange)?;
-        let sell_price = self.get_price(sell_exchange)?;
-        Some(FixedPoint::premium_bps(buy_price, sell_price))
+        // For buying: use ask price (lowest price someone is willing to sell)
+        // For selling: use bid price (highest price someone is willing to buy)
+        let buy_entry = self.prices.iter()
+            .find(|(&(ex_id, _), _)| ex_id == buy_exchange as u16)
+            .map(|(_, e)| e)?;
+        let sell_entry = self.prices.iter()
+            .find(|(&(ex_id, _), _)| ex_id == sell_exchange as u16)
+            .map(|(_, e)| e)?;
+
+        // Premium = (sell_bid - buy_ask) / buy_ask * 10000
+        Some(FixedPoint::premium_bps(buy_entry.ask, sell_entry.bid))
     }
 
-    /// Find the best arbitrage opportunity.
+    /// Find the best arbitrage opportunity using orderbook prices.
+    /// Uses ask price for buying and bid price for selling.
     /// Returns (buy_exchange, sell_exchange, premium_bps).
     pub fn best_opportunity(&self) -> Option<(Exchange, Exchange, i32)> {
         if self.prices.len() < 2 {
@@ -148,7 +196,8 @@ impl PremiumMatrix {
                     continue;
                 }
 
-                let premium = FixedPoint::premium_bps(buy_entry.price, sell_entry.price);
+                // Premium using orderbook: buy at ask, sell at bid
+                let premium = FixedPoint::premium_bps(buy_entry.ask, sell_entry.bid);
 
                 if best.is_none() || premium > best.as_ref().unwrap().2 {
                     let buy_ex = Exchange::from_id(buy_ex_id)?;
@@ -170,7 +219,8 @@ impl PremiumMatrix {
             .collect()
     }
 
-    /// Get all premium pairs with quote currencies.
+    /// Get all premium pairs with quote currencies using orderbook prices.
+    /// Uses ask price for buying and bid price for selling.
     /// Returns Vec<(buy_exchange, sell_exchange, buy_quote, sell_quote, premium_bps)>.
     pub fn all_premiums_with_quotes(&self) -> Vec<(Exchange, Exchange, QuoteCurrency, QuoteCurrency, i32)> {
         let mut result = Vec::new();
@@ -186,8 +236,52 @@ impl PremiumMatrix {
                     Exchange::from_id(buy_ex_id),
                     Exchange::from_id(sell_ex_id),
                 ) {
-                    let premium = FixedPoint::premium_bps(buy_entry.price, sell_entry.price);
+                    // Premium using orderbook: buy at ask, sell at bid
+                    let premium = FixedPoint::premium_bps(buy_entry.ask, sell_entry.bid);
                     result.push((buy_ex, sell_ex, buy_entry.quote, sell_entry.quote, premium));
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get all premium pairs with quote currencies and bid/ask prices.
+    /// Returns Vec<(buy_exchange, sell_exchange, buy_quote, sell_quote, buy_ask, sell_bid, premium_bps)>.
+    pub fn all_premiums_with_bid_ask(&self) -> Vec<(Exchange, Exchange, QuoteCurrency, QuoteCurrency, FixedPoint, FixedPoint, i32)> {
+        self.all_premiums_with_depth()
+            .into_iter()
+            .map(|(buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, _, _, premium)| {
+                (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, premium)
+            })
+            .collect()
+    }
+
+    /// Get all premium pairs with quote currencies, bid/ask prices, and orderbook depth.
+    /// Returns Vec<(buy_exchange, sell_exchange, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_size, sell_bid_size, premium_bps)>.
+    pub fn all_premiums_with_depth(&self) -> Vec<(Exchange, Exchange, QuoteCurrency, QuoteCurrency, FixedPoint, FixedPoint, FixedPoint, FixedPoint, i32)> {
+        let mut result = Vec::new();
+
+        for (&(buy_ex_id, _buy_quote_id), buy_entry) in &self.prices {
+            for (&(sell_ex_id, _sell_quote_id), sell_entry) in &self.prices {
+                // Skip same exchange AND same quote (same market)
+                if buy_ex_id == sell_ex_id && buy_entry.quote == sell_entry.quote {
+                    continue;
+                }
+
+                if let (Some(buy_ex), Some(sell_ex)) = (
+                    Exchange::from_id(buy_ex_id),
+                    Exchange::from_id(sell_ex_id),
+                ) {
+                    // Premium using orderbook: buy at ask, sell at bid
+                    let premium = FixedPoint::premium_bps(buy_entry.ask, sell_entry.bid);
+                    result.push((
+                        buy_ex, sell_ex,
+                        buy_entry.quote, sell_entry.quote,
+                        buy_entry.ask, sell_entry.bid,
+                        buy_entry.ask_size, sell_entry.bid_size,
+                        premium
+                    ));
                 }
             }
         }

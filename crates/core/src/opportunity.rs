@@ -128,6 +128,10 @@ pub struct ArbitrageOpportunity {
     pub asset: Asset,
     pub source_price: u64,
     pub target_price: u64,
+    /// Orderbook depth at source (ask size - how much we can buy)
+    pub source_depth: u64,
+    /// Orderbook depth at target (bid size - how much we can sell)
+    pub target_depth: u64,
     /// Raw premium in basis points (direct price comparison, no currency conversion)
     pub premium_bps: i32,
     /// Kimchi premium: KRW price converted via USD/KRW rate vs overseas price
@@ -245,6 +249,8 @@ impl ArbitrageOpportunity {
             asset,
             source_price: source_price.0,
             target_price: target_price.0,
+            source_depth: 0,
+            target_depth: 0,
             premium_bps,
             kimchi_premium_bps,
             tether_premium_bps,
@@ -258,6 +264,13 @@ impl ArbitrageOpportunity {
             max_amount: u64::MAX,
             confidence_score: 50,
         }
+    }
+
+    /// Set orderbook depth (builder pattern).
+    pub fn with_depth(mut self, source_depth: FixedPoint, target_depth: FixedPoint) -> Self {
+        self.source_depth = source_depth.0;
+        self.target_depth = target_depth.0;
+        self
     }
 
     /// Calculate kimchi and tether premiums for KRW opportunities.
