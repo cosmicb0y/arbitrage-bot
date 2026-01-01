@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  arbitrage-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arbitrage-bot
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    volumes:
+      # Persist SQLite database
+      - ./data:/app/data
+      # Optional: mount symbol mappings if updated externally
+      - ./symbol_mappings.json:/app/symbol_mappings.json:ro
+      - ./network_name_mapping.json:/app/network_name_mapping.json:ro
+    environment:
+      - RUST_LOG=info
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # Optional: Exchange API keys for wallet status
+      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
+      - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY:-}
+      - BYBIT_API_KEY=${BYBIT_API_KEY:-}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET:-}
+      - GATEIO_API_KEY=${GATEIO_API_KEY:-}
+      - GATEIO_API_SECRET=${GATEIO_API_SECRET:-}
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

@@ -46,6 +46,9 @@ tmp/
 temp/
 *.tmp
 
+# Data directory (SQLite database)
+data/
+
 # Temporary network mapping files (keep network_name_mapping.json)
 network_by_exchange.json
 network_mappings.json

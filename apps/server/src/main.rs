@@ -15,6 +15,8 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+use arbitrage_alerts::{Database, Notifier, NotifierConfig, TelegramBot};
+
 use arbitrage_core::{Exchange, FixedPoint, PriceTick, QuoteCurrency};
 use arbitrage_feeds::{
     load_mappings, BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, FeedConfig,
@@ -57,6 +59,14 @@ struct Args {
     /// WebSocket server port for clients (Tauri app)
     #[arg(long, default_value_t = 9001)]
     ws_port: u16,
+
+    /// Enable Telegram alerts (requires TELEGRAM_BOT_TOKEN env var)
+    #[arg(long, default_value_t = false)]
+    telegram: bool,
+
+    /// SQLite database path for alert configuration
+    #[arg(long, default_value = "data/alerts.db")]
+    db_path: String,
 }
 
 fn init_logging(level: &str) {
@@ -97,7 +107,11 @@ fn parse_mode(mode: &str) -> ExecutionMode {
     }
 }
 
-async fn run_detector_loop(state: SharedState, broadcast_tx: BroadcastSender) {
+async fn run_detector_loop(
+    state: SharedState,
+    broadcast_tx: BroadcastSender,
+    notifier: Option<Arc<Notifier>>,
+) {
     info!("Starting detector loop");
 
     // Legacy hardcoded pair IDs for backwards compatibility
@@ -130,6 +144,13 @@ async fn run_detector_loop(state: SharedState, broadcast_tx: BroadcastSender) {
                     );
                     // Broadcast opportunity to clients
                     ws_server::broadcast_opportunity(&broadcast_tx, &state, &opp);
+
+                    // Send Telegram alert if notifier is configured
+                    if let Some(ref notifier) = notifier {
+                        if let Err(e) = notifier.process_opportunity(&opp).await {
+                            tracing::warn!("Failed to send Telegram alert: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -1218,6 +1239,7 @@ async fn main() {
     info!("  Dry Run: {}", args.dry_run);
     info!("  Live Feeds: {}", args.live);
     info!("  WebSocket Port: {}", args.ws_port);
+    info!("  Telegram Alerts: {}", args.telegram);
 
     // Load network name mapping for cross-exchange transfer path detection
     wallet_status::init_network_mapping();
@@ -1280,11 +1302,65 @@ async fn main() {
         }
     }
 
+    // Initialize Telegram notifier if enabled
+    let notifier: Option<Arc<Notifier>> = if args.telegram {
+        match std::env::var("TELEGRAM_BOT_TOKEN") {
+            Ok(token) => {
+                // Ensure data directory exists
+                let db_dir = std::path::Path::new(&args.db_path).parent();
+                if let Some(dir) = db_dir {
+                    if !dir.exists() {
+                        if let Err(e) = std::fs::create_dir_all(dir) {
+                            warn!("Failed to create data directory: {}", e);
+                        }
+                    }
+                }
+
+                // Connect to database
+                let db_url = format!("sqlite:{}", args.db_path);
+                match Database::connect(&db_url).await {
+                    Ok(db) => {
+                        let bot = Arc::new(TelegramBot::new(&token, db.clone()));
+                        let notifier_config = NotifierConfig::default();
+
+                        // Create notifier with transfer path checker
+                        let notifier = Notifier::new(db, bot.clone(), notifier_config)
+                            .with_transfer_path_checker(Box::new(|asset, source, target| {
+                                wallet_status::has_transfer_path(asset, source, target)
+                            }));
+                        let notifier = Arc::new(notifier);
+
+                        info!("📱 Telegram alerts enabled (with transfer path filtering)");
+
+                        // Start bot command handler in background
+                        let bot_clone = bot.clone();
+                        tokio::spawn(async move {
+                            bot_clone.run().await;
+                        });
+
+                        Some(notifier)
+                    }
+                    Err(e) => {
+                        warn!("Failed to connect to alert database: {}", e);
+                        None
+                    }
+                }
+            }
+            Err(_) => {
+                warn!("TELEGRAM_BOT_TOKEN not set, Telegram alerts disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Spawn background tasks with broadcast sender
     let detector_state = state.clone();
     let detector_broadcast = broadcast_tx.clone();
+    let detector_notifier = notifier.clone();
     let detector_handle = tokio::spawn(async move {
-        run_detector_loop(detector_state, detector_broadcast).await;
+        run_detector_loop(detector_state, detector_broadcast, detector_notifier).await;
     });
 
     let stats_state = state.clone();

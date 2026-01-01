@@ -12,6 +12,7 @@ arbitrage-core = { path = "../../crates/core" }
 arbitrage-feeds = { path = "../../crates/feeds" }
 arbitrage-engine = { path = "../../crates/engine" }
 arbitrage-executor = { path = "../../crates/executor" }
+arbitrage-alerts = { path = "../../crates/alerts" }
 
 # Async runtime
 tokio = { workspace = true }
