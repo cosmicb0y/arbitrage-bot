@@ -13,6 +13,23 @@ interface PriceChanges {
 const getOppKey = (opp: { symbol: string; source_exchange: string; target_exchange: string }) =>
   `${opp.symbol}-${opp.source_exchange}-${opp.target_exchange}`;
 
+// Format elapsed time since opportunity was detected
+const formatElapsedTime = (timestampMs: number): string => {
+  const now = Date.now();
+  const elapsedMs = now - timestampMs;
+
+  if (elapsedMs < 0) return "0s";
+
+  const seconds = Math.floor(elapsedMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+};
+
 type PremiumMode = "kimchi" | "tether";
 
 function Opportunities() {
@@ -26,6 +43,16 @@ function Opportunities() {
   const [minVolume, setMinVolume] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [premiumMode, setPremiumMode] = useState<PremiumMode>("tether");
+  const [pathOnly, setPathOnly] = useState<boolean>(false);
+  const [, setTick] = useState(0); // Force re-render for elapsed time updates
+
+  // Update elapsed time display every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Build wallet status lookup: exchange -> asset -> { canDeposit, canWithdraw }
   const walletStatusMap = useMemo(() => {
@@ -42,14 +69,12 @@ function Opportunities() {
     return map;
   }, [walletStatuses]);
 
-  // Build volume map by symbol
-  const volumeBySymbol = useMemo(() => {
+  // Build volume map by exchange+symbol (for filtering both source and target)
+  const volumeByExchangeSymbol = useMemo(() => {
     const map: Record<string, number> = {};
     for (const price of prices) {
-      if (!map[price.symbol]) {
-        map[price.symbol] = 0;
-      }
-      map[price.symbol] += price.volume_24h || 0;
+      const key = `${price.exchange}:${price.symbol}`;
+      map[key] = price.volume_24h || 0;
     }
     return map;
   }, [prices]);
@@ -79,15 +104,20 @@ function Opportunities() {
           const matchesTarget = opp.target_exchange.toUpperCase().includes(query);
           if (!matchesSymbol && !matchesSource && !matchesTarget) return false;
         }
-        // Volume filter
+        // Volume filter: both source and target exchanges must meet the volume threshold
         if (minVolume > 0) {
-          const volume = volumeBySymbol[opp.symbol] || 0;
-          if (volume < minVolume) return false;
+          const sourceKey = `${opp.source_exchange}:${opp.symbol}`;
+          const targetKey = `${opp.target_exchange}:${opp.symbol}`;
+          const sourceVolume = volumeByExchangeSymbol[sourceKey] || 0;
+          const targetVolume = volumeByExchangeSymbol[targetKey] || 0;
+          if (sourceVolume < minVolume || targetVolume < minVolume) return false;
         }
+        // Path filter: only show opportunities with transfer path
+        if (pathOnly && !opp.has_transfer_path) return false;
         return true;
       })
       .sort((a, b) => getSortPremium(b) - getSortPremium(a));
-  }, [rawOpportunities, searchQuery, minVolume, volumeBySymbol, premiumMode]);
+  }, [rawOpportunities, searchQuery, minVolume, volumeByExchangeSymbol, premiumMode, pathOnly]);
 
   // Detect price changes
   useEffect(() => {
@@ -188,6 +218,16 @@ function Opportunities() {
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-semibold">Arbitrage Opportunities</h2>
         <div className="flex items-center gap-4">
+          {/* Path Only Toggle */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={pathOnly}
+              onChange={(e) => setPathOnly(e.target.checked)}
+              className="w-4 h-4 rounded border-dark-600 bg-dark-700 text-primary-500 focus:ring-primary-500 focus:ring-offset-0"
+            />
+            <span className="text-sm text-gray-400">Path만</span>
+          </label>
           {/* Premium Mode Toggle (김프/테프 for KRW trades) */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500">KRW:</span>
@@ -253,7 +293,7 @@ function Opportunities() {
             <col className="w-24" />
             <col className="w-28" />
             <col className="w-28" />
-            <col className="w-24" />
+            <col className="w-40" />
             <col className="w-24" />
             <col className="w-24" />
           </colgroup>
@@ -264,8 +304,8 @@ function Opportunities() {
               <th className="text-center text-gray-400 text-sm p-4">Transfer</th>
               <th className="text-right text-gray-400 text-sm p-4">Buy Price</th>
               <th className="text-right text-gray-400 text-sm p-4">Sell Price</th>
+              <th className="text-right text-gray-400 text-sm p-4">Depth</th>
               <th className="text-right text-gray-400 text-sm p-4">Spread</th>
-              <th className="text-center text-gray-400 text-sm p-4">Confidence</th>
               <th className="text-center text-gray-400 text-sm p-4">Action</th>
             </tr>
           </thead>
@@ -321,31 +361,57 @@ function Opportunities() {
                     </div>
                   </td>
                   <td className="p-4 text-center">
-                    <div className="flex items-center justify-center gap-1">
+                    <div className="flex flex-col items-center gap-0.5">
+                      <div className="flex items-center justify-center gap-1">
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded ${
+                            canWithdrawFromSource === undefined
+                              ? "bg-gray-600 text-gray-400"
+                              : canWithdrawFromSource
+                                ? "bg-success-500/20 text-success-400"
+                                : "bg-danger-500/20 text-danger-400"
+                          }`}
+                          title={`${opp.source_exchange} withdraw`}
+                        >
+                          W{canWithdrawFromSource === undefined ? "?" : canWithdrawFromSource ? "✓" : "✕"}
+                        </span>
+                        <span className="text-gray-600">→</span>
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded ${
+                            canDepositToTarget === undefined
+                              ? "bg-gray-600 text-gray-400"
+                              : canDepositToTarget
+                                ? "bg-success-500/20 text-success-400"
+                                : "bg-danger-500/20 text-danger-400"
+                          }`}
+                          title={`${opp.target_exchange} deposit`}
+                        >
+                          D{canDepositToTarget === undefined ? "?" : canDepositToTarget ? "✓" : "✕"}
+                        </span>
+                      </div>
+                      {/* Show transfer path status - uses common network matching */}
+                      {/* Distinguish: unknown (loading) vs no path (blocked) vs has path (available) */}
                       <span
                         className={`text-xs px-1.5 py-0.5 rounded ${
-                          canWithdrawFromSource === undefined
+                          !opp.wallet_status_known
                             ? "bg-gray-600 text-gray-400"
-                            : canWithdrawFromSource
+                            : opp.has_transfer_path
                               ? "bg-success-500/20 text-success-400"
                               : "bg-danger-500/20 text-danger-400"
                         }`}
-                        title={`${opp.source_exchange} withdraw`}
+                        title={
+                          !opp.wallet_status_known
+                            ? "Wallet status loading..."
+                            : opp.common_networks?.length
+                              ? `Common networks: ${opp.common_networks.join(", ")}`
+                              : "No common network available"
+                        }
                       >
-                        W{canWithdrawFromSource === undefined ? "?" : canWithdrawFromSource ? "✓" : "✕"}
-                      </span>
-                      <span className="text-gray-600">→</span>
-                      <span
-                        className={`text-xs px-1.5 py-0.5 rounded ${
-                          canDepositToTarget === undefined
-                            ? "bg-gray-600 text-gray-400"
-                            : canDepositToTarget
-                              ? "bg-success-500/20 text-success-400"
-                              : "bg-danger-500/20 text-danger-400"
-                        }`}
-                        title={`${opp.target_exchange} deposit`}
-                      >
-                        D{canDepositToTarget === undefined ? "?" : canDepositToTarget ? "✓" : "✕"}
+                        {!opp.wallet_status_known
+                          ? "? Loading"
+                          : opp.has_transfer_path
+                            ? "✓ Path"
+                            : "✕ Blocked"}
                       </span>
                     </div>
                   </td>
@@ -358,6 +424,31 @@ function Opportunities() {
                     <span className={getChangeClass(changes?.target)}>
                       ${formatPrice(opp.target_price)}
                     </span>
+                  </td>
+                  <td className="p-4 text-right">
+                    {(() => {
+                      const sourceDepth = opp.source_depth ?? 0;
+                      const targetDepth = opp.target_depth ?? 0;
+                      // Calculate USD value: depth * price
+                      const sourceUsd = sourceDepth > 0 ? sourceDepth * opp.source_price : 0;
+                      const targetUsd = targetDepth > 0 ? targetDepth * opp.target_price : 0;
+                      // Format USD value (compact: $1.2K, $15K, $1.2M)
+                      const formatUsd = (value: number) => {
+                        if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+                        if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
+                        return `$${value.toFixed(0)}`;
+                      };
+                      return (
+                        <div className="flex flex-col items-end text-xs font-mono">
+                          <span className="text-gray-400" title={`Buy depth: ${sourceDepth.toFixed(4)} @ $${opp.source_price.toFixed(2)}`}>
+                            B: {sourceDepth > 0 ? <><span>{sourceDepth.toFixed(4)}</span> <span className="text-gray-500">({formatUsd(sourceUsd)})</span></> : "-"}
+                          </span>
+                          <span className="text-gray-400" title={`Sell depth: ${targetDepth.toFixed(4)} @ $${opp.target_price.toFixed(2)}`}>
+                            S: {targetDepth > 0 ? <><span>{targetDepth.toFixed(4)}</span> <span className="text-gray-500">({formatUsd(targetUsd)})</span></> : "-"}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="p-4 text-right">
                     {(() => {
@@ -386,22 +477,6 @@ function Opportunities() {
                         </div>
                       );
                     })()}
-                  </td>
-                  <td className="p-4 text-center">
-                    <div className="flex items-center justify-center">
-                      <div
-                        className={`w-2 h-2 rounded-full mr-2 ${
-                          opp.confidence_score >= 70
-                            ? "bg-success-500"
-                            : opp.confidence_score >= 40
-                              ? "bg-yellow-500"
-                              : "bg-danger-500"
-                        }`}
-                      />
-                      <span className="text-gray-400 text-sm">
-                        {opp.confidence_score}%
-                      </span>
-                    </div>
                   </td>
                   <td className="p-4 text-center">
                     <button

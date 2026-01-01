@@ -33,6 +33,16 @@ export interface ArbitrageOpportunity {
   net_profit_bps: number;
   confidence_score: number;
   timestamp: number;
+  // Common networks available for transfer (canonical names)
+  common_networks?: string[];
+  // Whether this opportunity has a viable transfer path
+  has_transfer_path?: boolean;
+  // Whether wallet status data is available for this opportunity
+  wallet_status_known?: boolean;
+  // Orderbook depth at source (ask size - quantity available to buy)
+  source_depth?: number;
+  // Orderbook depth at target (bid size - quantity available to sell)
+  target_depth?: number;
 }
 
 export interface BotStats {

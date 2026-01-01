@@ -89,8 +89,17 @@ function Dashboard() {
     return symbolSet;
   }, [commonMarkets, pricesBySymbol]);
 
-  // Helper to calculate total volume for a symbol
-  const getSymbolVolume = (symbol: string): number => {
+  // Helper to calculate minimum volume for a symbol (across all exchanges)
+  // For arbitrage, we need sufficient liquidity on ALL exchanges
+  const getSymbolMinVolume = (symbol: string): number => {
+    const prices = pricesBySymbol[symbol];
+    if (!prices || prices.length === 0) return 0;
+    const volumes = prices.map(p => p.volume_24h || 0);
+    return Math.min(...volumes);
+  };
+
+  // Helper to calculate total volume for a symbol (for display only)
+  const getSymbolTotalVolume = (symbol: string): number => {
     const prices = pricesBySymbol[symbol];
     if (!prices) return 0;
     return prices.reduce((sum, p) => sum + (p.volume_24h || 0), 0);
@@ -103,9 +112,10 @@ function Dashboard() {
     return Array.from(allSymbols)
       .filter((symbol) => {
         if (!symbol.toUpperCase().includes(query)) return false;
+        // Volume filter: use minimum volume across exchanges (like Opportunities)
         if (minVolume > 0) {
-          const totalVolume = getSymbolVolume(symbol);
-          if (totalVolume < minVolume) return false;
+          const minExchangeVolume = getSymbolMinVolume(symbol);
+          if (minExchangeVolume < minVolume) return false;
         }
         return true;
       })
@@ -271,7 +281,7 @@ function Dashboard() {
                 const maxPrice = hasPriceData ? Math.max(...exchangePrices.map(p => p.price)) : 0;
                 const minPrice = hasPriceData ? Math.min(...exchangePrices.map(p => p.price)) : 0;
                 const spread = maxPrice > 0 ? ((maxPrice - minPrice) / minPrice) * 100 : 0;
-                const totalVolume = hasPriceData ? exchangePrices.reduce((sum, p) => sum + (p.volume_24h || 0), 0) : 0;
+                const totalVolume = hasPriceData ? getSymbolTotalVolume(symbol) : 0;
 
                 return (
                   <button

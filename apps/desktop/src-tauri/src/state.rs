@@ -77,6 +77,21 @@ pub struct OpportunityData {
     pub net_profit_bps: i32,
     pub confidence_score: u8,
     pub timestamp: u64,
+    /// Common networks available for transfer (canonical names)
+    #[serde(default)]
+    pub common_networks: Vec<String>,
+    /// Whether this opportunity has a viable transfer path
+    #[serde(default)]
+    pub has_transfer_path: bool,
+    /// Whether wallet status data is available for this opportunity
+    #[serde(default)]
+    pub wallet_status_known: bool,
+    /// Orderbook depth at source (ask size - quantity available to buy)
+    #[serde(default)]
+    pub source_depth: Option<f64>,
+    /// Orderbook depth at target (bid size - quantity available to sell)
+    #[serde(default)]
+    pub target_depth: Option<f64>,
 }
 
 /// Execution configuration.
