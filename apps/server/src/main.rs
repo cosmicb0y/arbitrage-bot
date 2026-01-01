@@ -12,13 +12,14 @@ use clap::Parser;
 use config::{AppConfig, ExecutionMode};
 use state::{create_state, SharedState};
 use std::time::Duration;
-use tracing::{debug, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{debug, info, warn};
+use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use arbitrage_core::{Exchange, FixedPoint, PriceTick, QuoteCurrency};
 use arbitrage_feeds::{
     load_mappings, BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, FeedConfig,
     GateIOAdapter, MarketDiscovery, SymbolMappings, UpbitAdapter, WsClient, WsMessage,
+    BinanceRestFetcher, BybitRestFetcher, GateIORestFetcher, UpbitRestFetcher,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -59,26 +60,33 @@ struct Args {
 }
 
 fn init_logging(level: &str) {
-    let level = match level {
-        "trace" => Level::TRACE,
-        "debug" => Level::DEBUG,
-        "info" => Level::INFO,
-        "warn" => Level::WARN,
-        "error" => Level::ERROR,
-        _ => Level::INFO,
-    };
+    // Build filter that applies the requested level to our crates
+    // but filters out noisy dependencies (reqwest, hyper, rustls, etc.)
+    let filter = EnvFilter::try_new(format!(
+        "{level},\
+         hyper=warn,\
+         hyper_util=warn,\
+         reqwest=warn,\
+         rustls=warn,\
+         tokio_tungstenite=warn,\
+         tungstenite=warn,\
+         h2=warn,\
+         tower=warn",
+        level = level
+    ))
+    .unwrap_or_else(|_| EnvFilter::new("info"));
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(level)
-        .with_target(false)
-        .with_thread_ids(false)
-        .with_file(false)
-        .with_line_number(false)
-        .compact()
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set tracing subscriber");
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            fmt::layer()
+                .with_target(false)
+                .with_thread_ids(false)
+                .with_file(false)
+                .with_line_number(false)
+                .compact(),
+        )
+        .init();
 }
 
 fn parse_mode(mode: &str) -> ExecutionMode {
@@ -121,7 +129,7 @@ async fn run_detector_loop(state: SharedState, broadcast_tx: BroadcastSender) {
                         opp.target_price
                     );
                     // Broadcast opportunity to clients
-                    ws_server::broadcast_opportunity(&broadcast_tx, &opp);
+                    ws_server::broadcast_opportunity(&broadcast_tx, &state, &opp);
                 }
             }
         }
@@ -230,6 +238,9 @@ fn convert_krw_to_usd_for_exchange(
     Some(FixedPoint::from_f64(price_usd))
 }
 
+/// Cache for orderbook bid/ask and sizes (code -> (bid, ask, bid_size, ask_size) in KRW)
+type OrderbookCache = std::sync::Arc<dashmap::DashMap<String, (FixedPoint, FixedPoint, FixedPoint, FixedPoint)>>;
+
 /// Process Upbit ticker data by market code.
 fn process_upbit_ticker(
     code: &str,
@@ -237,6 +248,7 @@ fn process_upbit_ticker(
     state: &SharedState,
     broadcast_tx: &BroadcastSender,
     symbol_mappings: &SymbolMappings,
+    orderbook_cache: &OrderbookCache,
 ) {
     // Handle USDT/KRW for exchange rate
     if UpbitAdapter::is_usdt_market(code) {
@@ -253,20 +265,46 @@ fn process_upbit_ticker(
         let display_symbol = symbol_mappings.canonical_name("Upbit", &symbol);
         let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
 
+        // Get bid/ask and sizes from orderbook cache (in KRW), default to price if not available
+        let (bid_krw, ask_krw, bid_size, ask_size) = orderbook_cache
+            .get(code)
+            .map(|r| *r.value())
+            .unwrap_or((price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0)));
+
         // Convert KRW to USD using Upbit's USDT/KRW rate
         // Skip if exchange rate is not available yet
         if let Some(price_usd) = convert_krw_to_usd_for_exchange(price, Exchange::Upbit, state) {
-            let tick_usd = PriceTick::new(Exchange::Upbit, pair_id, price_usd, price_usd, price_usd);
+            let bid_usd = convert_krw_to_usd_for_exchange(bid_krw, Exchange::Upbit, state).unwrap_or(price_usd);
+            let ask_usd = convert_krw_to_usd_for_exchange(ask_krw, Exchange::Upbit, state).unwrap_or(price_usd);
+            let tick_usd = PriceTick::new(Exchange::Upbit, pair_id, price_usd, bid_usd, ask_usd)
+                .with_sizes(bid_size, ask_size);
 
-            // Update state asynchronously with KRW quote
+            // Update state asynchronously with KRW quote and bid/ask
             let state_clone = state.clone();
             tokio::spawn(async move {
-                state_clone.update_price_with_quote(Exchange::Upbit, pair_id, price_usd, QuoteCurrency::KRW).await;
+                state_clone.update_price_with_bid_ask(Exchange::Upbit, pair_id, price_usd, bid_usd, ask_usd, bid_size, ask_size, QuoteCurrency::KRW).await;
             });
 
             ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Upbit, pair_id, &display_symbol, Some("KRW"), &tick_usd);
         }
     }
+}
+
+/// Process Upbit orderbook data by market code.
+fn process_upbit_orderbook(
+    code: &str,
+    bid: FixedPoint,
+    ask: FixedPoint,
+    bid_size: FixedPoint,
+    ask_size: FixedPoint,
+    orderbook_cache: &OrderbookCache,
+) {
+    // Skip USDT market
+    if UpbitAdapter::is_usdt_market(code) {
+        return;
+    }
+    // Store bid/ask and sizes in cache for use by ticker handler
+    orderbook_cache.insert(code.to_string(), (bid, ask, bid_size, ask_size));
 }
 
 /// Run live WebSocket feed for Upbit
@@ -277,6 +315,7 @@ async fn run_upbit_feed(
     symbol_mappings: Arc<SymbolMappings>,
 ) {
     info!("Starting Upbit live feed processor");
+    let orderbook_cache: OrderbookCache = std::sync::Arc::new(dashmap::DashMap::new());
 
     while let Some(msg) = rx.recv().await {
         if !state.is_running() {
@@ -285,20 +324,32 @@ async fn run_upbit_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Parse ticker with market code
-                if let Ok((code, price)) = UpbitAdapter::parse_ticker_with_code(&text) {
-                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
+                // Try orderbook first (has bid/ask)
+                if UpbitAdapter::is_orderbook_message(&text) {
+                    if let Ok((code, bid, ask, bid_size, ask_size)) = UpbitAdapter::parse_orderbook_with_code(&text) {
+                        process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                    }
+                } else if let Ok((code, price)) = UpbitAdapter::parse_ticker_with_code(&text) {
+                    // Parse ticker with market code
+                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                 }
             }
             WsMessage::Binary(data) => {
                 // Upbit sends binary MessagePack data
-                if let Ok((code, price)) = UpbitAdapter::parse_ticker_binary_with_code(&data) {
-                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
+                // Try orderbook first
+                if let Ok((code, bid, ask, bid_size, ask_size)) = UpbitAdapter::parse_orderbook_binary_with_code(&data) {
+                    process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                } else if let Ok((code, price)) = UpbitAdapter::parse_ticker_binary_with_code(&data) {
+                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                 } else {
                     // Fallback: try parsing as UTF-8 JSON
-                    if let Ok(text) = String::from_utf8(data) {
-                        if let Ok((code, price)) = UpbitAdapter::parse_ticker_with_code(&text) {
-                            process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
+                    if let Ok(text) = String::from_utf8(data.clone()) {
+                        if UpbitAdapter::is_orderbook_message(&text) {
+                            if let Ok((code, bid, ask, bid_size, ask_size)) = UpbitAdapter::parse_orderbook_with_code(&text) {
+                                process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                            }
+                        } else if let Ok((code, price)) = UpbitAdapter::parse_ticker_with_code(&text) {
+                            process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                         }
                     }
                 }
@@ -334,25 +385,18 @@ async fn run_binance_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Auto-detect symbol, quote currency, and pair_id from message
-                if let Ok((tick, symbol, quote)) = BinanceAdapter::parse_ticker_with_base_quote(&text) {
-                    // Check for stablecoin rate updates
-                    if symbol == "USDT" && quote == "USD" {
-                        state.update_usdt_usd_price(tick.price());
-                        continue;
-                    }
-                    if symbol == "USDC" && quote == "USDT" {
-                        state.update_usdc_usdt_price(tick.price());
-                        continue;
-                    }
+                // Process bookTicker only (real-time bid/ask with depth)
+                if BinanceAdapter::is_book_ticker_message(&text) {
+                    if let Ok((tick, symbol, quote)) = BinanceAdapter::parse_book_ticker_with_base_quote(&text) {
+                        // Use canonical name if mapping exists
+                        let display_symbol = symbol_mappings.canonical_name("Binance", &symbol);
+                        let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                        let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
-                    // Use canonical name if mapping exists
-                    let display_symbol = symbol_mappings.canonical_name("Binance", &symbol);
-                    let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
-                    let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
-
-                    state.update_price_with_quote(Exchange::Binance, pair_id, tick.price(), quote_currency).await;
-                    ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Binance, pair_id, &display_symbol, Some(&quote), &tick);
+                        // Update state with orderbook bid/ask (use symbol variant to ensure depth cache is updated)
+                        state.update_price_with_bid_ask_and_symbol(Exchange::Binance, pair_id, &display_symbol, tick.price(), tick.bid(), tick.ask(), tick.bid_size(), tick.ask_size(), quote_currency).await;
+                        ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Binance, pair_id, &display_symbol, Some(&quote), &tick);
+                    }
                 }
             }
             WsMessage::Connected => {
@@ -387,16 +431,29 @@ async fn run_coinbase_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Auto-detect product, quote currency, and pair_id from message
-                if let Ok((tick, symbol, quote)) = CoinbaseAdapter::parse_ticker_with_base_quote(&text) {
-                    // Use canonical name if mapping exists
-                    let display_symbol = symbol_mappings.canonical_name("Coinbase", &symbol);
-                    let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
-                    // Treat Coinbase USD as USDC (native USD markets behave like USDC)
-                    let normalized_quote = if quote == "USD" { "USDC" } else { &quote };
-                    let quote_currency = QuoteCurrency::from_str(normalized_quote).unwrap_or(QuoteCurrency::USDC);
-                    state.update_price_with_quote(Exchange::Coinbase, pair_id, tick.price(), quote_currency).await;
-                    ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Coinbase, pair_id, &display_symbol, Some(normalized_quote), &tick);
+                // Process level2 snapshot only (orderbook depth with bid/ask sizes)
+                if CoinbaseAdapter::is_level2_message(&text) {
+                    if let Ok((product_id, bid, ask, bid_size, ask_size)) = CoinbaseAdapter::parse_level2_snapshot(&text) {
+                        // Extract base symbol and quote from product_id (e.g., BTC-USD -> BTC, USD)
+                        if let Some((symbol, quote)) = CoinbaseAdapter::extract_base_quote(&product_id) {
+                            // Use canonical name if mapping exists
+                            let display_symbol = symbol_mappings.canonical_name("Coinbase", &symbol);
+                            let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                            // Treat Coinbase USD as USDC (native USD markets behave like USDC)
+                            let normalized_quote = if quote == "USD" { "USDC".to_string() } else { quote };
+                            let quote_currency = QuoteCurrency::from_str(&normalized_quote).unwrap_or(QuoteCurrency::USDC);
+
+                            // Calculate mid price from bid/ask
+                            let mid_price = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
+
+                            let tick = PriceTick::new(Exchange::Coinbase, pair_id, mid_price, bid, ask)
+                                .with_sizes(bid_size, ask_size);
+
+                            // Update state with orderbook data
+                            state.update_price_with_bid_ask_and_symbol(Exchange::Coinbase, pair_id, &display_symbol, mid_price, bid, ask, bid_size, ask_size, quote_currency).await;
+                            ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Coinbase, pair_id, &display_symbol, Some(&normalized_quote), &tick);
+                        }
+                    }
                 }
             }
             WsMessage::Connected => {
@@ -422,6 +479,7 @@ fn process_bithumb_ticker(
     state: &SharedState,
     broadcast_tx: &BroadcastSender,
     symbol_mappings: &SymbolMappings,
+    orderbook_cache: &OrderbookCache,
 ) {
     // Handle USDT/KRW for exchange rate
     if BithumbAdapter::is_usdt_market(code) {
@@ -438,20 +496,46 @@ fn process_bithumb_ticker(
         let display_symbol = symbol_mappings.canonical_name("Bithumb", &symbol);
         let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
 
+        // Get bid/ask and sizes from orderbook cache (in KRW), default to price if not available
+        let (bid_krw, ask_krw, bid_size, ask_size) = orderbook_cache
+            .get(code)
+            .map(|r| *r.value())
+            .unwrap_or((price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0)));
+
         // Convert KRW to USD using Bithumb's USDT/KRW rate
         // Skip if exchange rate is not available yet
         if let Some(price_usd) = convert_krw_to_usd_for_exchange(price, Exchange::Bithumb, state) {
-            let tick_usd = PriceTick::new(Exchange::Bithumb, pair_id, price_usd, price_usd, price_usd);
+            let bid_usd = convert_krw_to_usd_for_exchange(bid_krw, Exchange::Bithumb, state).unwrap_or(price_usd);
+            let ask_usd = convert_krw_to_usd_for_exchange(ask_krw, Exchange::Bithumb, state).unwrap_or(price_usd);
+            let tick_usd = PriceTick::new(Exchange::Bithumb, pair_id, price_usd, bid_usd, ask_usd)
+                .with_sizes(bid_size, ask_size);
 
-            // Update state asynchronously with KRW quote
+            // Update state asynchronously with KRW quote and bid/ask
             let state_clone = state.clone();
             tokio::spawn(async move {
-                state_clone.update_price_with_quote(Exchange::Bithumb, pair_id, price_usd, QuoteCurrency::KRW).await;
+                state_clone.update_price_with_bid_ask(Exchange::Bithumb, pair_id, price_usd, bid_usd, ask_usd, bid_size, ask_size, QuoteCurrency::KRW).await;
             });
 
             ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Bithumb, pair_id, &display_symbol, Some("KRW"), &tick_usd);
         }
     }
+}
+
+/// Process Bithumb orderbook data by market code.
+fn process_bithumb_orderbook(
+    code: &str,
+    bid: FixedPoint,
+    ask: FixedPoint,
+    bid_size: FixedPoint,
+    ask_size: FixedPoint,
+    orderbook_cache: &OrderbookCache,
+) {
+    // Skip USDT market
+    if BithumbAdapter::is_usdt_market(code) {
+        return;
+    }
+    // Store bid/ask and sizes in cache for use by ticker handler
+    orderbook_cache.insert(code.to_string(), (bid, ask, bid_size, ask_size));
 }
 
 /// Run live WebSocket feed for Bithumb
@@ -462,6 +546,7 @@ async fn run_bithumb_feed(
     symbol_mappings: Arc<SymbolMappings>,
 ) {
     info!("Starting Bithumb live feed processor");
+    let orderbook_cache: OrderbookCache = std::sync::Arc::new(dashmap::DashMap::new());
 
     while let Some(msg) = rx.recv().await {
         if !state.is_running() {
@@ -470,20 +555,32 @@ async fn run_bithumb_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Parse ticker with market code
-                if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
-                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
+                // Try orderbook first (has bid/ask)
+                if BithumbAdapter::is_orderbook_message(&text) {
+                    if let Ok((code, bid, ask, bid_size, ask_size)) = BithumbAdapter::parse_orderbook_with_code(&text) {
+                        process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                    }
+                } else if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
+                    // Parse ticker with market code
+                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                 }
             }
             WsMessage::Binary(data) => {
                 // Bithumb sends binary MessagePack data
-                if let Ok((code, price)) = BithumbAdapter::parse_ticker_binary_with_code(&data) {
-                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
+                // Try orderbook first
+                if let Ok((code, bid, ask, bid_size, ask_size)) = BithumbAdapter::parse_orderbook_binary_with_code(&data) {
+                    process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                } else if let Ok((code, price)) = BithumbAdapter::parse_ticker_binary_with_code(&data) {
+                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                 } else {
                     // Fallback: try parsing as UTF-8 JSON
-                    if let Ok(text) = String::from_utf8(data) {
-                        if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
-                            process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings);
+                    if let Ok(text) = String::from_utf8(data.clone()) {
+                        if BithumbAdapter::is_orderbook_message(&text) {
+                            if let Ok((code, bid, ask, bid_size, ask_size)) = BithumbAdapter::parse_orderbook_with_code(&text) {
+                                process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                            }
+                        } else if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
+                            process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                         }
                     }
                 }
@@ -519,14 +616,18 @@ async fn run_bybit_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Parse ticker with symbol and quote currency (auto-detects pair_id from symbol)
-                if let Ok((tick, symbol, quote)) = BybitAdapter::parse_ticker_with_base_quote(&text) {
-                    // Use canonical name if mapping exists
-                    let display_symbol = symbol_mappings.canonical_name("Bybit", &symbol);
-                    let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
-                    let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
-                    state.update_price_with_quote(Exchange::Bybit, pair_id, tick.price(), quote_currency).await;
-                    ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Bybit, pair_id, &display_symbol, Some(&quote), &tick);
+                // Process orderbook only (accurate bid/ask with depth)
+                if BybitAdapter::is_orderbook_message(&text) {
+                    if let Ok((tick, symbol, quote)) = BybitAdapter::parse_orderbook_with_base_quote(&text) {
+                        // Use canonical name if mapping exists
+                        let display_symbol = symbol_mappings.canonical_name("Bybit", &symbol);
+                        let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                        let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+
+                        // Update state with orderbook bid/ask (use symbol variant to ensure depth cache is updated)
+                        state.update_price_with_bid_ask_and_symbol(Exchange::Bybit, pair_id, &display_symbol, tick.price(), tick.bid(), tick.ask(), tick.bid_size(), tick.ask_size(), quote_currency).await;
+                        ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Bybit, pair_id, &display_symbol, Some(&quote), &tick);
+                    }
                 }
             }
             WsMessage::Binary(_) => {
@@ -562,14 +663,27 @@ async fn run_gateio_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Parse ticker with symbol and quote currency (auto-detects pair_id from symbol)
-                if let Ok((tick, symbol, quote)) = GateIOAdapter::parse_ticker_with_base_quote(&text) {
-                    // Use canonical name if mapping exists
-                    let display_symbol = symbol_mappings.canonical_name("GateIO", &symbol);
-                    let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
-                    let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
-                    state.update_price_with_quote(Exchange::GateIO, pair_id, tick.price(), quote_currency).await;
-                    ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::GateIO, pair_id, &display_symbol, Some(&quote), &tick);
+                // Process orderbook message only (depth with bid/ask sizes)
+                if GateIOAdapter::is_orderbook_message(&text) {
+                    if let Ok((currency_pair, bid, ask, bid_size, ask_size)) = GateIOAdapter::parse_orderbook_with_symbol(&text) {
+                        // Extract base symbol and quote from currency_pair (e.g., BTC_USDT -> BTC, USDT)
+                        if let Some((symbol, quote)) = GateIOAdapter::extract_base_quote(&currency_pair) {
+                            // Use canonical name if mapping exists
+                            let display_symbol = symbol_mappings.canonical_name("GateIO", &symbol);
+                            let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                            let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+
+                            // Calculate mid price from bid/ask
+                            let mid_price = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
+
+                            let tick = PriceTick::new(Exchange::GateIO, pair_id, mid_price, bid, ask)
+                                .with_sizes(bid_size, ask_size);
+
+                            // Update state with orderbook data
+                            state.update_price_with_bid_ask_and_symbol(Exchange::GateIO, pair_id, &display_symbol, mid_price, bid, ask, bid_size, ask_size, quote_currency).await;
+                            ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::GateIO, pair_id, &display_symbol, Some(&quote), &tick);
+                        }
+                    }
                 }
             }
             WsMessage::Binary(_) => {
@@ -590,6 +704,163 @@ async fn run_gateio_feed(
     info!("Gate.io feed processor stopped");
 }
 
+/// Fetch initial orderbooks via REST API and populate state.
+/// Only fetches from exchanges with batch/bulk ticker APIs for efficiency.
+/// Coinbase and Bithumb are skipped - they rely on WebSocket for initial data.
+async fn fetch_initial_orderbooks(
+    state: &SharedState,
+    binance_symbols: &[String],
+    bybit_symbols: &[String],
+    gateio_symbols: &[String],
+    upbit_symbols: &[String],
+    symbol_mappings: &SymbolMappings,
+) {
+    // Only fetch from exchanges that support batch/bulk ticker APIs
+    // Binance, Bybit, GateIO: single API call fetches all tickers
+    // Upbit: batch API with comma-separated markets
+    // Coinbase, Bithumb: No batch API - skip and rely on WebSocket
+    info!("📚 Fetching initial orderbooks via REST API (batch-capable exchanges only)...");
+    info!("  Binance: {}, Bybit: {}, GateIO: {}, Upbit: {} (Coinbase/Bithumb: WebSocket only)",
+        binance_symbols.len(), bybit_symbols.len(), gateio_symbols.len(), upbit_symbols.len());
+
+    // Fetch from batch-capable exchanges in parallel
+    let (binance_result, bybit_result, gateio_result, upbit_result) = tokio::join!(
+        BinanceRestFetcher::fetch_orderbooks(binance_symbols),
+        BybitRestFetcher::fetch_orderbooks(bybit_symbols),
+        GateIORestFetcher::fetch_orderbooks(gateio_symbols),
+        UpbitRestFetcher::fetch_orderbooks(upbit_symbols),
+    );
+
+    let mut total_updated = 0;
+
+    // Process Binance orderbooks
+    for (symbol, (bid, ask, bid_size, ask_size)) in &binance_result {
+        // Extract base and quote from symbol (e.g., btcusdt -> BTC, USDT)
+        if let Some((base, quote)) = extract_binance_base_quote(symbol) {
+            let display_symbol = symbol_mappings.canonical_name("Binance", &base);
+            let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+            let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+            let mid_price = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
+
+            state.update_price_with_bid_ask_and_symbol(
+                Exchange::Binance, pair_id, &display_symbol, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency
+            ).await;
+            total_updated += 1;
+        }
+    }
+    info!("  Binance: {} orderbooks loaded", binance_result.len());
+
+    // Process Bybit orderbooks
+    for (symbol, (bid, ask, bid_size, ask_size)) in &bybit_result {
+        // Extract base and quote from Bybit symbol (e.g., BTCUSDT -> BTC, USDT)
+        if let Some((base, quote)) = extract_bybit_base_quote(symbol) {
+            let display_symbol = symbol_mappings.canonical_name("Bybit", &base);
+            let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+            let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+            let mid_price = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
+
+            state.update_price_with_bid_ask_and_symbol(
+                Exchange::Bybit, pair_id, &display_symbol, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency
+            ).await;
+            total_updated += 1;
+        }
+    }
+    info!("  Bybit: {} orderbooks loaded", bybit_result.len());
+
+    // Process GateIO orderbooks
+    for (currency_pair, (bid, ask, bid_size, ask_size)) in &gateio_result {
+        if let Some((base, quote)) = GateIOAdapter::extract_base_quote(currency_pair) {
+            let display_symbol = symbol_mappings.canonical_name("GateIO", &base);
+            let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+            let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+            let mid_price = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
+
+            state.update_price_with_bid_ask_and_symbol(
+                Exchange::GateIO, pair_id, &display_symbol, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency
+            ).await;
+            total_updated += 1;
+        }
+    }
+    info!("  GateIO: {} orderbooks loaded", gateio_result.len());
+
+    // Process Upbit orderbooks (prices are in KRW, need conversion to USD)
+    // First, extract USDT/KRW rate from the result (if KRW-USDT was fetched)
+    let usdt_krw_rate = upbit_result.get("KRW-USDT")
+        .map(|(bid, ask, _, _)| (bid.to_f64() + ask.to_f64()) / 2.0);
+
+    if let Some(rate) = usdt_krw_rate {
+        // Store the USDT/KRW rate in state for other uses
+        state.update_upbit_usdt_krw(FixedPoint::from_f64(rate));
+        info!("  Upbit: USDT/KRW rate from REST: {:.2}", rate);
+    }
+
+    // Get the USDT/KRW rate for conversion (from REST or existing state)
+    let usdt_krw = usdt_krw_rate.or_else(|| state.get_upbit_usdt_krw().map(|p| p.to_f64()));
+    let usdt_usd = state.get_usdt_usd_price().to_f64();
+
+    for (market, (bid, ask, bid_size, ask_size)) in &upbit_result {
+        // Skip USDT market (already processed above)
+        if market == "KRW-USDT" {
+            continue;
+        }
+
+        // Extract base from market (e.g., "KRW-BTC" -> "BTC")
+        if let Some(base) = UpbitAdapter::extract_base_symbol(market) {
+            let display_symbol = symbol_mappings.canonical_name("Upbit", &base);
+            let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+
+            // Convert KRW prices to USD if we have the exchange rate
+            if let Some(usdt_krw_rate) = usdt_krw {
+                // KRW -> USDT -> USD
+                let bid_usd = bid.to_f64() / usdt_krw_rate * usdt_usd;
+                let ask_usd = ask.to_f64() / usdt_krw_rate * usdt_usd;
+                let mid_price_usd = (bid_usd + ask_usd) / 2.0;
+
+                state.update_price_with_bid_ask_and_symbol(
+                    Exchange::Upbit, pair_id, &display_symbol,
+                    FixedPoint::from_f64(mid_price_usd),
+                    FixedPoint::from_f64(bid_usd),
+                    FixedPoint::from_f64(ask_usd),
+                    *bid_size, *ask_size, QuoteCurrency::KRW
+                ).await;
+            } else {
+                // No exchange rate available yet, store raw KRW prices
+                // They will be updated when WebSocket provides the rate
+                let mid_price = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
+                state.update_price_with_bid_ask_and_symbol(
+                    Exchange::Upbit, pair_id, &display_symbol, mid_price, *bid, *ask, *bid_size, *ask_size, QuoteCurrency::KRW
+                ).await;
+                debug!("  Upbit: {} stored as KRW (no exchange rate yet)", display_symbol);
+            }
+            total_updated += 1;
+        }
+    }
+    info!("  Upbit: {} orderbooks loaded", upbit_result.len());
+
+    info!("📚 Initial orderbook fetch complete: {} total orderbooks loaded", total_updated);
+}
+
+/// Extract base and quote from Binance symbol (e.g., btcusdt -> BTC, USDT)
+fn extract_binance_base_quote(symbol: &str) -> Option<(String, String)> {
+    let s = symbol.to_uppercase();
+    // Try known quote currencies in order of length (longer first)
+    for quote in &["USDT", "USDC", "BUSD", "USD", "BTC", "ETH", "BNB"] {
+        if s.ends_with(quote) {
+            let base = &s[..s.len() - quote.len()];
+            if !base.is_empty() {
+                return Some((base.to_string(), quote.to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// Extract base and quote from Bybit symbol (e.g., BTCUSDT -> BTC, USDT)
+fn extract_bybit_base_quote(symbol: &str) -> Option<(String, String)> {
+    // Bybit uses same format as Binance
+    extract_binance_base_quote(symbol)
+}
+
 /// Spawn live WebSocket feeds
 async fn spawn_live_feeds(
     state: SharedState,
@@ -599,8 +870,13 @@ async fn spawn_live_feeds(
     let mut handles = Vec::new();
 
     // First, do an initial market discovery to get common symbols
+    info!("🔍 Starting initial market discovery...");
     let discovery = MarketDiscovery::new();
     let all_markets = discovery.fetch_all().await;
+    info!("🔍 Fetched markets from {} exchanges", all_markets.len());
+    for (exchange, markets) in &all_markets {
+        debug!("  {}: {} markets", exchange, markets.markets.len());
+    }
 
     // Find common markets across exchanges we support for live feeds
     // Apply symbol mappings to exclude mismatched symbols
@@ -611,6 +887,7 @@ async fn spawn_live_feeds(
         2,
         Some(symbol_mappings),
     );
+    info!("🔍 Found {} common markets, {} by_quote entries", common.common.len(), common.by_quote.len());
 
     // Get symbols for each exchange from by_quote markets (includes both USDT and USDC)
     // This ensures we subscribe to all quote variants (BTC-USDT, BTC-USDC, etc.)
@@ -686,6 +963,18 @@ async fn spawn_live_feeds(
     // Register all symbols for opportunity detection
     state.register_common_markets(&common).await;
 
+    // Fetch initial orderbooks via REST API before WebSocket feeds start
+    // Only batch-capable exchanges: Binance, Bybit, GateIO, Upbit
+    // Coinbase and Bithumb rely on WebSocket for initial data
+    fetch_initial_orderbooks(
+        &state,
+        &binance_symbols,
+        &bybit_symbols,
+        &gateio_symbols,
+        &upbit_symbols,
+        symbol_mappings,
+    ).await;
+
     // Convert symbol_mappings to Arc for sharing across tasks
     let symbol_mappings_arc = Arc::new(symbol_mappings.clone());
 
@@ -699,11 +988,11 @@ async fn spawn_live_feeds(
         all_binance_symbols.push("USDTUSD".to_string());
         all_binance_symbols.push("USDCUSDT".to_string());
 
-        let binance_subscribe = BinanceAdapter::subscribe_message(&all_binance_symbols);
+        let binance_subscribe_msgs = BinanceAdapter::subscribe_messages(&all_binance_symbols);
 
         let binance_client = WsClient::new(binance_config.clone(), binance_tx);
         handles.push(tokio::spawn(async move {
-            if let Err(e) = binance_client.run(Some(binance_subscribe)).await {
+            if let Err(e) = binance_client.run_with_messages(Some(binance_subscribe_msgs)).await {
                 warn!("Binance WebSocket error: {}", e);
             }
         }));
@@ -720,11 +1009,12 @@ async fn spawn_live_feeds(
     if !coinbase_symbols.is_empty() {
         let coinbase_config = FeedConfig::for_exchange(Exchange::Coinbase);
         let (coinbase_tx, coinbase_rx) = mpsc::channel(1000);
-        let coinbase_subscribe = CoinbaseAdapter::subscribe_message(&coinbase_symbols);
+        // Subscribe to both ticker and level2_batch for orderbook depth
+        let coinbase_subscribe_msgs = CoinbaseAdapter::subscribe_messages(&coinbase_symbols);
 
         let coinbase_client = WsClient::new(coinbase_config.clone(), coinbase_tx);
         handles.push(tokio::spawn(async move {
-            if let Err(e) = coinbase_client.run(Some(coinbase_subscribe)).await {
+            if let Err(e) = coinbase_client.run_with_messages(Some(coinbase_subscribe_msgs)).await {
                 warn!("Coinbase WebSocket error: {}", e);
             }
         }));
@@ -805,11 +1095,12 @@ async fn spawn_live_feeds(
     if !gateio_symbols.is_empty() {
         let gateio_config = FeedConfig::for_exchange(Exchange::GateIO);
         let (gateio_tx, gateio_rx) = mpsc::channel(1000);
-        let gateio_subscribe = GateIOAdapter::subscribe_message(&gateio_symbols);
+        // Subscribe to both ticker and order_book for orderbook depth
+        let gateio_subscribe_msgs = GateIOAdapter::subscribe_messages(&gateio_symbols);
 
         let gateio_client = WsClient::new(gateio_config.clone(), gateio_tx);
         handles.push(tokio::spawn(async move {
-            if let Err(e) = gateio_client.run(Some(gateio_subscribe)).await {
+            if let Err(e) = gateio_client.run_with_messages(Some(gateio_subscribe_msgs)).await {
                 warn!("Gate.io WebSocket error: {}", e);
             }
         }));
@@ -927,6 +1218,9 @@ async fn main() {
     info!("  Dry Run: {}", args.dry_run);
     info!("  Live Feeds: {}", args.live);
     info!("  WebSocket Port: {}", args.ws_port);
+
+    // Load network name mapping for cross-exchange transfer path detection
+    wallet_status::init_network_mapping();
 
     // Load symbol mappings for filtering mismatched coins
     let symbol_mappings = Arc::new(load_mappings());

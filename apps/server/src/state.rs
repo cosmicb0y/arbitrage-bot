@@ -82,6 +82,12 @@ pub struct StatsSummary {
     pub uptime_secs: u64,
 }
 
+/// Depth cache key: (exchange, symbol)
+type DepthCacheKey = (String, String);
+
+/// Depth cache value: (bid_size, ask_size)
+type DepthCacheValue = (FixedPoint, FixedPoint);
+
 /// Application state shared across components.
 pub struct AppState {
     /// Configuration.
@@ -112,6 +118,9 @@ pub struct AppState {
     usdc_usdt_price: AtomicU64,
     /// Common markets across exchanges.
     pub common_markets: RwLock<Option<CommonMarkets>>,
+    /// Orderbook depth cache: (exchange, symbol) -> (bid_size, ask_size)
+    /// Updated on every price update, used to enrich opportunity data.
+    depth_cache: DashMap<DepthCacheKey, DepthCacheValue>,
 }
 
 impl AppState {
@@ -132,6 +141,7 @@ impl AppState {
             usdt_usd_price: AtomicU64::new(FixedPoint::from_f64(1.0).0), // Default 1:1
             usdc_usdt_price: AtomicU64::new(FixedPoint::from_f64(1.0).0), // Default 1:1
             common_markets: RwLock::new(None),
+            depth_cache: DashMap::new(),
         }
     }
 
@@ -233,38 +243,122 @@ impl AppState {
     }
 
     /// Update price from a feed with specified quote currency.
+    /// Uses mid price as bid/ask when only price is available.
     pub async fn update_price_with_quote(&self, exchange: Exchange, pair_id: u32, price: FixedPoint, quote: QuoteCurrency) {
+        self.update_price_with_bid_ask(exchange, pair_id, price, price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0), quote).await;
+    }
+
+    /// Update price from a feed with bid/ask from orderbook.
+    /// This enables accurate premium calculation using best bid/ask prices.
+    pub async fn update_price_with_bid_ask(
+        &self,
+        exchange: Exchange,
+        pair_id: u32,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
         // Update price aggregator
-        let tick = arbitrage_core::PriceTick::with_quote(exchange, pair_id, price, price, price, quote);
+        let tick = arbitrage_core::PriceTick::with_depth(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
         self.prices.update(tick);
 
-        // Update detector with quote
+        // Update detector with bid/ask for accurate premium calculation
         {
             let mut detector = self.detector.write().await;
-            detector.update_price_with_quote(exchange, pair_id, price, quote);
+            // Get or compute symbol for depth cache
+            // First try registry, then compute from pair_id if possible
+            let symbol = detector.pair_id_to_symbol(pair_id);
+            if let Some(sym) = &symbol {
+                // Update depth cache (only if we have non-zero depth)
+                if bid_size.0 > 0 || ask_size.0 > 0 {
+                    let key = (format!("{:?}", exchange), sym.clone());
+                    self.depth_cache.insert(key, (bid_size, ask_size));
+                }
+            }
+            detector.update_price_with_bid_ask(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
         }
 
         self.stats.record_price_update();
     }
 
+    /// Update price from a feed with bid/ask from orderbook and symbol.
+    /// Use this when symbol is known to ensure depth cache is updated.
+    pub async fn update_price_with_bid_ask_and_symbol(
+        &self,
+        exchange: Exchange,
+        pair_id: u32,
+        symbol: &str,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
+        // Update price aggregator
+        let tick = arbitrage_core::PriceTick::with_depth(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
+        self.prices.update(tick);
+
+        // Update depth cache directly (we know the symbol)
+        if bid_size.0 > 0 || ask_size.0 > 0 {
+            let key = (format!("{:?}", exchange), symbol.to_string());
+            self.depth_cache.insert(key, (bid_size, ask_size));
+        }
+
+        // Update detector with bid/ask for accurate premium calculation
+        {
+            let mut detector = self.detector.write().await;
+            // Register symbol if not already registered
+            detector.get_or_register_pair_id(symbol);
+            detector.update_price_with_bid_ask(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
+        }
+
+        self.stats.record_price_update();
+    }
+
+    /// Get cached orderbook depth for an exchange and symbol.
+    /// Returns (bid_size, ask_size) or None if not cached.
+    pub fn get_depth(&self, exchange: &str, symbol: &str) -> Option<(FixedPoint, FixedPoint)> {
+        let key = (exchange.to_string(), symbol.to_string());
+        self.depth_cache.get(&key).map(|v| *v)
+    }
+
     /// Update price for a symbol (dynamic markets).
+    /// Uses mid price as bid/ask when only price is available.
     pub async fn update_price_for_symbol(
         &self,
         exchange: Exchange,
         symbol: &str,
         price: FixedPoint,
     ) {
+        self.update_price_for_symbol_with_bid_ask(exchange, symbol, price, price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0)).await;
+    }
+
+    /// Update price for a symbol with bid/ask from orderbook.
+    pub async fn update_price_for_symbol_with_bid_ask(
+        &self,
+        exchange: Exchange,
+        symbol: &str,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+    ) {
         let pair_id = symbol_to_pair_id(symbol);
 
         // Update price aggregator
-        let tick = arbitrage_core::PriceTick::new(exchange, pair_id, price, price, price);
+        let tick = arbitrage_core::PriceTick::new(exchange, pair_id, price, bid, ask).with_sizes(bid_size, ask_size);
         self.prices.update(tick);
 
-        // Update detector (registers symbol if needed)
+        // Update detector with bid/ask (registers symbol if needed)
         {
             let mut detector = self.detector.write().await;
             detector.get_or_register_pair_id(symbol);
-            detector.update_price(exchange, pair_id, price);
+            detector.update_price_with_bid_ask(exchange, pair_id, price, bid, ask, bid_size, ask_size, arbitrage_core::QuoteCurrency::USD);
         }
 
         self.stats.record_price_update();

@@ -70,6 +70,26 @@ pub struct WsOpportunityData {
     pub net_profit_bps: i32,
     pub confidence_score: u8,
     pub timestamp: u64,
+    /// Common networks available for transfer between source and target exchanges.
+    /// Empty if no common network is available (opportunity not executable).
+    #[serde(default)]
+    pub common_networks: Vec<String>,
+    /// Whether this opportunity has a viable transfer path.
+    /// - true: Common network exists, transfer is possible
+    /// - false: No common network, transfer not possible
+    #[serde(default)]
+    pub has_transfer_path: bool,
+    /// Whether wallet status data is available for this opportunity.
+    /// - true: Wallet status loaded, has_transfer_path is reliable
+    /// - false: Wallet status not yet loaded, has_transfer_path may be inaccurate
+    #[serde(default)]
+    pub wallet_status_known: bool,
+    /// Orderbook depth at source (ask size - quantity available to buy)
+    #[serde(default)]
+    pub source_depth: f64,
+    /// Orderbook depth at target (bid size - quantity available to sell)
+    #[serde(default)]
+    pub target_depth: f64,
 }
 
 /// Exchange rate data for WebSocket broadcast.
@@ -415,26 +435,52 @@ fn collect_wallet_status() -> Option<WsWalletStatusData> {
 /// Collect current opportunities from state.
 async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
     let opps = state.opportunities.read().await;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
 
-    let result: Vec<WsOpportunityData> = opps.iter().map(|opp| WsOpportunityData {
-        id: opp.id,
-        symbol: opp.asset.symbol.to_string(),
-        source_exchange: format!("{:?}", opp.source_exchange),
-        target_exchange: format!("{:?}", opp.target_exchange),
-        source_quote: opp.source_quote.as_str().to_string(),
-        target_quote: opp.target_quote.as_str().to_string(),
-        premium_bps: opp.premium_bps,
-        kimchi_premium_bps: opp.kimchi_premium_bps,
-        tether_premium_bps: opp.tether_premium_bps,
-        source_price: FixedPoint(opp.source_price).to_f64(),
-        target_price: FixedPoint(opp.target_price).to_f64(),
-        net_profit_bps: (opp.net_profit_estimate / 100) as i32,
-        confidence_score: opp.confidence_score,
-        timestamp: now,
+    let result: Vec<WsOpportunityData> = opps.iter().map(|opp| {
+        let source_ex = format!("{:?}", opp.source_exchange);
+        let target_ex = format!("{:?}", opp.target_exchange);
+        let symbol = opp.asset.symbol.to_string();
+
+        // Check if wallet status is known for these exchanges
+        let wallet_status_known = wallet_status::is_wallet_status_known(&source_ex, &target_ex);
+
+        // Find common networks for this opportunity
+        let (common_networks, _, _) = wallet_status::find_common_networks_for_asset(
+            &symbol,
+            &source_ex,
+            &target_ex,
+        );
+        let has_transfer_path = !common_networks.is_empty();
+
+        // Get latest depth from cache (source = ask_size for buying, target = bid_size for selling)
+        let source_depth = state.get_depth(&source_ex, &symbol)
+            .map(|(_, ask_size)| ask_size.to_f64())
+            .unwrap_or_else(|| FixedPoint(opp.source_depth).to_f64());
+        let target_depth = state.get_depth(&target_ex, &symbol)
+            .map(|(bid_size, _)| bid_size.to_f64())
+            .unwrap_or_else(|| FixedPoint(opp.target_depth).to_f64());
+
+        WsOpportunityData {
+            id: opp.id,
+            symbol,
+            source_exchange: source_ex,
+            target_exchange: target_ex,
+            source_quote: opp.source_quote.as_str().to_string(),
+            target_quote: opp.target_quote.as_str().to_string(),
+            premium_bps: opp.premium_bps,
+            kimchi_premium_bps: opp.kimchi_premium_bps,
+            tether_premium_bps: opp.tether_premium_bps,
+            source_price: FixedPoint(opp.source_price).to_f64(),
+            target_price: FixedPoint(opp.target_price).to_f64(),
+            net_profit_bps: (opp.net_profit_estimate / 100) as i32,
+            confidence_score: opp.confidence_score,
+            timestamp: opp.discovered_at_ms,
+            common_networks,
+            has_transfer_path,
+            wallet_status_known,
+            source_depth,
+            target_depth,
+        }
     }).collect();
 
     result
@@ -501,12 +547,35 @@ pub fn broadcast_stats(tx: &BroadcastSender, state: &SharedState) {
 }
 
 /// Broadcast a new opportunity to all clients.
-pub fn broadcast_opportunity(tx: &BroadcastSender, opp: &arbitrage_core::ArbitrageOpportunity) {
+pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &arbitrage_core::ArbitrageOpportunity) {
+    let source_ex = format!("{:?}", opp.source_exchange);
+    let target_ex = format!("{:?}", opp.target_exchange);
+    let symbol = opp.asset.symbol.to_string();
+
+    // Check if wallet status is known for these exchanges
+    let wallet_status_known = wallet_status::is_wallet_status_known(&source_ex, &target_ex);
+
+    // Find common networks for this opportunity
+    let (common_networks, _, _) = wallet_status::find_common_networks_for_asset(
+        &symbol,
+        &source_ex,
+        &target_ex,
+    );
+    let has_transfer_path = !common_networks.is_empty();
+
+    // Get latest depth from cache (source = ask_size for buying, target = bid_size for selling)
+    let source_depth = state.get_depth(&source_ex, &symbol)
+        .map(|(_, ask_size)| ask_size.to_f64())
+        .unwrap_or_else(|| FixedPoint(opp.source_depth).to_f64());
+    let target_depth = state.get_depth(&target_ex, &symbol)
+        .map(|(bid_size, _)| bid_size.to_f64())
+        .unwrap_or_else(|| FixedPoint(opp.target_depth).to_f64());
+
     let ws_opp = WsOpportunityData {
         id: opp.id,
-        symbol: opp.asset.symbol.to_string(),
-        source_exchange: format!("{:?}", opp.source_exchange),
-        target_exchange: format!("{:?}", opp.target_exchange),
+        symbol,
+        source_exchange: source_ex,
+        target_exchange: target_ex,
         source_quote: opp.source_quote.as_str().to_string(),
         target_quote: opp.target_quote.as_str().to_string(),
         premium_bps: opp.premium_bps,
@@ -520,6 +589,11 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, opp: &arbitrage_core::Arbitra
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64,
+        common_networks,
+        has_transfer_path,
+        wallet_status_known,
+        source_depth,
+        target_depth,
     };
 
     let _ = tx.send(WsServerMessage::Opportunity(ws_opp));
