@@ -5,13 +5,200 @@
 use crate::ws_server::{self, BroadcastSender};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 use std::time::Duration;
 use tracing::{info, warn};
 
 /// Cached wallet status for initial sync when clients connect.
 static CACHED_WALLET_STATUS: RwLock<Vec<ExchangeWalletStatus>> = RwLock::new(Vec::new());
+
+/// Network name mapping: canonical network name -> { exchange -> network_id }
+/// Loaded from network_name_mapping.json
+static NETWORK_NAME_MAPPING: RwLock<Option<NetworkNameMapping>> = RwLock::new(None);
+
+/// Network name mapping structure.
+/// Maps canonical network names to exchange-specific network IDs.
+#[derive(Debug, Clone, Default)]
+pub struct NetworkNameMapping {
+    /// canonical_name -> { exchange_name -> network_id }
+    pub mappings: HashMap<String, HashMap<String, Option<String>>>,
+    /// Reverse lookup: (exchange, network_id) -> canonical_name
+    pub reverse: HashMap<(String, String), String>,
+}
+
+impl NetworkNameMapping {
+    /// Load from JSON file.
+    pub fn load_from_file(path: &str) -> Result<Self, String> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+
+        let raw: HashMap<String, HashMap<String, Option<String>>> = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse {}: {}", path, e))?;
+
+        // Build reverse lookup
+        let mut reverse = HashMap::new();
+        for (canonical, exchanges) in &raw {
+            for (exchange, network_id) in exchanges {
+                if let Some(id) = network_id {
+                    reverse.insert((exchange.clone(), id.clone()), canonical.clone());
+                    // Also add lowercase variant for case-insensitive lookup
+                    reverse.insert((exchange.clone(), id.to_lowercase()), canonical.clone());
+                }
+            }
+        }
+
+        Ok(Self {
+            mappings: raw,
+            reverse,
+        })
+    }
+
+    /// Get canonical network name for an exchange's network ID.
+    pub fn get_canonical(&self, exchange: &str, network_id: &str) -> Option<String> {
+        // Try exact match first
+        if let Some(canonical) = self.reverse.get(&(exchange.to_string(), network_id.to_string())) {
+            return Some(canonical.clone());
+        }
+        // Try lowercase
+        self.reverse.get(&(exchange.to_string(), network_id.to_lowercase())).cloned()
+    }
+
+    /// Check if two exchanges share a common network for transfers.
+    /// Returns the list of common canonical network names.
+    pub fn find_common_networks(
+        &self,
+        exchange1: &str,
+        exchange2: &str,
+        networks1: &[String],
+        networks2: &[String],
+    ) -> Vec<String> {
+        let mut common = Vec::new();
+
+        // Convert network IDs to canonical names
+        let canonical1: HashSet<String> = networks1
+            .iter()
+            .filter_map(|n| self.get_canonical(exchange1, n))
+            .collect();
+
+        let canonical2: HashSet<String> = networks2
+            .iter()
+            .filter_map(|n| self.get_canonical(exchange2, n))
+            .collect();
+
+        // Find intersection
+        for name in &canonical1 {
+            if canonical2.contains(name) {
+                common.push(name.clone());
+            }
+        }
+
+        common
+    }
+}
+
+/// Load network name mapping from file.
+pub fn load_network_mapping() -> Option<NetworkNameMapping> {
+    // Try loading from project root first, then from current directory
+    let paths = [
+        "network_name_mapping.json",
+        "./network_name_mapping.json",
+        "../network_name_mapping.json",
+        "../../network_name_mapping.json",
+    ];
+
+    for path in &paths {
+        if let Ok(mapping) = NetworkNameMapping::load_from_file(path) {
+            info!("Loaded network name mapping from {} ({} networks)", path, mapping.mappings.len());
+            return Some(mapping);
+        }
+    }
+
+    warn!("Could not load network_name_mapping.json - common network filtering disabled");
+    None
+}
+
+/// Initialize network mapping (call once at startup).
+pub fn init_network_mapping() {
+    let mapping = load_network_mapping();
+    let mut stored = NETWORK_NAME_MAPPING.write().unwrap();
+    *stored = mapping;
+}
+
+/// Get cached network mapping.
+pub fn get_network_mapping() -> Option<NetworkNameMapping> {
+    NETWORK_NAME_MAPPING.read().unwrap().clone()
+}
+
+/// Find common networks between two exchanges for a specific asset.
+/// Returns (common_networks, source_networks, target_networks).
+///
+/// Note: If wallet status cache is empty, returns empty vectors.
+/// The caller should check `has_transfer_path` being false and `common_networks` being empty
+/// to determine if the transfer is not possible or if data is not yet available.
+pub fn find_common_networks_for_asset(
+    asset: &str,
+    source_exchange: &str,
+    target_exchange: &str,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let cached = get_cached_wallet_status();
+    let mapping = get_network_mapping();
+
+    // If cache is empty, we don't have wallet status data yet
+    if cached.is_empty() {
+        tracing::trace!("Wallet status cache is empty, cannot determine transfer path for {}", asset);
+        return (Vec::new(), Vec::new(), Vec::new());
+    }
+
+    // Find source exchange networks for this asset (withdraw-enabled only)
+    let source_networks: Vec<String> = cached
+        .iter()
+        .find(|e| e.exchange == source_exchange)
+        .and_then(|e| e.wallet_status.iter().find(|a| a.asset == asset))
+        .map(|a| a.networks.iter()
+            .filter(|n| n.withdraw_enabled)  // Only consider withdrawable networks
+            .map(|n| n.network.clone())
+            .collect())
+        .unwrap_or_default();
+
+    // Find target exchange networks for this asset (deposit-enabled only)
+    let target_networks: Vec<String> = cached
+        .iter()
+        .find(|e| e.exchange == target_exchange)
+        .and_then(|e| e.wallet_status.iter().find(|a| a.asset == asset))
+        .map(|a| a.networks.iter()
+            .filter(|n| n.deposit_enabled)  // Only consider depositable networks
+            .map(|n| n.network.clone())
+            .collect())
+        .unwrap_or_default();
+
+    // Find common networks using mapping
+    let common = if let Some(ref mapping) = mapping {
+        mapping.find_common_networks(source_exchange, target_exchange, &source_networks, &target_networks)
+    } else {
+        // Fallback: direct string matching (case-insensitive)
+        let source_set: HashSet<String> = source_networks.iter().map(|s| s.to_uppercase()).collect();
+        let target_set: HashSet<String> = target_networks.iter().map(|s| s.to_uppercase()).collect();
+        source_set.intersection(&target_set).cloned().collect()
+    };
+
+    // Debug logging for troubleshooting
+    if tracing::enabled!(tracing::Level::DEBUG) && (source_networks.len() > 0 || target_networks.len() > 0) {
+        tracing::debug!(
+            "Network check for {} ({} -> {}): source_withdraw={:?}, target_deposit={:?}, common={:?}",
+            asset, source_exchange, target_exchange, source_networks, target_networks, common
+        );
+    }
+
+    (common, source_networks, target_networks)
+}
+
+/// Check if an opportunity has a viable transfer path.
+/// Returns true if there's at least one common network between source (withdraw) and target (deposit).
+pub fn has_transfer_path(asset: &str, source_exchange: &str, target_exchange: &str) -> bool {
+    let (common, _, _) = find_common_networks_for_asset(asset, source_exchange, target_exchange);
+    !common.is_empty()
+}
 
 /// Network status for deposit/withdraw.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -859,10 +1046,106 @@ pub fn get_cached_wallet_status() -> Vec<ExchangeWalletStatus> {
     CACHED_WALLET_STATUS.read().unwrap().clone()
 }
 
+/// Check if wallet status is known for both exchanges.
+/// Returns true if we have wallet status data for both source and target exchanges.
+pub fn is_wallet_status_known(source_exchange: &str, target_exchange: &str) -> bool {
+    let cached = CACHED_WALLET_STATUS.read().unwrap();
+    if cached.is_empty() {
+        return false;
+    }
+    let has_source = cached.iter().any(|e| e.exchange == source_exchange);
+    let has_target = cached.iter().any(|e| e.exchange == target_exchange);
+    has_source && has_target
+}
+
 /// Update the cached wallet status.
 pub fn update_cache(statuses: Vec<ExchangeWalletStatus>) {
     let mut cache = CACHED_WALLET_STATUS.write().unwrap();
     *cache = statuses;
+}
+
+/// Networks that are obviously the same across exchanges (no mapping needed).
+const OBVIOUS_NETWORKS: &[&str] = &[
+    // Native chains - same name everywhere
+    "SOL", "solana", "Solana", "SOLANA",
+    "ETH", "ethereum", "Ethereum", "ETHEREUM", "ERC20",
+    "BTC", "bitcoin", "Bitcoin", "BITCOIN",
+    "TRX", "tron", "Tron", "TRON", "TRC20",
+    "MATIC", "polygon", "Polygon", "POLYGON",
+    "AVAX", "avalanche", "Avalanche", "AVAXC",
+    "BNB", "BSC", "BEP20", "bsc", "binancesmartchain",
+    "ARB", "ARBITRUM", "arbitrum", "Arbitrum",
+    "OP", "OPTIMISM", "optimism", "Optimism",
+    "BASE", "base", "Base",
+    "TON", "ton", "Ton",
+    "XRP", "ripple", "Ripple", "RIPPLE",
+    "DOGE", "dogecoin", "Dogecoin",
+    "LTC", "litecoin", "Litecoin",
+    "ADA", "cardano", "Cardano",
+    "DOT", "polkadot", "Polkadot",
+    "ATOM", "cosmos", "Cosmos",
+    "NEAR", "near", "Near",
+    "APT", "aptos", "Aptos",
+    "SUI", "sui", "Sui",
+];
+
+/// Save all network names per asset across exchanges to a JSON file.
+/// This helps identify which networks are the same across different exchanges.
+pub fn save_network_mappings(statuses: &[ExchangeWalletStatus]) {
+    use std::collections::BTreeMap;
+    use std::fs::File;
+    use std::io::Write;
+
+    // Collect all networks per asset across exchanges
+    // Key: asset name, Value: Map<exchange, Vec<network_name>>
+    let mut asset_networks: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+
+    for exchange_status in statuses {
+        for asset_status in &exchange_status.wallet_status {
+            // Filter out obvious networks from the list
+            let networks: Vec<String> = asset_status
+                .networks
+                .iter()
+                .map(|n| n.network.clone())
+                .filter(|net| {
+                    !OBVIOUS_NETWORKS.iter().any(|&obvious| {
+                        net.eq_ignore_ascii_case(obvious)
+                    })
+                })
+                .collect();
+
+            if !networks.is_empty() {
+                asset_networks
+                    .entry(asset_status.asset.clone())
+                    .or_default()
+                    .insert(exchange_status.exchange.clone(), networks);
+            }
+        }
+    }
+
+    // Filter to assets on 2+ exchanges (cross-exchange transfer candidates)
+    // Obvious networks are already filtered out above
+    let multi_exchange_assets: BTreeMap<String, BTreeMap<String, Vec<String>>> = asset_networks
+        .into_iter()
+        .filter(|(_, exchanges)| exchanges.len() >= 2)
+        .collect();
+
+    // Save to JSON file
+    let json = serde_json::to_string_pretty(&multi_exchange_assets).unwrap_or_default();
+    let path = "network_mappings.json";
+
+    match File::create(path) {
+        Ok(mut file) => {
+            if let Err(e) = file.write_all(json.as_bytes()) {
+                warn!("Failed to write network mappings: {}", e);
+            } else {
+                info!("Saved network mappings to {} ({} assets need mapping)", path, multi_exchange_assets.len());
+            }
+        }
+        Err(e) => {
+            warn!("Failed to create network mappings file: {}", e);
+        }
+    }
 }
 
 /// Run wallet status updater loop.
@@ -870,11 +1153,20 @@ pub fn update_cache(statuses: Vec<ExchangeWalletStatus>) {
 pub async fn run_wallet_status_updater(broadcast_tx: BroadcastSender) {
     info!("Starting wallet status updater");
 
+    let mut first_run = true;
+
     loop {
         let statuses = fetch_all_wallet_status().await;
 
         if !statuses.is_empty() {
             info!("Broadcasting wallet status for {} exchanges", statuses.len());
+
+            // Save network mappings on first run for cross-exchange transfer mapping
+            if first_run {
+                save_network_mappings(&statuses);
+                first_run = false;
+            }
+
             // Update cache first
             update_cache(statuses.clone());
             // Then broadcast

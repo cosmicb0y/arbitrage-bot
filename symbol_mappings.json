@@ -34,6 +34,13 @@
       "canonical_name": "TST(TeleportDAO)",
       "exclude": false,
       "notes": "https://teleswap.xyz/"
+    },
+    {
+      "exchange": "Coinbase",
+      "symbol": "VELO",
+      "canonical_name": "VELO(Velodrome)",
+      "exclude": false,
+      "notes": "https://velodrome.finance/"
     }
   ]
 }
