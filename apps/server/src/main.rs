@@ -363,31 +363,26 @@ async fn run_upbit_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Try orderbook first (has bid/ask)
-                if UpbitAdapter::is_orderbook_message(&text) {
-                    if let Ok((code, bid, ask, bid_size, ask_size)) = UpbitAdapter::parse_orderbook_with_code(&text) {
-                        process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                // Single parse with type dispatch
+                if let Ok(upbit_msg) = UpbitAdapter::parse_message(&text) {
+                    match upbit_msg {
+                        arbitrage_feeds::UpbitMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
+                            process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                        }
+                        arbitrage_feeds::UpbitMessage::Ticker { code, price } => {
+                            process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
+                        }
                     }
-                } else if let Ok((code, price)) = UpbitAdapter::parse_ticker_with_code(&text) {
-                    // Parse ticker with market code
-                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                 }
             }
             WsMessage::Binary(data) => {
-                // Upbit sends binary MessagePack data
-                // Try orderbook first
-                if let Ok((code, bid, ask, bid_size, ask_size)) = UpbitAdapter::parse_orderbook_binary_with_code(&data) {
-                    process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
-                } else if let Ok((code, price)) = UpbitAdapter::parse_ticker_binary_with_code(&data) {
-                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
-                } else {
-                    // Fallback: try parsing as UTF-8 JSON
-                    if let Ok(text) = String::from_utf8(data.clone()) {
-                        if UpbitAdapter::is_orderbook_message(&text) {
-                            if let Ok((code, bid, ask, bid_size, ask_size)) = UpbitAdapter::parse_orderbook_with_code(&text) {
-                                process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
-                            }
-                        } else if let Ok((code, price)) = UpbitAdapter::parse_ticker_with_code(&text) {
+                // Single parse with type dispatch (MessagePack)
+                if let Ok(upbit_msg) = UpbitAdapter::parse_message_binary(&data) {
+                    match upbit_msg {
+                        arbitrage_feeds::UpbitMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
+                            process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                        }
+                        arbitrage_feeds::UpbitMessage::Ticker { code, price } => {
                             process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                         }
                     }
@@ -727,31 +722,26 @@ async fn run_bithumb_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Try orderbook first (has bid/ask)
-                if BithumbAdapter::is_orderbook_message(&text) {
-                    if let Ok((code, bid, ask, bid_size, ask_size)) = BithumbAdapter::parse_orderbook_with_code(&text) {
-                        process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                // Single parse with type dispatch
+                if let Ok(bithumb_msg) = BithumbAdapter::parse_message(&text) {
+                    match bithumb_msg {
+                        arbitrage_feeds::BithumbMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
+                            process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                        }
+                        arbitrage_feeds::BithumbMessage::Ticker { code, price } => {
+                            process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
+                        }
                     }
-                } else if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
-                    // Parse ticker with market code
-                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                 }
             }
             WsMessage::Binary(data) => {
-                // Bithumb sends binary MessagePack data
-                // Try orderbook first
-                if let Ok((code, bid, ask, bid_size, ask_size)) = BithumbAdapter::parse_orderbook_binary_with_code(&data) {
-                    process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
-                } else if let Ok((code, price)) = BithumbAdapter::parse_ticker_binary_with_code(&data) {
-                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
-                } else {
-                    // Fallback: try parsing as UTF-8 JSON
-                    if let Ok(text) = String::from_utf8(data.clone()) {
-                        if BithumbAdapter::is_orderbook_message(&text) {
-                            if let Ok((code, bid, ask, bid_size, ask_size)) = BithumbAdapter::parse_orderbook_with_code(&text) {
-                                process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
-                            }
-                        } else if let Ok((code, price)) = BithumbAdapter::parse_ticker_with_code(&text) {
+                // Single parse with type dispatch (MessagePack)
+                if let Ok(bithumb_msg) = BithumbAdapter::parse_message_binary(&data) {
+                    match bithumb_msg {
+                        arbitrage_feeds::BithumbMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
+                            process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                        }
+                        arbitrage_feeds::BithumbMessage::Ticker { code, price } => {
                             process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
                         }
                     }

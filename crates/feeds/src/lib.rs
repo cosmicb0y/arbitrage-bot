@@ -14,8 +14,8 @@ pub mod symbol_mapping;
 pub mod websocket;
 
 pub use adapter::{
-    BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, CoinbaseCredentials,
-    CoinbaseL2Event, GateIOAdapter, UpbitAdapter,
+    BinanceAdapter, BithumbAdapter, BithumbMessage, BybitAdapter, CoinbaseAdapter,
+    CoinbaseCredentials, CoinbaseL2Event, GateIOAdapter, UpbitAdapter, UpbitMessage,
 };
 pub use aggregator::*;
 pub use discovery::*;

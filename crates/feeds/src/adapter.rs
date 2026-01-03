@@ -60,45 +60,30 @@ impl BinanceAdapter {
         Some(symbol_to_pair_id(base))
     }
 
-    /// Extract base symbol from trading pair (e.g., BTCUSDT -> BTC).
-    pub fn extract_base_symbol(symbol: &str) -> Option<String> {
+    /// Extract both base and quote from trading pair.
+    /// Returns (base, quote) tuple. Single pass - no duplicate suffix checks.
+    pub fn extract_base_quote(symbol: &str) -> Option<(String, String)> {
         let symbol = symbol.to_uppercase();
         // Check longer suffixes first to avoid matching "USD" in "USDT"
-        if symbol.ends_with("USDT") {
-            symbol.strip_suffix("USDT").map(|s| s.to_string())
-        } else if symbol.ends_with("USDC") {
-            symbol.strip_suffix("USDC").map(|s| s.to_string())
-        } else if symbol.ends_with("BUSD") {
-            symbol.strip_suffix("BUSD").map(|s| s.to_string())
-        } else if symbol.ends_with("USD") {
-            symbol.strip_suffix("USD").map(|s| s.to_string())
-        } else {
-            None
+        const QUOTES: &[&str] = &["USDT", "USDC", "BUSD", "USD"];
+        for quote in QUOTES {
+            if let Some(base) = symbol.strip_suffix(quote) {
+                return Some((base.to_string(), (*quote).to_string()));
+            }
         }
+        None
     }
 
-    /// Extract quote currency from trading pair (e.g., BTCUSDT -> USDT, BTCUSDC -> USDC).
+    /// Extract base symbol from trading pair (e.g., BTCUSDT -> BTC).
+    #[inline]
+    pub fn extract_base_symbol(symbol: &str) -> Option<String> {
+        Self::extract_base_quote(symbol).map(|(base, _)| base)
+    }
+
+    /// Extract quote currency from trading pair (e.g., BTCUSDT -> USDT).
+    #[inline]
     pub fn extract_quote_currency(symbol: &str) -> Option<String> {
-        let symbol = symbol.to_uppercase();
-        if symbol.ends_with("USDT") {
-            Some("USDT".to_string())
-        } else if symbol.ends_with("USDC") {
-            Some("USDC".to_string())
-        } else if symbol.ends_with("BUSD") {
-            Some("BUSD".to_string())
-        } else if symbol.ends_with("USD") {
-            Some("USD".to_string())
-        } else {
-            None
-        }
-    }
-
-    /// Extract both base and quote from trading pair.
-    /// Returns (base, quote) tuple.
-    pub fn extract_base_quote(symbol: &str) -> Option<(String, String)> {
-        let base = Self::extract_base_symbol(symbol)?;
-        let quote = Self::extract_quote_currency(symbol)?;
-        Some((base, quote))
+        Self::extract_base_quote(symbol).map(|(_, quote)| quote)
     }
 
     /// Parse a 24hr ticker message from Binance.
@@ -296,7 +281,126 @@ struct UpbitTicker {
     timestamp: u64,
 }
 
+/// Upbit message types for efficient single-parse dispatch.
+#[derive(Debug, Clone)]
+pub enum UpbitMessage {
+    /// Ticker message with trade price
+    Ticker {
+        code: String,
+        price: FixedPoint,
+    },
+    /// Orderbook message with best bid/ask
+    Orderbook {
+        code: String,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+    },
+}
+
 impl UpbitAdapter {
+    /// Parse any Upbit message (JSON) with single parse, dispatch by type.
+    /// More efficient than is_orderbook_message() + parse_xxx().
+    pub fn parse_message(json: &str) -> Result<UpbitMessage, FeedError> {
+        // Parse once into a generic structure
+        #[derive(Debug, Deserialize)]
+        struct GenericMessage {
+            #[serde(alias = "ty", alias = "type")]
+            msg_type: String,
+            #[serde(alias = "cd", alias = "code")]
+            code: String,
+            // Ticker fields
+            #[serde(alias = "tp", alias = "trade_price", default)]
+            trade_price: f64,
+            // Orderbook fields
+            #[serde(alias = "obu", alias = "orderbook_units", default)]
+            orderbook_units: Vec<OrderbookUnit>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct OrderbookUnit {
+            #[serde(alias = "ap", alias = "ask_price", default)]
+            ask_price: f64,
+            #[serde(alias = "bp", alias = "bid_price", default)]
+            bid_price: f64,
+            #[serde(alias = "as", alias = "ask_size", default)]
+            ask_size: f64,
+            #[serde(alias = "bs", alias = "bid_size", default)]
+            bid_size: f64,
+        }
+
+        let msg: GenericMessage = serde_json::from_str(json)?;
+
+        match msg.msg_type.as_str() {
+            "ticker" => Ok(UpbitMessage::Ticker {
+                code: msg.code,
+                price: FixedPoint::from_f64(msg.trade_price),
+            }),
+            "orderbook" => {
+                let best = msg.orderbook_units.first()
+                    .ok_or_else(|| FeedError::ParseError("Empty orderbook".to_string()))?;
+                Ok(UpbitMessage::Orderbook {
+                    code: msg.code,
+                    bid: FixedPoint::from_f64(best.bid_price),
+                    ask: FixedPoint::from_f64(best.ask_price),
+                    bid_size: FixedPoint::from_f64(best.bid_size),
+                    ask_size: FixedPoint::from_f64(best.ask_size),
+                })
+            }
+            _ => Err(FeedError::ParseError(format!("Unknown message type: {}", msg.msg_type))),
+        }
+    }
+
+    /// Parse any Upbit message (MessagePack binary) with single parse.
+    pub fn parse_message_binary(data: &[u8]) -> Result<UpbitMessage, FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct GenericMessage {
+            #[serde(alias = "ty", alias = "type")]
+            msg_type: String,
+            #[serde(alias = "cd", alias = "code")]
+            code: String,
+            #[serde(alias = "tp", alias = "trade_price", default)]
+            trade_price: f64,
+            #[serde(alias = "obu", alias = "orderbook_units", default)]
+            orderbook_units: Vec<OrderbookUnit>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct OrderbookUnit {
+            #[serde(alias = "ap", alias = "ask_price", default)]
+            ask_price: f64,
+            #[serde(alias = "bp", alias = "bid_price", default)]
+            bid_price: f64,
+            #[serde(alias = "as", alias = "ask_size", default)]
+            ask_size: f64,
+            #[serde(alias = "bs", alias = "bid_size", default)]
+            bid_size: f64,
+        }
+
+        let msg: GenericMessage = rmp_serde::from_slice(data)
+            .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))?;
+
+        match msg.msg_type.as_str() {
+            "ticker" => Ok(UpbitMessage::Ticker {
+                code: msg.code,
+                price: FixedPoint::from_f64(msg.trade_price),
+            }),
+            "orderbook" => {
+                let best = msg.orderbook_units.first()
+                    .ok_or_else(|| FeedError::ParseError("Empty orderbook".to_string()))?;
+                Ok(UpbitMessage::Orderbook {
+                    code: msg.code,
+                    bid: FixedPoint::from_f64(best.bid_price),
+                    ask: FixedPoint::from_f64(best.ask_price),
+                    bid_size: FixedPoint::from_f64(best.bid_size),
+                    ask_size: FixedPoint::from_f64(best.ask_size),
+                })
+            }
+            _ => Err(FeedError::ParseError(format!("Unknown message type: {}", msg.msg_type))),
+        }
+    }
+
     /// Map market code to pair_id.
     /// Extracts base asset from market code (e.g., KRW-BTC -> BTC) and generates pair_id.
     pub fn market_to_pair_id(code: &str) -> Option<u32> {
@@ -1274,36 +1378,29 @@ impl BybitAdapter {
         Some(symbol_to_pair_id(&base))
     }
 
-    /// Extract base symbol from trading pair (e.g., BTCUSDT -> BTC).
-    pub fn extract_base_symbol(symbol: &str) -> Option<String> {
-        let symbol = symbol.to_uppercase();
-        if symbol.ends_with("USDT") {
-            symbol.strip_suffix("USDT").map(|s| s.to_string())
-        } else if symbol.ends_with("USDC") {
-            symbol.strip_suffix("USDC").map(|s| s.to_string())
-        } else {
-            None
-        }
-    }
-
-    /// Extract quote currency from trading pair (e.g., BTCUSDT -> USDT, BTCUSDC -> USDC).
-    pub fn extract_quote_currency(symbol: &str) -> Option<String> {
-        let symbol = symbol.to_uppercase();
-        if symbol.ends_with("USDT") {
-            Some("USDT".to_string())
-        } else if symbol.ends_with("USDC") {
-            Some("USDC".to_string())
-        } else {
-            None
-        }
-    }
-
     /// Extract both base and quote from trading pair.
-    /// Returns (base, quote) tuple.
+    /// Returns (base, quote) tuple. Single pass - no duplicate suffix checks.
     pub fn extract_base_quote(symbol: &str) -> Option<(String, String)> {
-        let base = Self::extract_base_symbol(symbol)?;
-        let quote = Self::extract_quote_currency(symbol)?;
-        Some((base, quote))
+        let symbol = symbol.to_uppercase();
+        const QUOTES: &[&str] = &["USDT", "USDC"];
+        for quote in QUOTES {
+            if let Some(base) = symbol.strip_suffix(quote) {
+                return Some((base.to_string(), (*quote).to_string()));
+            }
+        }
+        None
+    }
+
+    /// Extract base symbol from trading pair (e.g., BTCUSDT -> BTC).
+    #[inline]
+    pub fn extract_base_symbol(symbol: &str) -> Option<String> {
+        Self::extract_base_quote(symbol).map(|(base, _)| base)
+    }
+
+    /// Extract quote currency from trading pair (e.g., BTCUSDT -> USDT).
+    #[inline]
+    pub fn extract_quote_currency(symbol: &str) -> Option<String> {
+        Self::extract_base_quote(symbol).map(|(_, quote)| quote)
     }
 
     /// Parse a ticker message from Bybit.
@@ -1451,6 +1548,24 @@ impl BybitAdapter {
 /// Uses the same format as Upbit (Korean exchange).
 pub struct BithumbAdapter;
 
+/// Bithumb message types for efficient single-parse dispatch.
+#[derive(Debug, Clone)]
+pub enum BithumbMessage {
+    /// Ticker message with trade price
+    Ticker {
+        code: String,
+        price: FixedPoint,
+    },
+    /// Orderbook message with best bid/ask
+    Orderbook {
+        code: String,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+    },
+}
+
 /// Bithumb WebSocket ticker response (similar to Upbit format).
 #[derive(Debug, Deserialize)]
 struct BithumbTicker {
@@ -1478,6 +1593,104 @@ struct BithumbTicker {
 }
 
 impl BithumbAdapter {
+    /// Parse any Bithumb message (JSON) with single parse, dispatch by type.
+    /// More efficient than is_orderbook_message() + parse_xxx().
+    pub fn parse_message(json: &str) -> Result<BithumbMessage, FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct GenericMessage {
+            #[serde(alias = "ty", alias = "type")]
+            msg_type: String,
+            #[serde(alias = "cd", alias = "code")]
+            code: String,
+            #[serde(alias = "tp", alias = "trade_price", default)]
+            trade_price: f64,
+            #[serde(alias = "obu", alias = "orderbook_units", default)]
+            orderbook_units: Vec<OrderbookUnit>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct OrderbookUnit {
+            #[serde(alias = "ap", alias = "ask_price", default)]
+            ask_price: f64,
+            #[serde(alias = "bp", alias = "bid_price", default)]
+            bid_price: f64,
+            #[serde(alias = "as", alias = "ask_size", default)]
+            ask_size: f64,
+            #[serde(alias = "bs", alias = "bid_size", default)]
+            bid_size: f64,
+        }
+
+        let msg: GenericMessage = serde_json::from_str(json)?;
+
+        match msg.msg_type.as_str() {
+            "ticker" => Ok(BithumbMessage::Ticker {
+                code: msg.code,
+                price: FixedPoint::from_f64(msg.trade_price),
+            }),
+            "orderbook" => {
+                let best = msg.orderbook_units.first()
+                    .ok_or_else(|| FeedError::ParseError("Empty orderbook".to_string()))?;
+                Ok(BithumbMessage::Orderbook {
+                    code: msg.code,
+                    bid: FixedPoint::from_f64(best.bid_price),
+                    ask: FixedPoint::from_f64(best.ask_price),
+                    bid_size: FixedPoint::from_f64(best.bid_size),
+                    ask_size: FixedPoint::from_f64(best.ask_size),
+                })
+            }
+            _ => Err(FeedError::ParseError(format!("Unknown message type: {}", msg.msg_type))),
+        }
+    }
+
+    /// Parse any Bithumb message (MessagePack binary) with single parse.
+    pub fn parse_message_binary(data: &[u8]) -> Result<BithumbMessage, FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct GenericMessage {
+            #[serde(alias = "ty", alias = "type")]
+            msg_type: String,
+            #[serde(alias = "cd", alias = "code")]
+            code: String,
+            #[serde(alias = "tp", alias = "trade_price", default)]
+            trade_price: f64,
+            #[serde(alias = "obu", alias = "orderbook_units", default)]
+            orderbook_units: Vec<OrderbookUnit>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct OrderbookUnit {
+            #[serde(alias = "ap", alias = "ask_price", default)]
+            ask_price: f64,
+            #[serde(alias = "bp", alias = "bid_price", default)]
+            bid_price: f64,
+            #[serde(alias = "as", alias = "ask_size", default)]
+            ask_size: f64,
+            #[serde(alias = "bs", alias = "bid_size", default)]
+            bid_size: f64,
+        }
+
+        let msg: GenericMessage = rmp_serde::from_slice(data)
+            .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))?;
+
+        match msg.msg_type.as_str() {
+            "ticker" => Ok(BithumbMessage::Ticker {
+                code: msg.code,
+                price: FixedPoint::from_f64(msg.trade_price),
+            }),
+            "orderbook" => {
+                let best = msg.orderbook_units.first()
+                    .ok_or_else(|| FeedError::ParseError("Empty orderbook".to_string()))?;
+                Ok(BithumbMessage::Orderbook {
+                    code: msg.code,
+                    bid: FixedPoint::from_f64(best.bid_price),
+                    ask: FixedPoint::from_f64(best.ask_price),
+                    bid_size: FixedPoint::from_f64(best.bid_size),
+                    ask_size: FixedPoint::from_f64(best.ask_size),
+                })
+            }
+            _ => Err(FeedError::ParseError(format!("Unknown message type: {}", msg.msg_type))),
+        }
+    }
+
     /// Map market code to pair_id.
     /// Extracts base asset from market code (e.g., KRW-BTC -> BTC) and generates pair_id.
     pub fn market_to_pair_id(code: &str) -> Option<u32> {
@@ -1732,40 +1945,30 @@ impl GateIOAdapter {
         Some(symbol_to_pair_id(&base))
     }
 
-    /// Extract base symbol from currency pair (e.g., BTC_USDT -> BTC).
-    pub fn extract_base_symbol(currency_pair: &str) -> Option<String> {
-        let pair = currency_pair.to_uppercase();
-        if pair.ends_with("_USDT") {
-            pair.strip_suffix("_USDT").map(|s| s.to_string())
-        } else if pair.ends_with("_USDC") {
-            pair.strip_suffix("_USDC").map(|s| s.to_string())
-        } else if pair.ends_with("_USD") {
-            pair.strip_suffix("_USD").map(|s| s.to_string())
-        } else {
-            None
-        }
-    }
-
-    /// Extract quote currency from currency pair (e.g., BTC_USDT -> USDT, BTC_USDC -> USDC).
-    pub fn extract_quote_currency(currency_pair: &str) -> Option<String> {
-        let pair = currency_pair.to_uppercase();
-        if pair.ends_with("_USDT") {
-            Some("USDT".to_string())
-        } else if pair.ends_with("_USDC") {
-            Some("USDC".to_string())
-        } else if pair.ends_with("_USD") {
-            Some("USD".to_string())
-        } else {
-            None
-        }
-    }
-
-    /// Extract both base and quote from currency pair.
-    /// Returns (base, quote) tuple.
+    /// Extract both base and quote from currency pair (e.g., BTC_USDT -> (BTC, USDT)).
+    /// Single pass - no duplicate suffix checks.
     pub fn extract_base_quote(currency_pair: &str) -> Option<(String, String)> {
-        let base = Self::extract_base_symbol(currency_pair)?;
-        let quote = Self::extract_quote_currency(currency_pair)?;
-        Some((base, quote))
+        let pair = currency_pair.to_uppercase();
+        const QUOTES: &[&str] = &["_USDT", "_USDC", "_USD"];
+        for suffix in QUOTES {
+            if let Some(base) = pair.strip_suffix(suffix) {
+                let quote = suffix.trim_start_matches('_');
+                return Some((base.to_string(), quote.to_string()));
+            }
+        }
+        None
+    }
+
+    /// Extract base symbol from currency pair (e.g., BTC_USDT -> BTC).
+    #[inline]
+    pub fn extract_base_symbol(currency_pair: &str) -> Option<String> {
+        Self::extract_base_quote(currency_pair).map(|(base, _)| base)
+    }
+
+    /// Extract quote currency from currency pair (e.g., BTC_USDT -> USDT).
+    #[inline]
+    pub fn extract_quote_currency(currency_pair: &str) -> Option<String> {
+        Self::extract_base_quote(currency_pair).map(|(_, quote)| quote)
     }
 
     /// Parse a ticker message from Gate.io.
