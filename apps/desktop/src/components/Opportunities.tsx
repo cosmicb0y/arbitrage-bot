@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useOpportunities, usePrices, useWalletStatus } from "../hooks/useTauri";
+import { useOpportunities, usePrices, useWalletStatus, useExchangeRate } from "../hooks/useTauri";
 
 type OppKey = string;
 type ChangeType = "up" | "down" | null;
@@ -36,6 +36,7 @@ function Opportunities() {
   const { opportunities: rawOpportunities, executeOpportunity } = useOpportunities();
   const prices = usePrices();
   const walletStatuses = useWalletStatus();
+  const exchangeRate = useExchangeRate();
   const [executing, setExecuting] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [priceChanges, setPriceChanges] = useState<Map<OppKey, PriceChanges>>(new Map());
@@ -177,16 +178,135 @@ function Opportunities() {
   };
 
   const formatPrice = (price: number): string => {
+    // Determine decimal places based on price magnitude
+    // Show all significant digits up to reasonable precision
     if (price >= 10000) {
       return price.toLocaleString("en-US", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       });
+    } else if (price >= 1000) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 3,
+      });
+    } else if (price >= 100) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4,
+      });
+    } else if (price >= 10) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 5,
+      });
+    } else if (price >= 1) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 6,
+      });
+    } else if (price >= 0.01) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 6,
+      });
+    } else if (price >= 0.0001) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 6,
+        maximumFractionDigits: 8,
+      });
+    } else {
+      // Very small prices (< 0.0001): show up to 10 decimal places
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 8,
+        maximumFractionDigits: 10,
+      });
     }
-    return price.toLocaleString("en-US", {
-      minimumFractionDigits: 4,
-      maximumFractionDigits: 4,
-    });
+  };
+
+  // Format KRW price (adaptive decimals based on magnitude)
+  const formatKrwPrice = (price: number): string => {
+    // For very small prices (< 1 KRW), show appropriate decimal places
+    if (price < 0.0001) {
+      // Extremely small: show up to 8 decimal places
+      return price.toLocaleString("ko-KR", {
+        minimumFractionDigits: 6,
+        maximumFractionDigits: 8,
+      });
+    } else if (price < 0.01) {
+      // Very small: show up to 6 decimal places
+      return price.toLocaleString("ko-KR", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 6,
+      });
+    } else if (price < 1) {
+      // Small: show up to 4 decimal places
+      return price.toLocaleString("ko-KR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4,
+      });
+    } else if (price < 100) {
+      // Medium: show up to 2 decimal places
+      return price.toLocaleString("ko-KR", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      });
+    } else {
+      // Large prices: no decimals
+      return price.toLocaleString("ko-KR", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      });
+    }
+  };
+
+  // Get USDT/KRW rate for an exchange (for reverse conversion)
+  const getUsdtKrwForExchange = (exchange: string): number => {
+    if (!exchangeRate) return 0;
+    if (exchange === "Upbit") return exchangeRate.upbit_usdt_krw;
+    if (exchange === "Bithumb") return exchangeRate.bithumb_usdt_krw;
+    return 0;
+  };
+
+  // Convert USD price back to original quote currency
+  const convertToRawPrice = (
+    usdPrice: number,
+    exchange: string,
+    quote: string
+  ): { rawPrice: number; currency: string; symbol: string } | null => {
+    // For Korean exchanges with KRW quote, convert back to KRW
+    if (quote === "KRW") {
+      const usdtKrw = getUsdtKrwForExchange(exchange);
+      if (usdtKrw > 0) {
+        // usdPrice was converted from KRW: krw_price / usdt_krw * usdt_usd = usd_price
+        // So: krw_price = usd_price / usdt_usd * usdt_krw
+        const usdtUsd = exchangeRate?.usdt_usd || 1;
+        const krwPrice = (usdPrice / usdtUsd) * usdtKrw;
+        return { rawPrice: krwPrice, currency: "₩", symbol: "KRW" };
+      }
+    }
+    // For USDT quote, convert back to USDT
+    if (quote === "USDT") {
+      const usdtUsd = exchangeRate?.usdt_usd || 1;
+      if (usdtUsd > 0 && usdtUsd !== 1) {
+        const usdtPrice = usdPrice / usdtUsd;
+        return { rawPrice: usdtPrice, currency: "", symbol: "USDT" };
+      }
+      // If usdt_usd is ~1, show as USDT but no conversion needed
+      return { rawPrice: usdPrice, currency: "", symbol: "USDT" };
+    }
+    // For USDC quote, convert back to USDC
+    if (quote === "USDC") {
+      const usdcUsd = exchangeRate?.usdc_usd || 1;
+      if (usdcUsd > 0 && usdcUsd !== 1) {
+        const usdcPrice = usdPrice / usdcUsd;
+        return { rawPrice: usdcPrice, currency: "", symbol: "USDC" };
+      }
+      // If usdc_usd is ~1, show as USDC but no conversion needed
+      return { rawPrice: usdPrice, currency: "", symbol: "USDC" };
+    }
+    // For USD quote, no conversion needed
+    return null;
   };
 
   // Get the appropriate premium value based on mode and whether it's a KRW trade
@@ -416,14 +536,60 @@ function Opportunities() {
                     </div>
                   </td>
                   <td className="p-4 text-right font-mono">
-                    <span className={getChangeClass(changes?.source)}>
-                      ${formatPrice(opp.source_price)}
-                    </span>
+                    {(() => {
+                      const rawPrice = convertToRawPrice(opp.source_price, opp.source_exchange, opp.source_quote);
+                      if (rawPrice) {
+                        // Show raw price first, then USD conversion
+                        const isKRW = rawPrice.symbol === "KRW";
+                        return (
+                          <div className="flex flex-col items-end">
+                            <span className={getChangeClass(changes?.source)}>
+                              {isKRW
+                                ? `${rawPrice.currency}${formatKrwPrice(rawPrice.rawPrice)}`
+                                : `${formatPrice(rawPrice.rawPrice)} ${rawPrice.symbol}`
+                              }
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              ${formatPrice(opp.source_price)}
+                            </span>
+                          </div>
+                        );
+                      }
+                      // USD quote: show USD only
+                      return (
+                        <span className={getChangeClass(changes?.source)}>
+                          ${formatPrice(opp.source_price)}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="p-4 text-right font-mono">
-                    <span className={getChangeClass(changes?.target)}>
-                      ${formatPrice(opp.target_price)}
-                    </span>
+                    {(() => {
+                      const rawPrice = convertToRawPrice(opp.target_price, opp.target_exchange, opp.target_quote);
+                      if (rawPrice) {
+                        // Show raw price first, then USD conversion
+                        const isKRW = rawPrice.symbol === "KRW";
+                        return (
+                          <div className="flex flex-col items-end">
+                            <span className={getChangeClass(changes?.target)}>
+                              {isKRW
+                                ? `${rawPrice.currency}${formatKrwPrice(rawPrice.rawPrice)}`
+                                : `${formatPrice(rawPrice.rawPrice)} ${rawPrice.symbol}`
+                              }
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              ${formatPrice(opp.target_price)}
+                            </span>
+                          </div>
+                        );
+                      }
+                      // USD quote: show USD only
+                      return (
+                        <span className={getChangeClass(changes?.target)}>
+                          ${formatPrice(opp.target_price)}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="p-4 text-right">
                     {(() => {

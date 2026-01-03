@@ -118,10 +118,25 @@ impl Default for ExecutionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExchangeRateData {
     pub usd_krw: f64,
+    /// USDT/KRW from Upbit
+    #[serde(default)]
+    pub upbit_usdt_krw: f64,
+    /// USDT/KRW from Bithumb
+    #[serde(default)]
+    pub bithumb_usdt_krw: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_rate: Option<f64>,
+    /// USDT/USD price
+    #[serde(default = "default_usdt_usd")]
+    pub usdt_usd: f64,
+    /// USDC/USD price
+    #[serde(default = "default_usdc_usd")]
+    pub usdc_usd: f64,
     pub timestamp: u64,
 }
+
+fn default_usdt_usd() -> f64 { 1.0 }
+fn default_usdc_usd() -> f64 { 1.0 }
 
 /// Market info for a single exchange.
 #[derive(Debug, Clone, Serialize, Deserialize)]

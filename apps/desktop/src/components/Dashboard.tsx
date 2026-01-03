@@ -143,16 +143,50 @@ function Dashboard() {
     : symbols[0] || null;
 
   const formatPrice = (price: number): string => {
+    // Determine decimal places based on price magnitude
+    // Show all significant digits up to reasonable precision
     if (price >= 10000) {
       return price.toLocaleString("en-US", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       });
+    } else if (price >= 1000) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 3,
+      });
+    } else if (price >= 100) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4,
+      });
+    } else if (price >= 10) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 5,
+      });
+    } else if (price >= 1) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 6,
+      });
+    } else if (price >= 0.01) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 6,
+      });
+    } else if (price >= 0.0001) {
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 6,
+        maximumFractionDigits: 8,
+      });
+    } else {
+      // Very small prices (< 0.0001): show up to 10 decimal places
+      return price.toLocaleString("en-US", {
+        minimumFractionDigits: 8,
+        maximumFractionDigits: 10,
+      });
     }
-    return price.toLocaleString("en-US", {
-      minimumFractionDigits: 4,
-      maximumFractionDigits: 4,
-    });
   };
 
   const formatVolume = (volume: number): string => {
@@ -173,77 +207,68 @@ function Dashboard() {
       {/* Exchange Rate Banner */}
       {exchangeRate && (
         <section className="bg-dark-800 rounded-lg p-4 border border-dark-700">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center space-x-6">
-              {/* Upbit USDT/KRW */}
-              <div>
-                <div className="text-gray-500 text-xs mb-1">Upbit USDT/KRW</div>
-                <span className="font-mono text-xl text-primary-400">
-                  ₩{(exchangeRate.upbit_usdt_krw || exchangeRate.usd_krw).toLocaleString("ko-KR", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </span>
-              </div>
-              {/* Bithumb USDT/KRW */}
-              {exchangeRate.bithumb_usdt_krw > 0 && (
+          <div className="flex flex-col gap-3">
+            {/* Top row: KRW rates and Kimchi Premium */}
+            <div className="flex justify-between items-center">
+              <div className="flex items-center space-x-6">
+                {/* Upbit USDT/KRW */}
                 <div>
-                  <div className="text-gray-500 text-xs mb-1">Bithumb USDT/KRW</div>
+                  <div className="text-gray-500 text-xs mb-1">Upbit USDT/KRW</div>
                   <span className="font-mono text-xl text-primary-400">
-                    ₩{exchangeRate.bithumb_usdt_krw.toLocaleString("ko-KR", {
+                    ₩{(exchangeRate.upbit_usdt_krw || exchangeRate.usd_krw).toLocaleString("ko-KR", {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
                     })}
                   </span>
                 </div>
-              )}
-              {/* Kimchi Premium - using Upbit rate vs API rate */}
-              {exchangeRate.api_rate && (exchangeRate.upbit_usdt_krw > 0 || exchangeRate.usd_krw > 0) && (() => {
-                const upbitRate = exchangeRate.upbit_usdt_krw || exchangeRate.usd_krw;
-                return (
-                  <>
-                    <div className="border-l border-dark-600 pl-6">
-                      <div className="text-gray-500 text-xs mb-1">USD/KRW (API)</div>
-                      <span className="font-mono text-lg text-gray-300">
-                        ₩{exchangeRate.api_rate.toLocaleString("ko-KR", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                    <div>
-                      <div className="text-gray-500 text-xs mb-1">Kimchi Premium</div>
-                      <span className={`font-mono text-xl font-bold ${
-                        upbitRate > exchangeRate.api_rate
-                          ? "text-success-500"
-                          : "text-danger-500"
-                      }`}>
-                        {upbitRate > exchangeRate.api_rate ? "+" : ""}
-                        {(((upbitRate - exchangeRate.api_rate) / exchangeRate.api_rate) * 100).toFixed(2)}%
-                      </span>
-                    </div>
-                  </>
-                );
-              })()}
-              {/* Stablecoin rates */}
-              <div className="border-l border-dark-600 pl-6 flex items-center space-x-4">
-                <div>
-                  <div className="text-gray-500 text-xs mb-1">USDT/USD</div>
-                  <span className="font-mono text-lg text-gray-300">
-                    ${exchangeRate.usdt_usd?.toFixed(4) || "1.0000"}
-                  </span>
-                </div>
-                <div>
-                  <div className="text-gray-500 text-xs mb-1">USDC/USD</div>
-                  <span className="font-mono text-lg text-gray-300">
-                    ${exchangeRate.usdc_usd?.toFixed(4) || "1.0000"}
-                  </span>
-                </div>
+                {/* Bithumb USDT/KRW */}
+                {exchangeRate.bithumb_usdt_krw > 0 && (
+                  <div>
+                    <div className="text-gray-500 text-xs mb-1">Bithumb USDT/KRW</div>
+                    <span className="font-mono text-xl text-primary-400">
+                      ₩{exchangeRate.bithumb_usdt_krw.toLocaleString("ko-KR", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                )}
+                {/* Kimchi Premium - using Upbit rate vs API rate */}
+                {exchangeRate.api_rate && (exchangeRate.upbit_usdt_krw > 0 || exchangeRate.usd_krw > 0) && (() => {
+                  const upbitRate = exchangeRate.upbit_usdt_krw || exchangeRate.usd_krw;
+                  return (
+                    <>
+                      <div className="border-l border-dark-600 pl-6">
+                        <div className="text-gray-500 text-xs mb-1">USD/KRW (API)</div>
+                        <span className="font-mono text-lg text-gray-300">
+                          ₩{exchangeRate.api_rate.toLocaleString("ko-KR", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="text-gray-500 text-xs mb-1">Kimchi Premium</div>
+                        <span className={`font-mono text-xl font-bold ${
+                          upbitRate > exchangeRate.api_rate
+                            ? "text-success-500"
+                            : "text-danger-500"
+                        }`}>
+                          {upbitRate > exchangeRate.api_rate ? "+" : ""}
+                          {(((upbitRate - exchangeRate.api_rate) / exchangeRate.api_rate) * 100).toFixed(2)}%
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
+              <span className="text-xs text-gray-500">
+                Updated: {new Date(exchangeRate.timestamp).toLocaleTimeString()}
+              </span>
             </div>
-            <span className="text-xs text-gray-500">
-              Updated: {new Date(exchangeRate.timestamp).toLocaleTimeString()}
-            </span>
+
+            {/* Bottom row: Stablecoin prices by exchange */}
+            <StablecoinPrices prices={prices} />
           </div>
         </section>
       )}
@@ -687,6 +712,202 @@ function PremiumMatrix({ prices, premiumMode, exchangeRate, quoteFilter, symbol 
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+interface StablecoinPricesProps {
+  prices: PriceData[];
+}
+
+interface StablecoinPrice {
+  exchange: string;
+  price: number;
+  source: "direct" | "derived";  // direct = actual pair, derived = calculated from cross pair
+  quote: string;  // Original quote currency
+}
+
+/**
+ * Display USDT and USDC prices by exchange
+ * Combines direct pairs and derived prices from cross-stablecoin pairs
+ */
+function StablecoinPrices({ prices }: StablecoinPricesProps) {
+  // Collect all stablecoin-related prices and derive USD equivalents
+  const stablecoinData = useMemo(() => {
+    // Direct pairs
+    const usdtUsdDirect: StablecoinPrice[] = [];  // USDT/USD
+    const usdcUsdDirect: StablecoinPrice[] = [];  // USDC/USD
+    const usdcUsdtPairs: PriceData[] = [];        // USDC/USDT (for deriving)
+    const usdtUsdcPairs: PriceData[] = [];        // USDT/USDC (for deriving)
+
+    for (const p of prices) {
+      if (p.quote === "KRW") continue;
+
+      if (p.symbol === "USDT") {
+        if (p.quote === "USD") {
+          usdtUsdDirect.push({ exchange: p.exchange, price: p.price, source: "direct", quote: "USD" });
+        } else if (p.quote === "USDC") {
+          usdtUsdcPairs.push(p);
+        }
+      } else if (p.symbol === "USDC") {
+        if (p.quote === "USD") {
+          usdcUsdDirect.push({ exchange: p.exchange, price: p.price, source: "direct", quote: "USD" });
+        } else if (p.quote === "USDT") {
+          usdcUsdtPairs.push(p);
+        }
+      }
+    }
+
+    // Build exchange sets for direct prices
+    const usdtUsdExchanges = new Set(usdtUsdDirect.map(p => p.exchange));
+    const usdcUsdExchanges = new Set(usdcUsdDirect.map(p => p.exchange));
+
+    // Get reference USDT/USD price (average of direct prices, or 1.0 if none)
+    const avgUsdtUsd = usdtUsdDirect.length > 0
+      ? usdtUsdDirect.reduce((sum, p) => sum + p.price, 0) / usdtUsdDirect.length
+      : 1.0;
+
+    // Get reference USDC/USD price (average of direct prices, or 1.0 if none)
+    const avgUsdcUsd = usdcUsdDirect.length > 0
+      ? usdcUsdDirect.reduce((sum, p) => sum + p.price, 0) / usdcUsdDirect.length
+      : 1.0;
+
+    // Derive USDT/USD from USDT/USDC pairs (USDT/USD = USDT/USDC * USDC/USD)
+    const usdtUsdDerived: StablecoinPrice[] = [];
+    for (const p of usdtUsdcPairs) {
+      if (!usdtUsdExchanges.has(p.exchange)) {
+        usdtUsdDerived.push({
+          exchange: p.exchange,
+          price: p.price * avgUsdcUsd,
+          source: "derived",
+          quote: "USDC",
+        });
+      }
+    }
+
+    // Also derive USDT/USD from USDC/USDT pairs (inverse: USDT/USD = (1/USDC_USDT) * USDT/USD_ref)
+    // This handles exchanges like Bybit that only have USDC/USDT, not USDT/USDC
+    for (const p of usdcUsdtPairs) {
+      if (!usdtUsdExchanges.has(p.exchange) && !usdtUsdDerived.some(d => d.exchange === p.exchange)) {
+        // USDC/USDT price means 1 USDC = p.price USDT
+        // So 1 USDT = (1/p.price) USDC
+        // USDT/USD = (1/p.price) * avgUsdcUsd
+        const usdtInUsdc = 1 / p.price;
+        usdtUsdDerived.push({
+          exchange: p.exchange,
+          price: usdtInUsdc * avgUsdcUsd,
+          source: "derived",
+          quote: "USDC",
+        });
+      }
+    }
+
+    // Derive USDC/USD from USDC/USDT pairs (USDC/USD = USDC/USDT * USDT/USD)
+    const usdcUsdDerived: StablecoinPrice[] = [];
+    for (const p of usdcUsdtPairs) {
+      if (!usdcUsdExchanges.has(p.exchange)) {
+        usdcUsdDerived.push({
+          exchange: p.exchange,
+          price: p.price * avgUsdtUsd,
+          source: "derived",
+          quote: "USDT",
+        });
+      }
+    }
+
+    // Also derive USDC/USD from USDT/USDC pairs (inverse)
+    // Note: Exclude Coinbase since it treats USD = USDC at 1:1
+    for (const p of usdtUsdcPairs) {
+      if (p.exchange === "Coinbase") continue; // Coinbase USDC/USD is always $1.0000
+      if (!usdcUsdExchanges.has(p.exchange) && !usdcUsdDerived.some(d => d.exchange === p.exchange)) {
+        // USDT/USDC price means 1 USDT = p.price USDC
+        // So 1 USDC = (1/p.price) USDT
+        // USDC/USD = (1/p.price) * avgUsdtUsd
+        const usdcInUsdt = 1 / p.price;
+        usdcUsdDerived.push({
+          exchange: p.exchange,
+          price: usdcInUsdt * avgUsdtUsd,
+          source: "derived",
+          quote: "USDT",
+        });
+      }
+    }
+
+    // Special case: Coinbase treats USD = USDC at 1:1
+    // Coinbase's USD pairs are essentially USDC pairs, so USDC/USD = $1.0000
+    if (!usdcUsdExchanges.has("Coinbase")) {
+      usdcUsdDirect.push({ exchange: "Coinbase", price: 1.0, source: "direct", quote: "USD" });
+    }
+
+    // Combine and sort
+    const usdtUsd = [...usdtUsdDirect, ...usdtUsdDerived].sort((a, b) =>
+      a.exchange.localeCompare(b.exchange)
+    );
+    const usdcUsd = [...usdcUsdDirect, ...usdcUsdDerived].sort((a, b) =>
+      a.exchange.localeCompare(b.exchange)
+    );
+
+    return { usdtUsd, usdcUsd };
+  }, [prices]);
+
+  const hasAny = stablecoinData.usdtUsd.length > 0 || stablecoinData.usdcUsd.length > 0;
+
+  if (!hasAny) {
+    return null;
+  }
+
+  return (
+    <div className="border-t border-dark-600 pt-3">
+      <div className="flex gap-8">
+        {/* USDT/USD prices */}
+        {stablecoinData.usdtUsd.length > 0 && (
+          <div>
+            <div className="text-gray-500 text-xs mb-2 font-medium">USDT/USD</div>
+            <div className="flex flex-wrap gap-4">
+              {stablecoinData.usdtUsd.map((p) => (
+                <div key={`${p.exchange}-usdt-usd`} className="flex items-center gap-2">
+                  <span className="text-gray-400 text-sm">{p.exchange}</span>
+                  {p.source === "derived" && (
+                    <span className="text-gray-600 text-xs" title={`Derived from ${p.quote} pair`}>
+                      *
+                    </span>
+                  )}
+                  <span className={`font-mono text-sm ${
+                    p.price >= 1.0 ? "text-green-400" : "text-red-400"
+                  }`}>
+                    ${p.price.toFixed(4)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* USDC/USD prices */}
+        {stablecoinData.usdcUsd.length > 0 && (
+          <div>
+            <div className="text-gray-500 text-xs mb-2 font-medium">USDC/USD</div>
+            <div className="flex flex-wrap gap-4">
+              {stablecoinData.usdcUsd.map((p) => (
+                <div key={`${p.exchange}-usdc-usd`} className="flex items-center gap-2">
+                  <span className="text-gray-400 text-sm">{p.exchange}</span>
+                  {p.source === "derived" && (
+                    <span className="text-gray-600 text-xs" title={`Derived from ${p.quote} pair`}>
+                      *
+                    </span>
+                  )}
+                  <span className={`font-mono text-sm ${
+                    p.price >= 1.0 ? "text-blue-400" : "text-red-400"
+                  }`}>
+                    ${p.price.toFixed(4)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="text-gray-600 text-xs mt-2">* derived from cross-stablecoin pair</div>
     </div>
   );
 }
