@@ -1,6 +1,7 @@
 //! WebSocket client for exchange connections.
 
 use crate::{FeedConfig, FeedError};
+use arbitrage_core::Exchange;
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -40,40 +41,197 @@ impl WsClient {
         self.run_with_messages(msgs).await
     }
 
+    /// Create a Gate.io ping message.
+    /// Gate.io requires application-level ping: {"time": <unix_timestamp>, "channel": "spot.ping"}
+    fn create_gateio_ping() -> String {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        format!(r#"{{"time": {}, "channel": "spot.ping"}}"#, timestamp)
+    }
+
+    /// Send Gate.io subscriptions while concurrently draining incoming messages.
+    /// This is critical because Gate.io sends responses for each subscription,
+    /// and if we don't read them, the TCP buffer fills up and connection breaks.
+    async fn send_gateio_subscriptions<S, R>(
+        &self,
+        write: &mut S,
+        read: &mut R,
+        msgs: &[String],
+    ) -> Result<(), FeedError>
+    where
+        S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+        R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let total = msgs.len();
+        let sent_count = Arc::new(AtomicUsize::new(0));
+        let sent_count_clone = sent_count.clone();
+
+        info!("Gate.io: Starting subscription of {} symbols", total);
+
+        // Spawn a task to drain incoming messages
+        let (drain_tx, mut drain_rx) = mpsc::channel::<()>(1);
+        let drain_handle = tokio::spawn(async move {
+            // This task just signals when to stop
+            drain_rx.recv().await;
+        });
+
+        let mut last_ping = std::time::Instant::now();
+        let mut messages_drained = 0u64;
+        let mut subscription_errors = 0u32;
+
+        for (i, msg) in msgs.iter().enumerate() {
+            // Send ping every 5 seconds
+            if last_ping.elapsed().as_secs() >= 5 {
+                // Send dual ping (WS + app-level)
+                if let Err(e) = write.send(Message::Ping(vec![])).await {
+                    warn!("Gate.io: Failed to send keep-alive WS PING: {}", e);
+                }
+                let ping_msg = Self::create_gateio_ping();
+                if let Err(e) = write.send(Message::Text(ping_msg)).await {
+                    warn!("Gate.io: Failed to send keep-alive app ping: {}", e);
+                }
+                debug!("Gate.io: Sent keep-alive ping at {}/{} (drained {} msgs)", i + 1, total, messages_drained);
+                last_ping = std::time::Instant::now();
+            }
+
+            // Drain any pending messages (non-blocking)
+            // Forward orderbook updates to the channel while draining subscription responses
+            loop {
+                match tokio::time::timeout(Duration::from_millis(1), read.next()).await {
+                    Ok(Some(Ok(msg))) => {
+                        messages_drained += 1;
+                        match &msg {
+                            Message::Ping(data) => {
+                                let _ = write.send(Message::Pong(data.clone())).await;
+                            }
+                            Message::Text(text) => {
+                                // Forward orderbook updates to the channel
+                                if text.contains("\"channel\":\"spot.order_book\"") && text.contains("\"event\":\"update\"") {
+                                    let _ = self.tx.send(WsMessage::Text(text.clone())).await;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok(Some(Err(e))) => {
+                        error!("Gate.io: Read error during subscription: {}", e);
+                        return Err(FeedError::ConnectionFailed(format!("Read error: {}", e)));
+                    }
+                    Ok(None) => {
+                        error!("Gate.io: Connection closed during subscription");
+                        return Err(FeedError::Disconnected("Connection closed".to_string()));
+                    }
+                    Err(_) => break, // Timeout - no more messages to drain
+                }
+            }
+
+            // Send subscription (only log progress every 200)
+            if i % 200 == 0 {
+                debug!("Gate.io: Sending subscription {}/{}", i + 1, total);
+            }
+
+            if let Err(e) = write.send(Message::Text(msg.clone())).await {
+                subscription_errors += 1;
+                if subscription_errors > 3 {
+                    error!("Gate.io: Too many subscription errors, aborting");
+                    return Err(FeedError::ConnectionFailed(format!("Subscription failed: {}", e)));
+                }
+                warn!("Gate.io: Subscription error ({}): {}", subscription_errors, e);
+                // Wait a bit and retry
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+
+            sent_count.fetch_add(1, Ordering::Relaxed);
+
+            // Gate.io allows 50 req/s per channel
+            // Using 10ms delay = 100 req/s, but with drain overhead it's effectively ~50 req/s
+            if i < total - 1 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+
+        // Final drain - forward orderbook updates
+        let mut final_drain = 0;
+        loop {
+            match tokio::time::timeout(Duration::from_millis(100), read.next()).await {
+                Ok(Some(Ok(Message::Text(text)))) => {
+                    final_drain += 1;
+                    if text.contains("\"channel\":\"spot.order_book\"") && text.contains("\"event\":\"update\"") {
+                        let _ = self.tx.send(WsMessage::Text(text)).await;
+                    }
+                }
+                Ok(Some(Ok(_))) => final_drain += 1,
+                _ => break,
+            }
+        }
+
+        let _ = drain_tx.send(()).await;
+        drop(drain_handle);
+
+        debug!(
+            "Gate.io: Subscription complete! Sent {}/{}, drained {} messages",
+            sent_count.load(Ordering::Relaxed),
+            total,
+            messages_drained + final_drain as u64
+        );
+
+        Ok(())
+    }
+
     /// Connect and run the WebSocket client with multiple subscribe messages.
     /// Useful for exchanges like Bybit that have limits on args per subscription.
+    ///
+    /// This method will retry indefinitely with exponential backoff (max 5 min delay).
+    /// Reconnection counter resets after 5 minutes of stable connection.
     pub async fn run_with_messages(self, subscribe_msgs: Option<Vec<String>>) -> Result<(), FeedError> {
-        let mut reconnect_attempts = 0;
+        let mut reconnect_attempts = 0u32;
+        let mut connection_start: std::time::Instant;
 
         loop {
+            connection_start = std::time::Instant::now();
+
             match self.connect_and_handle(&subscribe_msgs).await {
                 Ok(()) => {
-                    info!("WebSocket connection closed normally");
+                    debug!("WebSocket connection closed normally for {:?}", self.config.exchange);
                     break;
                 }
                 Err(e) => {
-                    reconnect_attempts += 1;
-                    if reconnect_attempts > self.config.max_reconnect_attempts {
-                        error!(
-                            "Max reconnection attempts ({}) reached for {:?}",
-                            self.config.max_reconnect_attempts, self.config.exchange
+                    let connection_duration = connection_start.elapsed();
+
+                    // Reset reconnect counter if connection was stable (5+ minutes)
+                    if connection_duration > Duration::from_secs(300) {
+                        info!(
+                            "{:?}: Connection was stable for {:?}, resetting reconnect counter",
+                            self.config.exchange,
+                            connection_duration
                         );
-                        return Err(e);
+                        reconnect_attempts = 0;
                     }
 
+                    reconnect_attempts = reconnect_attempts.saturating_add(1);
+
+                    // Calculate delay with exponential backoff, capped at 5 minutes
+                    let backoff_power = reconnect_attempts.min(8); // max 2^8 = 256x base delay
+                    let delay_ms = (self.config.reconnect_delay_ms * (1 << backoff_power)).min(300_000);
+
                     warn!(
-                        "WebSocket error for {:?}: {}. Reconnecting ({}/{})",
+                        "{:?}: WebSocket error after {:?}: {}. Reconnecting in {:.1}s (attempt #{})",
                         self.config.exchange,
+                        connection_duration,
                         e,
-                        reconnect_attempts,
-                        self.config.max_reconnect_attempts
+                        delay_ms as f64 / 1000.0,
+                        reconnect_attempts
                     );
 
                     let _ = self.tx.send(WsMessage::Disconnected).await;
 
-                    // Exponential backoff
-                    let delay = self.config.reconnect_delay_ms * (1 << reconnect_attempts.min(5));
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 }
             }
         }
@@ -82,27 +240,36 @@ impl WsClient {
     }
 
     async fn connect_and_handle(&self, subscribe_msgs: &Option<Vec<String>>) -> Result<(), FeedError> {
-        debug!("Connecting to {}", self.config.ws_url);
+        let is_gateio = self.config.exchange == Exchange::GateIO;
+        info!("Connecting to {:?}: {}", self.config.exchange, self.config.ws_url);
 
-        let (ws_stream, _) = connect_async(&self.config.ws_url).await?;
-
-        info!("Connected to {:?}", self.config.exchange);
+        let (ws_stream, response) = connect_async(&self.config.ws_url).await?;
+        info!("{:?}: Connected (status: {:?})", self.config.exchange, response.status());
         let _ = self.tx.send(WsMessage::Connected).await;
 
         let (mut write, mut read) = ws_stream.split();
 
-        // Send subscription messages if provided
-        if let Some(ref msgs) = subscribe_msgs {
-            for (i, msg) in msgs.iter().enumerate() {
-                debug!("Sending subscription {}/{}: {}", i + 1, msgs.len(), msg);
-                write.send(Message::Text(msg.clone())).await?;
-                // Small delay between messages to avoid rate limiting
-                if msgs.len() > 1 && i < msgs.len() - 1 {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
+        // For Gate.io: use concurrent subscription with message draining
+        // This prevents TCP buffer overflow by reading server responses while sending subscriptions
+        if is_gateio {
+            if let Some(ref msgs) = subscribe_msgs {
+                self.send_gateio_subscriptions(&mut write, &mut read, msgs).await?;
             }
-            if msgs.len() > 1 {
-                info!("Sent {} subscription messages to {:?}", msgs.len(), self.config.exchange);
+        } else {
+            // Other exchanges: simple sequential subscription
+            if let Some(ref msgs) = subscribe_msgs {
+                info!("{:?}: Sending {} subscription message(s)", self.config.exchange, msgs.len());
+                for (i, msg) in msgs.iter().enumerate() {
+                    debug!("{:?}: Sending subscription {}/{}", self.config.exchange, i + 1, msgs.len());
+                    if let Err(e) = write.send(Message::Text(msg.clone())).await {
+                        error!("{:?}: Failed to send subscription: {}", self.config.exchange, e);
+                        return Err(FeedError::ConnectionFailed(format!("Subscription failed: {}", e)));
+                    }
+                    if msgs.len() > 1 && i < msgs.len() - 1 {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
+                info!("{:?}: Subscription complete", self.config.exchange);
             }
         }
 
@@ -110,37 +277,106 @@ impl WsClient {
         let ping_interval = Duration::from_millis(self.config.ping_interval_ms);
         let mut ping_timer = tokio::time::interval(ping_interval);
 
+        // Stale connection detection: if no message received for 2 minutes, reconnect
+        // This helps detect "silent disconnects" where the connection appears alive but is dead
+        let stale_timeout = Duration::from_secs(120);
+        let mut last_message_time = std::time::Instant::now();
+
+        // For Gate.io debugging
+        let mut last_ping_time = std::time::Instant::now();
+        let mut message_count = 0u64;
+
+        if self.config.exchange == Exchange::GateIO {
+            debug!("Gate.io: ping interval set to {}ms (dual ping: WS + app-level)", self.config.ping_interval_ms);
+        }
+
         loop {
+            // Check for stale connection
+            if last_message_time.elapsed() > stale_timeout {
+                warn!("{:?}: No messages received for {:?}, forcing reconnect",
+                    self.config.exchange, last_message_time.elapsed());
+                return Err(FeedError::Disconnected("Stale connection - no messages received".to_string()));
+            }
+
             tokio::select! {
                 msg = read.next() => {
+                    // Update last message time for any received message
+                    last_message_time = std::time::Instant::now();
+
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            let _ = self.tx.send(WsMessage::Text(text)).await;
+                            // Gate.io debugging
+                            if self.config.exchange == Exchange::GateIO {
+                                message_count += 1;
+                                // Log errors only
+                                if text.contains("error") {
+                                    warn!("Gate.io msg #{}: {}", message_count, &text[..text.len().min(200)]);
+                                }
+                            }
+
+                            // Handle Gate.io application-level pong response (ignore it)
+                            if self.config.exchange == Exchange::GateIO && text.contains("\"channel\":\"spot.pong\"") {
+                                debug!("Gate.io: Received pong response (latency: {:?})", last_ping_time.elapsed());
+                                continue;
+                            }
+                            if let Err(e) = self.tx.send(WsMessage::Text(text)).await {
+                                if self.config.exchange == Exchange::GateIO && message_count % 10000 == 0 {
+                                    warn!("Gate.io: Failed to send msg #{} to channel: {}", message_count, e);
+                                }
+                            }
                         }
                         Some(Ok(Message::Binary(data))) => {
                             let _ = self.tx.send(WsMessage::Binary(data)).await;
                         }
                         Some(Ok(Message::Ping(data))) => {
-                            write.send(Message::Pong(data)).await?;
+                            debug!("{:?}: Received WebSocket PING, sending PONG", self.config.exchange);
+                            if let Err(e) = write.send(Message::Pong(data)).await {
+                                error!("{:?}: Failed to send PONG: {}", self.config.exchange, e);
+                                return Err(FeedError::ConnectionFailed(format!("PONG send failed: {}", e)));
+                            }
                         }
                         Some(Ok(Message::Pong(_))) => {
                             // Pong received, connection is alive
+                            debug!("{:?}: Received WebSocket PONG", self.config.exchange);
                         }
-                        Some(Ok(Message::Close(_))) => {
-                            info!("Received close frame from {:?}", self.config.exchange);
+                        Some(Ok(Message::Close(frame))) => {
+                            info!("{:?}: Received close frame: {:?}", self.config.exchange, frame);
                             return Ok(());
                         }
                         Some(Err(e)) => {
+                            error!("{:?}: WebSocket read error: {} (type: {:?})", self.config.exchange, e, std::any::type_name_of_val(&e));
                             return Err(FeedError::ConnectionFailed(e.to_string()));
                         }
                         None => {
+                            warn!("{:?}: WebSocket stream ended", self.config.exchange);
                             return Err(FeedError::Disconnected("Stream ended".to_string()));
                         }
                         _ => {}
                     }
                 }
                 _ = ping_timer.tick() => {
-                    write.send(Message::Ping(vec![])).await?;
+                    // Gate.io requires BOTH WebSocket protocol ping AND application-level ping
+                    if self.config.exchange == Exchange::GateIO {
+                        // 1. Send WebSocket protocol-level ping
+                        if let Err(e) = write.send(Message::Ping(vec![])).await {
+                            error!("Gate.io: Failed to send WS PING: {}", e);
+                            return Err(FeedError::ConnectionFailed(format!("WS PING failed: {}", e)));
+                        }
+
+                        // 2. Send application-level ping (spot.ping channel)
+                        let ping_msg = Self::create_gateio_ping();
+                        if let Err(e) = write.send(Message::Text(ping_msg)).await {
+                            error!("Gate.io: Failed to send app-level ping: {}", e);
+                            return Err(FeedError::ConnectionFailed(format!("App ping failed: {}", e)));
+                        }
+                        last_ping_time = std::time::Instant::now();
+                    } else {
+                        // Other exchanges use WebSocket protocol-level ping
+                        if let Err(e) = write.send(Message::Ping(vec![])).await {
+                            error!("{:?}: Failed to send PING: {}", self.config.exchange, e);
+                            return Err(FeedError::ConnectionFailed(format!("PING failed: {}", e)));
+                        }
+                    }
                 }
             }
         }

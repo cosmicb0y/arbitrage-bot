@@ -13,7 +13,10 @@ pub mod rest;
 pub mod symbol_mapping;
 pub mod websocket;
 
-pub use adapter::*;
+pub use adapter::{
+    BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, CoinbaseCredentials,
+    CoinbaseL2Event, GateIOAdapter, UpbitAdapter,
+};
 pub use aggregator::*;
 pub use discovery::*;
 pub use error::*;

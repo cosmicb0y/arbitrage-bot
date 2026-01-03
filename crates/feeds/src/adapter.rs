@@ -63,12 +63,15 @@ impl BinanceAdapter {
     /// Extract base symbol from trading pair (e.g., BTCUSDT -> BTC).
     pub fn extract_base_symbol(symbol: &str) -> Option<String> {
         let symbol = symbol.to_uppercase();
+        // Check longer suffixes first to avoid matching "USD" in "USDT"
         if symbol.ends_with("USDT") {
             symbol.strip_suffix("USDT").map(|s| s.to_string())
         } else if symbol.ends_with("USDC") {
             symbol.strip_suffix("USDC").map(|s| s.to_string())
         } else if symbol.ends_with("BUSD") {
             symbol.strip_suffix("BUSD").map(|s| s.to_string())
+        } else if symbol.ends_with("USD") {
+            symbol.strip_suffix("USD").map(|s| s.to_string())
         } else {
             None
         }
@@ -552,6 +555,60 @@ impl UpbitAdapter {
 /// Coinbase WebSocket adapter.
 pub struct CoinbaseAdapter;
 
+/// Coinbase L2 event types for efficient single-parse dispatch.
+#[derive(Debug, Clone)]
+pub enum CoinbaseL2Event {
+    /// Full orderbook snapshot - contains all price levels
+    Snapshot {
+        product_id: String,
+        /// All bid levels: (price, size) sorted by price descending
+        bids: Vec<(f64, f64)>,
+        /// All ask levels: (price, size) sorted by price ascending
+        asks: Vec<(f64, f64)>,
+    },
+    /// Incremental update - contains changed levels only
+    /// If size is 0, the level should be removed
+    Update {
+        product_id: String,
+        /// Changes: (side "buy"/"sell", price, new_size)
+        changes: Vec<(String, f64, f64)>,
+    },
+}
+
+/// Coinbase CDP API credentials for WebSocket authentication.
+#[derive(Debug, Clone)]
+pub struct CoinbaseCredentials {
+    /// API key name (format: organizations/{org_id}/apiKeys/{key_id})
+    pub key_name: String,
+    /// EC private key in PEM format
+    pub secret_key: String,
+}
+
+impl CoinbaseCredentials {
+    /// Create new credentials from key name and secret.
+    pub fn new(key_name: String, secret_key: String) -> Self {
+        Self { key_name, secret_key }
+    }
+
+    /// Load credentials from environment variables.
+    /// Expects COINBASE_API_KEY_ID and COINBASE_SECRET_KEY.
+    pub fn from_env() -> Option<Self> {
+        let key_name = std::env::var("COINBASE_API_KEY_ID").ok()?;
+        let secret_key = std::env::var("COINBASE_SECRET_KEY").ok()?;
+
+        if key_name.is_empty() || secret_key.is_empty() {
+            return None;
+        }
+
+        Some(Self { key_name, secret_key })
+    }
+
+    /// Check if credentials are configured.
+    pub fn is_configured(&self) -> bool {
+        !self.key_name.is_empty() && !self.secret_key.is_empty()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct CoinbaseTicker {
     #[serde(rename = "type")]
@@ -685,8 +742,8 @@ impl CoinbaseAdapter {
         )
     }
 
-    /// Generate subscription messages for level2_batch channel only.
-    /// level2_batch provides orderbook depth (best bid/ask with size) for opportunity detection.
+    /// Generate subscription messages for level2 channel.
+    /// level2 provides real-time orderbook updates (immediate, not batched).
     pub fn subscribe_messages(product_ids: &[String]) -> Vec<String> {
         let products: Vec<String> = product_ids
             .iter()
@@ -695,30 +752,136 @@ impl CoinbaseAdapter {
         let products_str = products.join(", ");
 
         vec![
-            // Subscribe to level2_batch for orderbook depth (best bid/ask with size)
+            // Subscribe to level2 for real-time orderbook depth
+            // level2: immediate updates per change
+            // level2_batch: batched updates every 50ms (lower latency but less real-time)
             format!(
-                r#"{{"type": "subscribe", "product_ids": [{}], "channels": ["level2_batch"]}}"#,
+                r#"{{"type": "subscribe", "product_ids": [{}], "channels": ["level2"]}}"#,
                 products_str
             ),
         ]
     }
 
+    /// Parse L2 data message and return the appropriate event type.
+    /// This parses the JSON once and dispatches based on the event type field.
+    pub fn parse_l2_event(json: &str) -> Result<CoinbaseL2Event, FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct L2DataMessage {
+            channel: String,
+            events: Vec<L2DataEvent>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct L2DataEvent {
+            #[serde(rename = "type")]
+            event_type: String,
+            product_id: String,
+            updates: Vec<L2DataUpdate>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct L2DataUpdate {
+            side: String,
+            price_level: String,
+            new_quantity: String,
+        }
+
+        let msg: L2DataMessage = serde_json::from_str(json)?;
+
+        if msg.channel != "l2_data" {
+            return Err(FeedError::ParseError("Not an l2_data channel message".to_string()));
+        }
+
+        let event = msg.events.first()
+            .ok_or_else(|| FeedError::ParseError("No events in l2_data message".to_string()))?;
+
+        match event.event_type.as_str() {
+            "snapshot" => {
+                // Collect all bids and asks
+                let mut bids: Vec<(f64, f64)> = Vec::new();
+                let mut asks: Vec<(f64, f64)> = Vec::new();
+
+                for update in &event.updates {
+                    let price = update.price_level.parse::<f64>().unwrap_or(0.0);
+                    let size = update.new_quantity.parse::<f64>().unwrap_or(0.0);
+
+                    if price > 0.0 {
+                        match update.side.as_str() {
+                            "bid" => bids.push((price, size)),
+                            "offer" => asks.push((price, size)),
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Sort: bids descending (highest first), asks ascending (lowest first)
+                bids.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                asks.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+                if bids.is_empty() || asks.is_empty() {
+                    return Err(FeedError::ParseError("No valid bid/ask in snapshot".to_string()));
+                }
+
+                Ok(CoinbaseL2Event::Snapshot {
+                    product_id: event.product_id.clone(),
+                    bids,
+                    asks,
+                })
+            }
+            "update" => {
+                let changes: Vec<(String, f64, f64)> = event.updates
+                    .iter()
+                    .filter_map(|update| {
+                        let price = update.price_level.parse::<f64>().ok()?;
+                        let size = update.new_quantity.parse::<f64>().ok()?;
+                        // Coinbase Advanced Trade API uses "bid"/"offer" (not "ask")
+                        // Normalize to "buy"/"sell" for internal consistency
+                        let side = match update.side.as_str() {
+                            "bid" => "buy".to_string(),
+                            "offer" => "sell".to_string(),
+                            _ => update.side.clone(),
+                        };
+                        Some((side, price, size))
+                    })
+                    .collect();
+
+                Ok(CoinbaseL2Event::Update {
+                    product_id: event.product_id.clone(),
+                    changes,
+                })
+            }
+            _ => Err(FeedError::ParseError(format!("Unknown event type: {}", event.event_type))),
+        }
+    }
+
     /// Check if a message is a level2 (orderbook) message.
     pub fn is_level2_message(json: &str) -> bool {
-        json.contains("\"type\":\"l2update\"") || json.contains("\"type\":\"snapshot\"")
+        // Exchange API: level2_batch uses "l2update", level2 uses "update"/"snapshot"
+        // Advanced Trade API: uses "channel":"l2_data" with events array
+        json.contains("\"type\":\"l2update\"")
+            || json.contains("\"type\":\"snapshot\"")
+            || json.contains("\"type\":\"update\"")
+            || json.contains("\"channel\":\"l2_data\"")
     }
 
     /// Parse a level2 snapshot message to get best bid/ask with sizes.
+    /// Supports both Exchange API and Advanced Trade API formats.
     /// Returns (product_id, bid, ask, bid_size, ask_size).
     pub fn parse_level2_snapshot(json: &str) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint), FeedError> {
+        // Try Advanced Trade API format first (more common now)
+        // Format: {"channel":"l2_data","events":[{"type":"snapshot","product_id":"...","updates":[{"side":"bid","price_level":"...","new_quantity":"..."},...]}}
+        if let Ok(result) = Self::parse_advanced_trade_l2(json) {
+            return Ok(result);
+        }
+
+        // Fallback to Exchange API format
+        // Format: {"type":"snapshot","product_id":"...","bids":[[price,size],...],"asks":[[price,size],...]}
         #[derive(Debug, Deserialize)]
         struct Level2Snapshot {
             #[serde(rename = "type")]
             msg_type: String,
             product_id: String,
-            // Bids: [[price, size], ...] in descending order (best bid first)
             bids: Vec<[String; 2]>,
-            // Asks: [[price, size], ...] in ascending order (best ask first)
             asks: Vec<[String; 2]>,
         }
 
@@ -728,14 +891,12 @@ impl CoinbaseAdapter {
             return Err(FeedError::ParseError("Not a snapshot message".to_string()));
         }
 
-        // Get best bid (first in bids array)
         let best_bid = snapshot.bids.first()
             .ok_or_else(|| FeedError::ParseError("No bids in snapshot".to_string()))?;
         let bid = best_bid[0].parse::<f64>()
             .map_err(|_| FeedError::ParseError("Invalid bid price".to_string()))?;
         let bid_size = best_bid[1].parse::<f64>().unwrap_or(0.0);
 
-        // Get best ask (first in asks array)
         let best_ask = snapshot.asks.first()
             .ok_or_else(|| FeedError::ParseError("No asks in snapshot".to_string()))?;
         let ask = best_ask[0].parse::<f64>()
@@ -751,41 +912,298 @@ impl CoinbaseAdapter {
         ))
     }
 
+    /// Parse Advanced Trade API l2_data channel message.
+    /// Format: {"channel":"l2_data","events":[{"type":"snapshot"|"update","product_id":"...","updates":[...]}]}
+    fn parse_advanced_trade_l2(json: &str) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint), FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct L2DataMessage {
+            channel: String,
+            events: Vec<L2DataEvent>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct L2DataEvent {
+            #[serde(rename = "type")]
+            event_type: String,
+            product_id: String,
+            updates: Vec<L2DataUpdate>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct L2DataUpdate {
+            side: String,
+            price_level: String,
+            new_quantity: String,
+        }
+
+        let msg: L2DataMessage = serde_json::from_str(json)?;
+
+        if msg.channel != "l2_data" {
+            return Err(FeedError::ParseError("Not an l2_data channel message".to_string()));
+        }
+
+        let event = msg.events.first()
+            .ok_or_else(|| FeedError::ParseError("No events in l2_data message".to_string()))?;
+
+        // Collect all bids and asks
+        let mut bids: Vec<(f64, f64)> = Vec::new();
+        let mut asks: Vec<(f64, f64)> = Vec::new();
+
+        for update in &event.updates {
+            let price = update.price_level.parse::<f64>().unwrap_or(0.0);
+            let size = update.new_quantity.parse::<f64>().unwrap_or(0.0);
+
+            if price > 0.0 {
+                match update.side.as_str() {
+                    "bid" => bids.push((price, size)),
+                    "offer" => asks.push((price, size)),
+                    _ => {}
+                }
+            }
+        }
+
+        // Sort: bids descending (highest first), asks ascending (lowest first)
+        bids.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        asks.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let (bid, bid_size) = bids.first().copied().unwrap_or((0.0, 0.0));
+        let (ask, ask_size) = asks.first().copied().unwrap_or((0.0, 0.0));
+
+        if bid == 0.0 || ask == 0.0 {
+            return Err(FeedError::ParseError("No valid bid/ask in l2_data".to_string()));
+        }
+
+        Ok((
+            event.product_id.clone(),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+            FixedPoint::from_f64(bid_size),
+            FixedPoint::from_f64(ask_size),
+        ))
+    }
+
     /// Parse a level2 update message.
+    /// Supports Exchange API (l2update) and Advanced Trade API (l2_data with type=update).
     /// Returns (product_id, changes) where changes is Vec<(side, price, size)>.
     /// side is "buy" for bids or "sell" for asks.
     pub fn parse_level2_update(json: &str) -> Result<(String, Vec<(String, f64, f64)>), FeedError> {
+        // Try Advanced Trade API format first (l2_data channel with type=update)
+        if let Ok(result) = Self::parse_advanced_trade_l2_update(json) {
+            return Ok(result);
+        }
+
+        // Try level2_batch format: {"type":"l2update", "changes":[[side, price, size], ...]}
+        #[derive(Debug, Deserialize)]
+        struct Level2BatchUpdate {
+            #[serde(rename = "type")]
+            msg_type: String,
+            product_id: String,
+            #[serde(default)]
+            changes: Vec<[String; 3]>,
+        }
+
+        // Try level2 format: {"type":"update", "updates":[{side, price_level, new_quantity}, ...]}
         #[derive(Debug, Deserialize)]
         struct Level2Update {
             #[serde(rename = "type")]
             msg_type: String,
             product_id: String,
-            // Changes: [[side, price, size], ...]
-            changes: Vec<[String; 3]>,
+            #[serde(default)]
+            updates: Vec<Level2UpdateItem>,
         }
 
-        let update: Level2Update = serde_json::from_str(json)?;
-
-        if update.msg_type != "l2update" {
-            return Err(FeedError::ParseError("Not an l2update message".to_string()));
+        #[derive(Debug, Deserialize)]
+        struct Level2UpdateItem {
+            side: String,
+            price_level: String,
+            new_quantity: String,
         }
 
-        let changes: Vec<(String, f64, f64)> = update.changes
+        // Try parsing as level2_batch format (l2update)
+        if let Ok(update) = serde_json::from_str::<Level2BatchUpdate>(json) {
+            if update.msg_type == "l2update" && !update.changes.is_empty() {
+                let changes: Vec<(String, f64, f64)> = update.changes
+                    .iter()
+                    .filter_map(|change| {
+                        let side = change[0].clone();
+                        let price = change[1].parse::<f64>().ok()?;
+                        let size = change[2].parse::<f64>().ok()?;
+                        Some((side, price, size))
+                    })
+                    .collect();
+                return Ok((update.product_id, changes));
+            }
+        }
+
+        // Try parsing as level2 format (update)
+        if let Ok(update) = serde_json::from_str::<Level2Update>(json) {
+            if update.msg_type == "update" && !update.updates.is_empty() {
+                let changes: Vec<(String, f64, f64)> = update.updates
+                    .iter()
+                    .filter_map(|item| {
+                        let side = item.side.clone();
+                        let price = item.price_level.parse::<f64>().ok()?;
+                        let size = item.new_quantity.parse::<f64>().ok()?;
+                        Some((side, price, size))
+                    })
+                    .collect();
+                return Ok((update.product_id, changes));
+            }
+        }
+
+        Err(FeedError::ParseError("Not a valid level2 update message".to_string()))
+    }
+
+    /// Parse Advanced Trade API l2_data channel update message.
+    /// Format: {"channel":"l2_data","events":[{"type":"update","product_id":"...","updates":[...]}]}
+    fn parse_advanced_trade_l2_update(json: &str) -> Result<(String, Vec<(String, f64, f64)>), FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct L2DataMessage {
+            channel: String,
+            events: Vec<L2DataEvent>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct L2DataEvent {
+            #[serde(rename = "type")]
+            event_type: String,
+            product_id: String,
+            updates: Vec<L2DataUpdate>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct L2DataUpdate {
+            side: String,
+            price_level: String,
+            new_quantity: String,
+        }
+
+        let msg: L2DataMessage = serde_json::from_str(json)?;
+
+        if msg.channel != "l2_data" {
+            return Err(FeedError::ParseError("Not an l2_data channel message".to_string()));
+        }
+
+        let event = msg.events.first()
+            .ok_or_else(|| FeedError::ParseError("No events in l2_data message".to_string()))?;
+
+        if event.event_type != "update" {
+            return Err(FeedError::ParseError("Not an update event".to_string()));
+        }
+
+        let changes: Vec<(String, f64, f64)> = event.updates
             .iter()
-            .filter_map(|change| {
-                let side = change[0].clone();
-                let price = change[1].parse::<f64>().ok()?;
-                let size = change[2].parse::<f64>().ok()?;
+            .filter_map(|update| {
+                let price = update.price_level.parse::<f64>().ok()?;
+                let size = update.new_quantity.parse::<f64>().ok()?;
+                // Convert "bid"/"offer" to "buy"/"sell" for consistency
+                let side = match update.side.as_str() {
+                    "bid" => "buy".to_string(),
+                    "offer" => "sell".to_string(),
+                    _ => update.side.clone(),
+                };
                 Some((side, price, size))
             })
             .collect();
 
-        Ok((update.product_id, changes))
+        Ok((event.product_id.clone(), changes))
     }
 
-    /// Get WebSocket URL for Coinbase.
+    /// Get WebSocket URL for Coinbase Exchange API (public, no auth required for ticker).
     pub fn ws_url() -> &'static str {
         "wss://ws-feed.exchange.coinbase.com"
+    }
+
+    /// Get WebSocket URL for Coinbase Advanced Trade API (requires JWT auth for level2).
+    pub fn ws_url_advanced_trade() -> &'static str {
+        "wss://advanced-trade-ws.coinbase.com"
+    }
+
+    /// Generate JWT token for Coinbase WebSocket authentication.
+    /// WebSocket JWTs don't include request method or path (unlike REST API JWTs).
+    /// Documentation: https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/websocket/websocket-authentication
+    pub fn generate_ws_jwt(credentials: &CoinbaseCredentials) -> Result<String, crate::FeedError> {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        use p256::ecdsa::{SigningKey, Signature, signature::Signer};
+        use p256::pkcs8::DecodePrivateKey;
+        use p256::SecretKey;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let secret_key_pem = &credentials.secret_key;
+
+        // Parse EC private key from PEM format (ES256 = P-256/secp256r1)
+        // Try SEC1 format first (-----BEGIN EC PRIVATE KEY-----), then PKCS#8 (-----BEGIN PRIVATE KEY-----)
+        let signing_key = if secret_key_pem.contains("EC PRIVATE KEY") {
+            SecretKey::from_sec1_pem(secret_key_pem)
+                .map(|sk| SigningKey::from(&sk))
+                .map_err(|e| crate::FeedError::ParseError(format!("Failed to parse SEC1 EC private key: {}", e)))?
+        } else if secret_key_pem.contains("PRIVATE KEY") {
+            SigningKey::from_pkcs8_pem(secret_key_pem)
+                .map_err(|e| crate::FeedError::ParseError(format!("Failed to parse PKCS#8 private key: {}", e)))?
+        } else {
+            return Err(crate::FeedError::ParseError(format!(
+                "Invalid key format. Expected PEM format but got: {:?}",
+                &secret_key_pem.chars().take(50).collect::<String>()
+            )));
+        };
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Generate random nonce (32 bytes hex string)
+        let nonce = format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
+
+        // JWT Header: {"alg": "ES256", "typ": "JWT", "kid": key_name, "nonce": nonce}
+        let header = serde_json::json!({
+            "alg": "ES256",
+            "typ": "JWT",
+            "kid": credentials.key_name,
+            "nonce": nonce
+        });
+
+        // JWT Payload for WebSocket (no URI field unlike REST API)
+        let payload = serde_json::json!({
+            "iss": "cdp",
+            "sub": credentials.key_name,
+            "nbf": now,
+            "exp": now + 120 // 120 seconds expiry
+        });
+
+        let header_b64 = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+        let message = format!("{}.{}", header_b64, payload_b64);
+
+        // Sign with ES256 (ECDSA P-256)
+        let signature: Signature = signing_key.sign(message.as_bytes());
+        let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+
+        Ok(format!("{}.{}.{}", header_b64, payload_b64, signature_b64))
+    }
+
+    /// Generate subscription messages for level2 channel with JWT authentication.
+    /// The level2 channel requires authentication since 2024.
+    /// Returns subscription messages with JWT token included.
+    /// Note: Uses single "channel" field (not "channels" array) per Coinbase Advanced Trade API.
+    pub fn subscribe_messages_with_auth(product_ids: &[String], credentials: &CoinbaseCredentials) -> Result<Vec<String>, crate::FeedError> {
+        let jwt = Self::generate_ws_jwt(credentials)?;
+
+        let products: Vec<String> = product_ids
+            .iter()
+            .map(|s| format!("\"{}\"", s))
+            .collect();
+        let products_str = products.join(", ");
+
+        // level2 channel subscription with JWT authentication
+        // Note: Advanced Trade API uses "channel" (singular), not "channels" (array)
+        Ok(vec![
+            format!(
+                r#"{{"type": "subscribe", "product_ids": [{}], "channel": "level2", "jwt": "{}"}}"#,
+                products_str,
+                jwt
+            ),
+        ])
     }
 }
 

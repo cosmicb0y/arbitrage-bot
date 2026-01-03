@@ -76,7 +76,7 @@ impl FeedConfig {
     pub fn for_exchange(exchange: Exchange) -> Self {
         let ws_url = match exchange {
             Exchange::Binance => "wss://stream.binance.com:9443/ws".to_string(),
-            Exchange::Coinbase => "wss://ws-feed.exchange.coinbase.com".to_string(),
+            Exchange::Coinbase => "wss://advanced-trade-ws.coinbase.com".to_string(),
             Exchange::Kraken => "wss://ws.kraken.com".to_string(),
             Exchange::Okx => "wss://ws.okx.com:8443/ws/v5/public".to_string(),
             Exchange::Bybit => "wss://stream.bybit.com/v5/public/spot".to_string(),
@@ -86,9 +86,17 @@ impl FeedConfig {
             _ => String::new(),
         };
 
+        // Exchange-specific ping intervals to keep connection alive
+        let ping_interval_ms = match exchange {
+            Exchange::GateIO => 5000,    // 5 seconds for Gate.io (official: ping_interval=5)
+            Exchange::Coinbase => 20000, // 20 seconds for Coinbase (more aggressive than default)
+            _ => 30000,                  // 30 seconds for others
+        };
+
         Self {
             ws_url,
             exchange,
+            ping_interval_ms,
             ..Default::default()
         }
     }
