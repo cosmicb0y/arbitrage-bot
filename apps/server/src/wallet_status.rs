@@ -986,7 +986,6 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
 
     if let Ok(status) = upbit {
         if !status.wallet_status.is_empty() {
-            info!("Fetched Upbit wallet status: {} assets", status.wallet_status.len());
             results.push(status);
         }
     } else if let Err(e) = upbit {
@@ -995,7 +994,6 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
 
     if let Ok(status) = bithumb {
         if !status.wallet_status.is_empty() {
-            info!("Fetched Bithumb wallet status: {} assets", status.wallet_status.len());
             results.push(status);
         }
     } else if let Err(e) = bithumb {
@@ -1004,7 +1002,6 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
 
     if let Ok(status) = coinbase {
         if !status.wallet_status.is_empty() {
-            info!("Fetched Coinbase wallet status: {} assets", status.wallet_status.len());
             results.push(status);
         }
     } else if let Err(e) = coinbase {
@@ -1013,7 +1010,6 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
 
     if let Ok(status) = binance {
         if !status.wallet_status.is_empty() {
-            info!("Fetched Binance wallet status: {} assets", status.wallet_status.len());
             results.push(status);
         }
     } else if let Err(e) = binance {
@@ -1022,7 +1018,6 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
 
     if let Ok(status) = bybit {
         if !status.wallet_status.is_empty() {
-            info!("Fetched Bybit wallet status: {} assets", status.wallet_status.len());
             results.push(status);
         }
     } else if let Err(e) = bybit {
@@ -1031,7 +1026,6 @@ pub async fn fetch_all_wallet_status() -> Vec<ExchangeWalletStatus> {
 
     if let Ok(status) = gateio {
         if !status.wallet_status.is_empty() {
-            info!("Fetched Gate.io wallet status: {} assets", status.wallet_status.len());
             results.push(status);
         }
     } else if let Err(e) = gateio {
@@ -1151,15 +1145,12 @@ pub fn save_network_mappings(statuses: &[ExchangeWalletStatus]) {
 /// Run wallet status updater loop.
 /// Updates every 5 minutes.
 pub async fn run_wallet_status_updater(broadcast_tx: BroadcastSender) {
-    info!("Starting wallet status updater");
-
     let mut first_run = true;
 
     loop {
         let statuses = fetch_all_wallet_status().await;
 
         if !statuses.is_empty() {
-            info!("Broadcasting wallet status for {} exchanges", statuses.len());
 
             // Save network mappings on first run for cross-exchange transfer mapping
             if first_run {

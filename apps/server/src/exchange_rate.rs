@@ -89,12 +89,10 @@ pub async fn fetch_exchange_rate() -> Result<f64, Box<dyn std::error::Error + Se
 /// Run exchange rate updater loop.
 /// Updates rate every 5 minutes.
 pub async fn run_exchange_rate_updater(broadcast_tx: BroadcastSender, state: crate::state::SharedState) {
-    info!("Starting exchange rate updater");
-
     loop {
         match fetch_exchange_rate().await {
             Ok(rate) => {
-                info!("Updated USD/KRW exchange rate: {:.2}", rate);
+                tracing::debug!("Updated USD/KRW exchange rate: {:.2}", rate);
                 // Broadcast exchange rate to all clients
                 ws_server::broadcast_exchange_rate(&broadcast_tx, &state, rate);
             }

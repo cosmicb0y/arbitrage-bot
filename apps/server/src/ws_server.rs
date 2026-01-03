@@ -326,31 +326,36 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
 
 /// Collect current prices from state.
 async fn collect_prices(state: &SharedState) -> Vec<WsPriceData> {
-    let symbols = ["BTC", "ETH", "SOL"];
     let mut prices = Vec::new();
 
     // Get all prices from aggregator
-    for pair_id in 1..=3u32 {
-        let symbol = symbols.get(pair_id as usize - 1).unwrap_or(&"UNKNOWN");
+    let all_ticks = state.prices.get_all_prices();
 
-        for exchange in arbitrage_core::Exchange::all_cex() {
-            if let Some(tick) = state.prices.get_price(*exchange, pair_id) {
-                prices.push(WsPriceData {
-                    exchange: format!("{:?}", exchange),
-                    symbol: symbol.to_string(),
-                    pair_id,
-                    price: tick.price().to_f64(),
-                    bid: tick.bid().to_f64(),
-                    ask: tick.ask().to_f64(),
-                    volume_24h: tick.volume_24h().to_f64(),
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64,
-                    quote: None, // Legacy: quote currency not tracked in aggregator
-                });
-            }
-        }
+    // Get symbol registry from detector for pair_id -> symbol mapping
+    let detector = state.detector.read().await;
+
+    for tick in all_ticks {
+        // Get symbol from registry, or compute from pair_id
+        let symbol = detector.pair_id_to_symbol(tick.pair_id())
+            .unwrap_or_else(|| format!("PAIR_{}", tick.pair_id()));
+
+        // Get quote currency from tick
+        let quote = Some(format!("{:?}", tick.quote_currency()));
+
+        prices.push(WsPriceData {
+            exchange: format!("{:?}", tick.exchange()),
+            symbol,
+            pair_id: tick.pair_id(),
+            price: tick.price().to_f64(),
+            bid: tick.bid().to_f64(),
+            ask: tick.ask().to_f64(),
+            volume_24h: tick.volume_24h().to_f64(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+            quote,
+        });
     }
 
     prices
@@ -564,10 +569,13 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
     let has_transfer_path = !common_networks.is_empty();
 
     // Get latest depth from cache (source = ask_size for buying, target = bid_size for selling)
-    let source_depth = state.get_depth(&source_ex, &symbol)
+    let source_depth_cache = state.get_depth(&source_ex, &symbol);
+    let target_depth_cache = state.get_depth(&target_ex, &symbol);
+
+    let source_depth = source_depth_cache
         .map(|(_, ask_size)| ask_size.to_f64())
         .unwrap_or_else(|| FixedPoint(opp.source_depth).to_f64());
-    let target_depth = state.get_depth(&target_ex, &symbol)
+    let target_depth = target_depth_cache
         .map(|(bid_size, _)| bid_size.to_f64())
         .unwrap_or_else(|| FixedPoint(opp.target_depth).to_f64());
 
