@@ -102,6 +102,7 @@ impl PremiumMatrix {
 
     /// Update price for an exchange with bid/ask from orderbook (no size info).
     /// This enables accurate premium calculation using best bid/ask.
+    /// If bid_size or ask_size is 0, preserves the previous value if available.
     pub fn update_price_with_bid_ask(
         &mut self,
         exchange: Exchange,
@@ -117,15 +118,25 @@ impl PremiumMatrix {
             .unwrap()
             .as_millis() as u64;
 
-        // Use (exchange_id, quote_id) as key to differentiate USDT vs USDC markets
+        let key = (exchange as u16, quote as u8);
+
+        // Preserve previous depth values if new ones are zero
+        let (final_bid_size, final_ask_size) = if let Some(existing) = self.prices.get(&key) {
+            let new_bid_size = if bid_size.0 == 0 { existing.bid_size } else { bid_size };
+            let new_ask_size = if ask_size.0 == 0 { existing.ask_size } else { ask_size };
+            (new_bid_size, new_ask_size)
+        } else {
+            (bid_size, ask_size)
+        };
+
         self.prices.insert(
-            (exchange as u16, quote as u8),
+            key,
             PriceEntry {
                 price,
                 bid,
                 ask,
-                bid_size,
-                ask_size,
+                bid_size: final_bid_size,
+                ask_size: final_ask_size,
                 timestamp_ms: now,
                 quote,
             },

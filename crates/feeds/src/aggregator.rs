@@ -45,6 +45,11 @@ impl PriceAggregator {
             .collect()
     }
 
+    /// Get all prices across all exchanges and pairs.
+    pub fn get_all_prices(&self) -> Vec<PriceTick> {
+        self.prices.iter().map(|r| *r.value()).collect()
+    }
+
     /// Calculate premium between two exchanges for a pair.
     /// Returns basis points (bps): (sell - buy) / buy * 10000
     pub fn calculate_premium(

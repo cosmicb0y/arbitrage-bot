@@ -578,56 +578,48 @@ impl MarketDiscovery {
         );
 
         if let Ok(m) = binance {
-            info!("Binance: {} markets", m.markets.len());
             results.insert("Binance".to_string(), m);
         } else if let Err(e) = binance {
             warn!("Failed to fetch Binance markets: {}", e);
         }
 
         if let Ok(m) = coinbase {
-            info!("Coinbase: {} markets", m.markets.len());
             results.insert("Coinbase".to_string(), m);
         } else if let Err(e) = coinbase {
             warn!("Failed to fetch Coinbase markets: {}", e);
         }
 
         if let Ok(m) = upbit {
-            info!("Upbit: {} markets", m.markets.len());
             results.insert("Upbit".to_string(), m);
         } else if let Err(e) = upbit {
             warn!("Failed to fetch Upbit markets: {}", e);
         }
 
         if let Ok(m) = bithumb {
-            info!("Bithumb: {} markets", m.markets.len());
             results.insert("Bithumb".to_string(), m);
         } else if let Err(e) = bithumb {
             warn!("Failed to fetch Bithumb markets: {}", e);
         }
 
         if let Ok(m) = bybit {
-            info!("Bybit: {} markets", m.markets.len());
             results.insert("Bybit".to_string(), m);
         } else if let Err(e) = bybit {
             warn!("Failed to fetch Bybit markets: {}", e);
         }
 
         if let Ok(m) = okx {
-            info!("OKX: {} markets", m.markets.len());
             results.insert("Okx".to_string(), m);
         } else if let Err(e) = okx {
             warn!("Failed to fetch OKX markets: {}", e);
         }
 
         if let Ok(m) = kraken {
-            info!("Kraken: {} markets", m.markets.len());
             results.insert("Kraken".to_string(), m);
         } else if let Err(e) = kraken {
             warn!("Failed to fetch Kraken markets: {}", e);
         }
 
         if let Ok(m) = gateio {
-            info!("Gate.io: {} markets", m.markets.len());
             results.insert("GateIO".to_string(), m);
         } else if let Err(e) = gateio {
             warn!("Failed to fetch Gate.io markets: {}", e);

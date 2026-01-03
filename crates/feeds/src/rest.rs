@@ -300,10 +300,67 @@ pub struct GateIORestFetcher;
 
 impl GateIORestFetcher {
     const BASE_URL: &'static str = "https://api.gateio.ws";
+    /// Max concurrent individual ticker requests to avoid rate limiting
+    const MAX_CONCURRENT_DEPTH_FETCHES: usize = 20;
 
-    /// Fetch all spot tickers in a single API call.
-    /// Returns best bid/ask for ALL spot currency pairs on Gate.io.
-    async fn fetch_all_tickers() -> OrderbookResult {
+    /// Fetch a single ticker with depth info.
+    /// Individual ticker API returns size info, unlike the bulk tickers API.
+    async fn fetch_single_ticker(currency_pair: &str) -> Option<(String, OrderbookEntry)> {
+        let url = format!("{}/api/v4/spot/tickers?currency_pair={}", Self::BASE_URL, currency_pair);
+
+        let response = match reqwest::get(&url).await {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+        if !response.status().is_success() {
+            return None;
+        }
+
+        let tickers: Vec<serde_json::Value> = match response.json().await {
+            Ok(t) => t,
+            Err(_) => return None,
+        };
+        let ticker = tickers.first()?;
+
+        let bid = ticker["highest_bid"].as_str()?.parse::<f64>().ok()?;
+        let ask = ticker["lowest_ask"].as_str()?.parse::<f64>().ok()?;
+        let bid_size = ticker["highest_size"].as_str()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let ask_size = ticker["lowest_size"].as_str()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        if bid > 0.0 && ask > 0.0 {
+            Some((
+                currency_pair.to_uppercase(),
+                (
+                    FixedPoint::from_f64(bid),
+                    FixedPoint::from_f64(ask),
+                    FixedPoint::from_f64(bid_size),
+                    FixedPoint::from_f64(ask_size),
+                ),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Fetch orderbooks for specified currency pairs using tickers API.
+    /// Uses single API call to get all tickers, then fetches individual tickers
+    /// for those missing depth info (size = null in bulk API).
+    pub async fn fetch_orderbooks(currency_pairs: &[String]) -> OrderbookResult {
+        if currency_pairs.is_empty() {
+            debug!("GateIO: No currency pairs to fetch");
+            return HashMap::new();
+        }
+        debug!("GateIO: Fetching {} orderbooks via tickers API (single call)", currency_pairs.len());
+
+        // Build a set of requested pairs for O(1) lookup
+        let requested: std::collections::HashSet<String> = currency_pairs.iter()
+            .map(|p| p.to_uppercase())
+            .collect();
+
         let url = format!("{}/api/v4/spot/tickers", Self::BASE_URL);
 
         let response = match reqwest::get(&url).await {
@@ -315,72 +372,101 @@ impl GateIORestFetcher {
         };
 
         if !response.status().is_success() {
-            debug!("GateIO: Tickers HTTP {}", response.status());
+            debug!("GateIO: Tickers API returned status {}", response.status());
             return HashMap::new();
         }
 
-        let json: serde_json::Value = match response.json().await {
+        let tickers: Vec<serde_json::Value> = match response.json().await {
             Ok(j) => j,
             Err(e) => {
-                debug!("GateIO: Failed to parse tickers: {}", e);
+                debug!("GateIO: Failed to parse tickers response: {}", e);
                 return HashMap::new();
             }
         };
 
         let mut result = HashMap::new();
+        let mut pairs_needing_depth: Vec<String> = Vec::new();
 
-        // Response is array: [{"currency_pair":"BTC_USDT","highest_bid":"...","lowest_ask":"..."}, ...]
-        if let Some(tickers) = json.as_array() {
-            for ticker in tickers {
-                let pair = match ticker["currency_pair"].as_str() {
-                    Some(p) => p.to_string(),
-                    None => continue,
-                };
+        // Response: [{"currency_pair":"BTC_USDT","highest_bid":"95000","highest_size":null,"lowest_ask":"95001","lowest_size":null,...}]
+        // Note: Bulk API returns null for size fields, individual API returns actual values
+        for ticker in tickers {
+            let pair = match ticker["currency_pair"].as_str() {
+                Some(p) => p.to_uppercase(),
+                None => continue,
+            };
 
-                let bid = ticker["highest_bid"].as_str()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0);
-                let ask = ticker["lowest_ask"].as_str()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0);
-                // Gate.io tickers don't include bid/ask sizes, so we use 0
-                // WebSocket will provide actual depth data
-                let bid_size = 0.0;
-                let ask_size = 0.0;
+            // Only include requested pairs
+            if !requested.contains(&pair) {
+                continue;
+            }
 
-                if bid > 0.0 && ask > 0.0 {
-                    result.insert(pair, (
+            let bid = ticker["highest_bid"].as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let ask = ticker["lowest_ask"].as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+
+            // Check if size is null (bulk API doesn't return size)
+            let has_size = ticker["highest_size"].as_str().is_some()
+                || ticker["lowest_size"].as_str().is_some();
+
+            let bid_size = ticker["highest_size"].as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let ask_size = ticker["lowest_size"].as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+
+            if bid > 0.0 && ask > 0.0 {
+                result.insert(
+                    pair.clone(),
+                    (
                         FixedPoint::from_f64(bid),
                         FixedPoint::from_f64(ask),
                         FixedPoint::from_f64(bid_size),
                         FixedPoint::from_f64(ask_size),
-                    ));
+                    ),
+                );
+
+                // Track pairs that need depth fetching (null sizes in bulk API)
+                if !has_size {
+                    pairs_needing_depth.push(pair);
                 }
             }
         }
 
-        result
-    }
+        // Only fetch individual tickers for stablecoins (for accurate depth)
+        // Regular coins will get depth from WebSocket orderbook subscription
+        let stablecoin_pairs: Vec<String> = pairs_needing_depth.iter()
+            .filter(|p| {
+                let upper = p.to_uppercase();
+                upper.starts_with("USDT_") || upper.starts_with("USDC_") ||
+                upper.starts_with("DAI_") || upper.starts_with("TUSD_") ||
+                upper.starts_with("BUSD_") || upper.starts_with("FDUSD_")
+            })
+            .cloned()
+            .collect();
 
-    /// Fetch orderbooks for specified currency pairs using bulk tickers API.
-    pub async fn fetch_orderbooks(currency_pairs: &[String]) -> OrderbookResult {
-        if currency_pairs.is_empty() {
-            debug!("GateIO: No currency pairs to fetch");
-            return HashMap::new();
+        info!("GateIO: Got {} prices, {} stablecoins need depth fetch (others via WebSocket)",
+              result.len(), stablecoin_pairs.len());
+
+        // Fetch depth only for stablecoins (small number, no batching needed)
+        if !stablecoin_pairs.is_empty() {
+            let futures: Vec<_> = stablecoin_pairs.iter()
+                .map(|pair| Self::fetch_single_ticker(pair))
+                .collect();
+
+            let results = join_all(futures).await;
+            let mut success_count = 0;
+            for opt in results {
+                if let Some((pair, entry)) = opt {
+                    result.insert(pair, entry);
+                    success_count += 1;
+                }
+            }
+            info!("GateIO: Fetched depth for {}/{} stablecoins", success_count, stablecoin_pairs.len());
         }
-        debug!("GateIO: Fetching {} orderbooks via tickers API", currency_pairs.len());
-
-        // Fetch all tickers in one call
-        let all_tickers = Self::fetch_all_tickers().await;
-
-        // Filter to only requested pairs
-        let pairs_set: std::collections::HashSet<String> = currency_pairs.iter()
-            .map(|p| p.to_uppercase())
-            .collect();
-
-        let result: OrderbookResult = all_tickers.into_iter()
-            .filter(|(pair, _)| pairs_set.contains(pair))
-            .collect();
 
         debug!("GateIO: Successfully fetched {} orderbooks", result.len());
         result
@@ -648,10 +734,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_binance_fetch_orderbook() {
+    async fn test_binance_fetch_orderbooks() {
         // This is an integration test - requires network
-        let result = BinanceRestFetcher::fetch_orderbook("BTCUSDT").await;
-        if let Ok((bid, ask, bid_size, ask_size)) = result {
+        let symbols = vec!["BTCUSDT".to_string()];
+        let result = BinanceRestFetcher::fetch_orderbooks(&symbols).await;
+        if let Some((bid, ask, bid_size, ask_size)) = result.get("BTCUSDT") {
             assert!(bid.to_f64() > 0.0);
             assert!(ask.to_f64() > 0.0);
             assert!(bid.to_f64() < ask.to_f64()); // bid < ask
