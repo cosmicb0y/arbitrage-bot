@@ -15,8 +15,13 @@ erDiagram
 
     Exchange {
         u16 id PK
-        string name "Binance|Coinbase|UniswapV3|..."
+        string name "Binance|Coinbase|Upbit|..."
         ExchangeType type "Cex|CpmmDex|ClmmDex|PerpDex"
+    }
+
+    QuoteCurrency {
+        u8 id PK
+        string name "USD|USDT|USDC|KRW"
     }
 
     Asset {
@@ -39,9 +44,12 @@ erDiagram
     PriceTick {
         u16 exchange_id FK
         u32 pair_id FK
+        u8 quote_currency "USD|USDT|USDC|KRW"
         u64 price "FixedPoint 8 decimals"
         u64 bid "Best bid"
         u64 ask "Best ask"
+        u64 bid_size "Orderbook depth"
+        u64 ask_size "Orderbook depth"
         u64 volume_24h
         u64 liquidity
         u64 timestamp_ms
@@ -77,10 +85,16 @@ erDiagram
         u64 expires_at_ms
         u16 source_exchange_id FK
         u16 target_exchange_id FK
+        u8 source_quote FK "QuoteCurrency"
+        u8 target_quote FK "QuoteCurrency"
         string asset_symbol FK
         u64 source_price
         u64 target_price
-        i32 premium_bps
+        u64 source_depth "Ask size at source"
+        u64 target_depth "Bid size at target"
+        i32 premium_bps "Raw premium"
+        i32 kimchi_premium_bps "Via USD/KRW rate"
+        i32 tether_premium_bps "Via USDT/KRW rate"
         u64 estimated_gas_cost
         u64 estimated_bridge_fee
         u64 estimated_trading_fee
@@ -200,6 +214,39 @@ erDiagram
         dashmap prices "thread-safe map"
     }
 
+    %% ===== ALERTS =====
+
+    AlertConfig {
+        i64 id PK
+        string telegram_chat_id
+        i32 min_premium_bps "Alert threshold"
+        array symbols "Whitelist (empty=all)"
+        array excluded_symbols "Blacklist"
+        array exchanges "Filter by exchange"
+        bool enabled
+    }
+
+    AlertHistory {
+        i64 id PK
+        string symbol
+        string source_exchange
+        string target_exchange
+        i32 premium_bps
+        f64 source_price
+        f64 target_price
+        datetime created_at
+    }
+
+    ActiveOpportunity {
+        i64 id PK
+        string symbol
+        string source_exchange
+        string target_exchange
+        i32 last_premium_bps
+        datetime first_seen_at
+        datetime last_seen_at
+    }
+
     %% ===== RELATIONSHIPS =====
 
     Chain ||--o{ Asset : "hosts"
@@ -210,6 +257,7 @@ erDiagram
     TradingPair ||--o{ PriceTick : "generates"
     TradingPair ||--o{ OrderbookSnapshot : "has"
     Exchange ||--o{ PriceTick : "publishes"
+    QuoteCurrency ||--o{ PriceTick : "denominated in"
 
     TradingPair ||--|| PremiumMatrix : "tracked by"
     PremiumMatrix ||--o{ ExchangePairPremium : "calculates"
@@ -217,6 +265,8 @@ erDiagram
     Exchange ||--o{ ArbitrageOpportunity : "source"
     Exchange ||--o{ ArbitrageOpportunity : "target"
     Asset ||--o{ ArbitrageOpportunity : "involves"
+    QuoteCurrency ||--o{ ArbitrageOpportunity : "source quote"
+    QuoteCurrency ||--o{ ArbitrageOpportunity : "target quote"
 
     ArbitrageOpportunity ||--o{ RouteStep : "has route"
     Exchange ||--o{ RouteStep : "executes on"
@@ -237,17 +287,21 @@ erDiagram
 
     Exchange ||--|| FeedConfig : "configured by"
     FeedConfig ||--|| PriceAggregator : "feeds into"
+
+    AlertConfig ||--o{ AlertHistory : "generates"
+    ArbitrageOpportunity ||--o{ ActiveOpportunity : "tracked as"
 ```
 
 ## 레이어별 구조체 요약
 
 | 레이어 | 주요 구조체 | 역할 |
 |--------|-------------|------|
-| **Core** | `Asset`, `TradingPair`, `Exchange`, `Chain` | 도메인 기본 엔티티 |
-| **Feeds** | `FeedConfig`, `PriceTick`, `PriceAggregator` | 거래소 WebSocket → 실시간 가격 수집 |
-| **Engine** | `PremiumMatrix`, `ArbitrageOpportunity`, `RouteStep` | 프리미엄 계산 & 차익거래 기회 탐지 |
+| **Core** | `Asset`, `TradingPair`, `Exchange`, `Chain`, `QuoteCurrency` | 도메인 기본 엔티티 |
+| **Feeds** | `FeedConfig`, `PriceTick`, `PriceAggregator`, `*Adapter`, `*Message` | 거래소 WebSocket → 실시간 가격 수집 |
+| **Engine** | `PremiumMatrix`, `ArbitrageOpportunity`, `RouteStep`, `OpportunityDetector` | 프리미엄 계산 & 차익거래 기회 탐지 |
 | **Executor** | `Order`, `OrderFill`, `ExecutionState`, `ExecutionResult` | 주문 실행 & 상태 추적 |
-| **Serialization** | `PriceTickData`, `OpportunityData` | 바이너리 직렬화 (54~96 bytes) |
+| **Alerts** | `AlertConfig`, `AlertHistory`, `TelegramBot`, `Notifier` | 텔레그램 알림 & 사용자 설정 |
+| **Serialization** | `PriceTickData`, `OpportunityData` | 바이너리 직렬화 (unused) |
 
 ## 핵심 데이터 흐름
 
@@ -272,11 +326,20 @@ Exchange WebSocket → PriceTick → PriceAggregator → PremiumMatrix
 #### Exchange (거래소)
 | ID 범위 | 유형 | 예시 |
 |---------|------|------|
-| 100-105 | CEX | Binance, Coinbase, Kraken, OKX, Bybit, Upbit |
+| 100-107 | CEX | Binance, Coinbase, Kraken, OKX, Bybit, Upbit, Bithumb, GateIO |
 | 200-202 | DEX CPMM | UniswapV2, SushiSwap |
 | 201-204 | DEX CLMM | UniswapV3, Curve, Balancer |
 | 300-302 | DEX Solana | Raydium, Orca, Jupiter |
 | 400-402 | PerpDEX | dYdX, GMX, Hyperliquid |
+
+#### QuoteCurrency (호가 통화)
+| ID | 통화 | 설명 |
+|----|------|------|
+| 1 | USD | US Dollar (Coinbase) |
+| 2 | USDT | Tether (Binance, Bybit, GateIO) |
+| 3 | USDC | USD Coin |
+| 4 | BUSD | Binance USD (legacy) |
+| 10 | KRW | Korean Won (Upbit, Bithumb) |
 
 #### Asset (자산)
 ```rust
@@ -302,14 +365,17 @@ TradingPair {
 
 ### Price 데이터
 
-#### PriceTick (실시간 가격, 54 bytes packed)
+#### PriceTick (실시간 가격, 71 bytes packed)
 ```rust
 PriceTick {
     exchange: Exchange,         // 2 bytes
     pair_id: u32,               // 4 bytes
+    quote_currency: u8,         // 1 byte (USD, USDT, USDC, KRW)
     price: u64,                 // 8 bytes, FixedPoint (8 decimals)
     bid: u64,                   // 8 bytes, 최우선 매수호가
     ask: u64,                   // 8 bytes, 최우선 매도호가
+    bid_size: u64,              // 8 bytes, 매수 호가창 깊이
+    ask_size: u64,              // 8 bytes, 매도 호가창 깊이
     volume_24h: u64,            // 8 bytes
     liquidity: u64,             // 8 bytes
     timestamp_ms: u64,          // 8 bytes
@@ -341,10 +407,18 @@ ArbitrageOpportunity {
     // 가격 정보
     source_exchange: Exchange,  // 싸게 사는 거래소
     target_exchange: Exchange,  // 비싸게 파는 거래소
+    source_quote: QuoteCurrency, // 매수 거래소 호가 통화
+    target_quote: QuoteCurrency, // 매도 거래소 호가 통화
     asset: Asset,
     source_price: u64,
     target_price: u64,
-    premium_bps: i32,           // 프리미엄 (basis points)
+    source_depth: u64,          // 매수 호가창 깊이 (ask size)
+    target_depth: u64,          // 매도 호가창 깊이 (bid size)
+
+    // 프리미엄 (basis points)
+    premium_bps: i32,           // 직접 가격 비교
+    kimchi_premium_bps: i32,    // USD/KRW 환율 기준
+    tether_premium_bps: i32,    // USDT/KRW 기준
 
     // 경로
     route: Vec<RouteStep>,
@@ -439,18 +513,46 @@ FeedConfig {
 ```
 
 #### 거래소별 WebSocket 메시지 포맷
-- **Binance**: `symbol, close, bid, ask, volume, event_time`
-- **Coinbase**: `type, product_id, price, best_bid, best_ask, volume_24h`
-- **Upbit**: `code, trade_price, acc_trade_volume_24h, timestamp`
+
+| 거래소 | 메시지 타입 | 주요 필드 |
+|--------|------------|-----------|
+| **Binance** | ticker, depth | symbol, close, bid, ask, volume, event_time |
+| **Coinbase** | l2_data (snapshot/update) | product_id, bids, offers, time |
+| **Bybit** | tickers | symbol, lastPrice, bid1Price, ask1Price |
+| **GateIO** | spot.tickers | currency_pair, last, highest_bid, lowest_ask |
+| **Upbit** | ticker, orderbook | code, trade_price, orderbook_units |
+| **Bithumb** | ticker, orderbookdepth | symbol, closePrice, orderbook |
+
+#### Adapter 메시지 구조
+
+```rust
+// Upbit/Bithumb 통합 메시지 파서
+pub enum UpbitMessage {
+    Ticker { code: String, price: FixedPoint },
+    Orderbook { code: String, bid: FixedPoint, ask: FixedPoint, bid_size: FixedPoint, ask_size: FixedPoint },
+}
+
+pub enum BithumbMessage {
+    Ticker { symbol: String, price: FixedPoint },
+    Orderbook { symbol: String, bid: FixedPoint, ask: FixedPoint, bid_size: FixedPoint, ask_size: FixedPoint },
+}
+
+// Coinbase L2 이벤트
+pub enum CoinbaseL2Event {
+    Snapshot { product_id: String, bids: Vec<(f64, f64)>, asks: Vec<(f64, f64)> },
+    Update { product_id: String, bids: Vec<(f64, f64)>, asks: Vec<(f64, f64)> },
+}
+```
 
 ---
 
 ## 타입 안전성
 
 - 모든 가격은 `FixedPoint` (u64, 8 decimals) 사용 → 부동소수점 오차 방지
-- Exchange/Chain/Bridge ID는 compact repr (u8/u16) enum → 효율적 직렬화
-- `PriceTick`은 54 bytes packed struct → 메모리 최적화
+- Exchange/Chain/Bridge/QuoteCurrency ID는 compact repr (u8/u16) enum → 효율적 직렬화
+- `PriceTick`은 71 bytes packed struct → 메모리 최적화
 - `PriceAggregator`는 `DashMap` 사용 → 스레드 안전한 동시 업데이트
+- 모든 가격은 USD로 정규화하여 저장 (KRW는 USDT/KRW로 변환)
 
 ---
 
@@ -485,17 +587,30 @@ FeedConfig {
   "Okx": 103,
   "Bybit": 104,
   "Upbit": 105,
+  "Bithumb": 106,
+  "GateIO": 107,
   "UniswapV2": 200,
-  "SushiSwap": 201,
-  "UniswapV3": 210,
-  "Curve": 211,
-  "Balancer": 212,
+  "UniswapV3": 201,
+  "SushiSwap": 202,
+  "Curve": 203,
+  "Balancer": 204,
   "Raydium": 300,
   "Orca": 301,
   "Jupiter": 302,
   "Dydx": 400,
   "Gmx": 401,
   "Hyperliquid": 402
+}
+```
+
+#### QuoteCurrency
+```json
+{
+  "USD": 1,
+  "USDT": 2,
+  "USDC": 3,
+  "BUSD": 4,
+  "KRW": 10
 }
 ```
 
@@ -579,21 +694,27 @@ FeedConfig {
 #### FixedPoint (고정소수점)
 ```json
 // 8자리 정밀도: 50000.12345678 → 5000012345678
+// Scale: 10^8 = 100,000,000
 { "value": 5000012345678 }
+// 1.0 = 100000000
+// 50000.5 = 5000050000000
 ```
 
 ---
 
 ### Price Data
 
-#### PriceTick (가격 틱, 54 bytes packed)
+#### PriceTick (가격 틱, 71 bytes packed)
 ```json
 {
   "exchange": "Binance",
   "pair_id": 1,
+  "quote_currency": "USDT",
   "price": 5000000000000,
   "bid": 4999900000000,
   "ask": 5000100000000,
+  "bid_size": 150000000,
+  "ask_size": 200000000,
   "volume_24h": 100000000000000,
   "liquidity": 50000000000000,
   "timestamp_ms": 1703721600000
@@ -693,6 +814,8 @@ FeedConfig {
 
   "source_exchange": "Binance",
   "target_exchange": "Upbit",
+  "source_quote": "USDT",
+  "target_quote": "KRW",
   "asset": {
     "symbol": "ETH",
     "chain": "Ethereum",
@@ -701,7 +824,12 @@ FeedConfig {
   },
   "source_price": 5000000000000,
   "target_price": 5075000000000,
+  "source_depth": 150000000,
+  "target_depth": 200000000,
+
   "premium_bps": 150,
+  "kimchi_premium_bps": 145,
+  "tether_premium_bps": 150,
 
   "route": [
     { "Trade": { "exchange": "Binance", "pair_id": 1, "side": "Buy", "expected_price": 5000000000000, "slippage_bps": 10 } },
@@ -882,6 +1010,6 @@ FeedConfig {
 
 | 구조체 | 내부 크기 | JSON 크기 (예상) |
 |--------|----------|-----------------|
-| `PriceTick` | 54 bytes | ~200 bytes |
-| `ArbitrageOpportunity` | ~300 bytes | ~1KB |
-| 1000개 PriceTick 배치 | ~54KB | ~200KB |
+| `PriceTick` | 71 bytes | ~250 bytes |
+| `ArbitrageOpportunity` | ~350 bytes | ~1.2KB |
+| 1000개 PriceTick 배치 | ~71KB | ~250KB |
