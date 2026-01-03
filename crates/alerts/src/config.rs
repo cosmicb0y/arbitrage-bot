@@ -26,7 +26,7 @@ impl Default for AlertConfig {
         Self {
             id: 0,
             telegram_chat_id: String::new(),
-            min_premium_bps: 50,
+            min_premium_bps: 400,
             symbols: Vec::new(),
             excluded_symbols: Vec::new(),
             exchanges: Vec::new(),

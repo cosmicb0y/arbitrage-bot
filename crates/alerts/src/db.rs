@@ -43,7 +43,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS alert_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_chat_id TEXT NOT NULL UNIQUE,
-                min_premium_bps INTEGER NOT NULL DEFAULT 50,
+                min_premium_bps INTEGER NOT NULL DEFAULT 400,
                 symbols TEXT NOT NULL DEFAULT '[]',
                 excluded_symbols TEXT NOT NULL DEFAULT '[]',
                 exchanges TEXT NOT NULL DEFAULT '[]',

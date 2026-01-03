@@ -3,6 +3,7 @@
 use crate::config::AlertHistory;
 use crate::db::Database;
 use crate::telegram::{format_alert_message, TelegramBot};
+pub use crate::telegram::ExchangeRates;
 use arbitrage_core::{ArbitrageOpportunity, FixedPoint};
 use std::sync::Arc;
 use thiserror::Error;
@@ -56,6 +57,7 @@ pub struct Notifier {
     bot: Arc<TelegramBot>,
     config: NotifierConfig,
     transfer_path_checker: Option<TransferPathChecker>,
+    exchange_rates: std::sync::RwLock<ExchangeRates>,
 }
 
 impl Notifier {
@@ -66,6 +68,7 @@ impl Notifier {
             bot,
             config,
             transfer_path_checker: None,
+            exchange_rates: std::sync::RwLock::new(ExchangeRates::default()),
         }
     }
 
@@ -73,6 +76,13 @@ impl Notifier {
     pub fn with_transfer_path_checker(mut self, checker: TransferPathChecker) -> Self {
         self.transfer_path_checker = Some(checker);
         self
+    }
+
+    /// Update exchange rates for raw price display.
+    pub fn update_exchange_rates(&self, rates: ExchangeRates) {
+        if let Ok(mut lock) = self.exchange_rates.write() {
+            *lock = rates;
+        }
     }
 
     /// Process an arbitrage opportunity and send alerts if needed.
@@ -84,6 +94,19 @@ impl Notifier {
         let source_exchange = format!("{:?}", opportunity.source_exchange);
         let target_exchange = format!("{:?}", opportunity.target_exchange);
         let premium_bps = opportunity.premium_bps;
+
+        // Skip if depth is not available on both sides
+        if opportunity.source_depth == 0 || opportunity.target_depth == 0 {
+            debug!(
+                symbol = symbol,
+                source = source_exchange,
+                target = target_exchange,
+                source_depth = opportunity.source_depth,
+                target_depth = opportunity.target_depth,
+                "Skipping alert: depth not available on both sides"
+            );
+            return Ok(0);
+        }
 
         // Check transfer path if configured
         if self.config.require_transfer_path {
@@ -157,15 +180,24 @@ impl Notifier {
                 None
             };
 
+            let source_quote = format!("{:?}", opportunity.source_quote);
+            let target_quote = format!("{:?}", opportunity.target_quote);
+
+            // Get current exchange rates for raw price display
+            let rates = self.exchange_rates.read().ok().map(|r| r.clone());
+
             let message = format_alert_message(
                 symbol,
                 &source_exchange,
                 &target_exchange,
+                &source_quote,
+                &target_quote,
                 source_price,
                 target_price,
                 premium_bps,
                 source_depth,
                 target_depth,
+                rates.as_ref(),
             );
 
             match self.bot.send_alert(&config.telegram_chat_id, &message).await {

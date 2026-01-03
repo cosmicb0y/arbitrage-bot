@@ -3,7 +3,7 @@
 use crate::db::Database;
 use std::sync::Arc;
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
+use teloxide::types::{LinkPreviewOptions, ParseMode};
 use teloxide::utils::command::BotCommands;
 use thiserror::Error;
 
@@ -68,6 +68,13 @@ impl TelegramBot {
         self.bot
             .send_message(chat_id, message)
             .parse_mode(ParseMode::Html)
+            .link_preview_options(LinkPreviewOptions {
+                is_disabled: true,
+                url: None,
+                prefer_small_media: false,
+                prefer_large_media: false,
+                show_above_text: false,
+            })
             .await?;
         Ok(())
     }
@@ -298,37 +305,220 @@ fn format_price(price: f64) -> String {
     }
 }
 
+/// Format KRW price with adaptive precision based on magnitude.
+fn format_krw_price(price: f64) -> String {
+    if price < 0.0001 {
+        format!("₩{:.6}", price)
+    } else if price < 0.01 {
+        format!("₩{:.4}", price)
+    } else if price < 1.0 {
+        format!("₩{:.2}", price)
+    } else if price < 100.0 {
+        format!("₩{:.1}", price)
+    } else {
+        // Large KRW prices - use comma separator
+        format!("₩{}", format_with_commas(price as i64))
+    }
+}
+
+/// Format USDT/USDC price with appropriate precision.
+fn format_stablecoin_price(price: f64, symbol: &str) -> String {
+    if price == 0.0 {
+        return format!("0 {}", symbol);
+    }
+    let abs_price = price.abs();
+    if abs_price >= 1000.0 {
+        format!("{:.2} {}", price, symbol)
+    } else if abs_price >= 1.0 {
+        format!("{:.4} {}", price, symbol)
+    } else if abs_price >= 0.01 {
+        format!("{:.6} {}", price, symbol)
+    } else if abs_price >= 0.0001 {
+        format!("{:.8} {}", price, symbol)
+    } else {
+        format!("{:.10} {}", price, symbol)
+    }
+}
+
+/// Format number with comma separators.
+fn format_with_commas(n: i64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
+}
+
+/// Format USD value with appropriate precision.
+fn format_usd_value(value: f64) -> String {
+    if value >= 1000.0 {
+        format!("${:.0}", value)
+    } else if value >= 100.0 {
+        format!("${:.1}", value)
+    } else {
+        format!("${:.2}", value)
+    }
+}
+
+/// Get the trade URL for an exchange and symbol.
+fn get_exchange_trade_url(exchange: &str, symbol: &str) -> Option<String> {
+    let symbol_upper = symbol.to_uppercase();
+    match exchange {
+        "Binance" => Some(format!("https://www.binance.com/en/trade/{}USDT", symbol_upper)),
+        "Coinbase" => Some(format!("https://www.coinbase.com/advanced-trade/spot/{}-USD", symbol_upper)),
+        "Upbit" => Some(format!("https://upbit.com/exchange?code=CRIX.UPBIT.KRW-{}", symbol_upper)),
+        "Bithumb" => Some(format!("https://www.bithumb.com/trade/order/{}_KRW", symbol_upper)),
+        "Bybit" => Some(format!("https://www.bybit.com/en/trade/spot/{}/USDT", symbol_upper)),
+        "GateIO" => Some(format!("https://www.gate.io/trade/{}_USDT", symbol_upper)),
+        "Kraken" => Some(format!("https://pro.kraken.com/app/trade/{}-usd", symbol.to_lowercase())),
+        "Okx" => Some(format!("https://www.okx.com/trade-spot/{}-usdt", symbol.to_lowercase())),
+        _ => None,
+    }
+}
+
+/// Format exchange name with link if available.
+fn format_exchange_with_link(exchange: &str, symbol: &str) -> String {
+    if let Some(url) = get_exchange_trade_url(exchange, symbol) {
+        format!("<a href=\"{}\">{}</a>", url, exchange)
+    } else {
+        exchange.to_string()
+    }
+}
+
+/// Exchange rate information for price conversion.
+#[derive(Debug, Clone, Default)]
+pub struct ExchangeRates {
+    /// USDT/KRW rate from Upbit
+    pub upbit_usdt_krw: f64,
+    /// USDT/KRW rate from Bithumb
+    pub bithumb_usdt_krw: f64,
+    /// USDT/USD rate
+    pub usdt_usd: f64,
+    /// USDC/USD rate
+    pub usdc_usd: f64,
+}
+
+/// Convert USD price back to raw quote currency price.
+fn convert_usd_to_raw(
+    usd_price: f64,
+    exchange: &str,
+    quote: &str,
+    rates: &ExchangeRates,
+) -> Option<f64> {
+    match quote {
+        "KRW" => {
+            // USD -> KRW via USDT/KRW
+            let usdt_krw = if exchange == "Upbit" {
+                rates.upbit_usdt_krw
+            } else if exchange == "Bithumb" {
+                rates.bithumb_usdt_krw
+            } else {
+                0.0
+            };
+            if usdt_krw > 0.0 && rates.usdt_usd > 0.0 {
+                // usd_price was: krw_price / usdt_krw * usdt_usd
+                // So: krw_price = usd_price / usdt_usd * usdt_krw
+                Some((usd_price / rates.usdt_usd) * usdt_krw)
+            } else {
+                None
+            }
+        }
+        "USDT" => {
+            // USD -> USDT
+            if rates.usdt_usd > 0.0 {
+                Some(usd_price / rates.usdt_usd)
+            } else {
+                None
+            }
+        }
+        "USDC" => {
+            // USD -> USDC
+            if rates.usdc_usd > 0.0 {
+                Some(usd_price / rates.usdc_usd)
+            } else {
+                None
+            }
+        }
+        _ => None, // USD - no conversion needed
+    }
+}
+
+/// Format price with raw quote and USD conversion.
+fn format_price_with_raw(
+    usd_price: f64,
+    exchange: &str,
+    quote: &str,
+    rates: &ExchangeRates,
+) -> String {
+    if let Some(raw_price) = convert_usd_to_raw(usd_price, exchange, quote, rates) {
+        let raw_str = match quote {
+            "KRW" => format_krw_price(raw_price),
+            "USDT" => format_stablecoin_price(raw_price, "USDT"),
+            "USDC" => format_stablecoin_price(raw_price, "USDC"),
+            _ => format_price(usd_price),
+        };
+        format!("{}\n        ({})", raw_str, format_price(usd_price))
+    } else {
+        format_price(usd_price)
+    }
+}
+
 /// Format an opportunity as an alert message.
 pub fn format_alert_message(
     symbol: &str,
     source_exchange: &str,
     target_exchange: &str,
+    source_quote: &str,
+    target_quote: &str,
     source_price: f64,
     target_price: f64,
     premium_bps: i32,
     source_depth: Option<f64>,
     target_depth: Option<f64>,
+    rates: Option<&ExchangeRates>,
 ) -> String {
     let premium_pct = premium_bps as f64 / 100.0;
 
+    let source_link = format_exchange_with_link(source_exchange, symbol);
+    let target_link = format_exchange_with_link(target_exchange, symbol);
+
+    // Format market names like BTC/USDT, BTC/KRW
+    let buy_market = format!("{}/{}", symbol, source_quote);
+    let sell_market = format!("{}/{}", symbol, target_quote);
+
+    // Format prices with raw quote currency if rates available
+    let default_rates = ExchangeRates::default();
+    let rates = rates.unwrap_or(&default_rates);
+
+    let source_price_str = format_price_with_raw(source_price, source_exchange, source_quote, rates);
+    let target_price_str = format_price_with_raw(target_price, target_exchange, target_quote, rates);
+
     let mut msg = format!(
         "🚨 <b>Arbitrage Alert!</b>\n\n\
-         <b>Symbol:</b> {}\n\
-         📈 <b>Buy:</b> {} @ {}\n\
-         📉 <b>Sell:</b> {} @ {}\n\n\
-         <b>Premium:</b> {} bps ({:.2}%)",
-        symbol,
-        source_exchange,
-        format_price(source_price),
-        target_exchange,
-        format_price(target_price),
-        premium_bps,
+         📈 <b>Buy:</b> {} @ {}\n        ({})\n\
+         📉 <b>Sell:</b> {} @ {}\n        ({})\n\n\
+         <b>Premium:</b> {:.2}%",
+        buy_market,
+        source_price_str,
+        source_link,
+        sell_market,
+        target_price_str,
+        target_link,
         premium_pct
     );
 
     if let (Some(src), Some(tgt)) = (source_depth, target_depth) {
-        let depth = src.min(tgt);
-        msg.push_str(&format!("\n<b>Depth:</b> {:.4} available", depth));
+        let buy_value = src * source_price;
+        let sell_value = tgt * target_price;
+        msg.push_str(&format!(
+            "\n\n<b>Depth:</b>\n  Buy: {:.4} ({})\n  Sell: {:.4} ({})",
+            src, format_usd_value(buy_value),
+            tgt, format_usd_value(sell_value)
+        ));
     }
 
     let now = chrono::Utc::now();
