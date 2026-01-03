@@ -88,6 +88,74 @@ type DepthCacheKey = (String, String);
 /// Depth cache value: (bid_size, ask_size)
 type DepthCacheValue = (FixedPoint, FixedPoint);
 
+/// Stablecoin prices for an exchange.
+/// Stores USDT/USD and USDC/USD (or derived) prices.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExchangeStablecoinPrices {
+    /// USDT/USD price (direct or derived)
+    pub usdt_usd: Option<f64>,
+    /// USDC/USD price (direct or derived)
+    pub usdc_usd: Option<f64>,
+    /// USDC/USDT price (for derivation)
+    pub usdc_usdt: Option<f64>,
+    /// USDT/USDC price (for derivation)
+    pub usdt_usdc: Option<f64>,
+    /// Reference crypto price in USD (e.g., BTC/USD) for cross-derivation
+    pub ref_crypto_usd: Option<f64>,
+    /// Reference crypto price in USDT (e.g., BTC/USDT) for cross-derivation
+    pub ref_crypto_usdt: Option<f64>,
+    /// Reference crypto price in USDC (e.g., BTC/USDC) for cross-derivation
+    pub ref_crypto_usdc: Option<f64>,
+}
+
+impl ExchangeStablecoinPrices {
+    /// Get effective USDT/USD price (direct or derived from cross pairs).
+    pub fn get_usdt_usd(&self, fallback_usdc_usd: f64) -> f64 {
+        // 1. Direct USDT/USD
+        if let Some(price) = self.usdt_usd {
+            return price;
+        }
+        // 2. Derive from crypto prices: USDT/USD = crypto_USD / crypto_USDT
+        if let (Some(usd), Some(usdt)) = (self.ref_crypto_usd, self.ref_crypto_usdt) {
+            if usdt > 0.0 {
+                return usd / usdt;
+            }
+        }
+        // 3. Derive from USDT/USDC * USDC/USD
+        if let Some(usdt_usdc) = self.usdt_usdc {
+            return usdt_usdc * fallback_usdc_usd;
+        }
+        // 4. Derive from (1/USDC_USDT) * USDC/USD
+        if let Some(usdc_usdt) = self.usdc_usdt {
+            return (1.0 / usdc_usdt) * fallback_usdc_usd;
+        }
+        1.0 // Default fallback
+    }
+
+    /// Get effective USDC/USD price (direct or derived from cross pairs).
+    pub fn get_usdc_usd(&self, fallback_usdt_usd: f64) -> f64 {
+        // 1. Direct USDC/USD
+        if let Some(price) = self.usdc_usd {
+            return price;
+        }
+        // 2. Derive from crypto prices: USDC/USD = crypto_USD / crypto_USDC
+        if let (Some(usd), Some(usdc)) = (self.ref_crypto_usd, self.ref_crypto_usdc) {
+            if usdc > 0.0 {
+                return usd / usdc;
+            }
+        }
+        // 3. Derive from USDC/USDT * USDT/USD
+        if let Some(usdc_usdt) = self.usdc_usdt {
+            return usdc_usdt * fallback_usdt_usd;
+        }
+        // 4. Derive from (1/USDT_USDC) * USDT/USD
+        if let Some(usdt_usdc) = self.usdt_usdc {
+            return (1.0 / usdt_usdc) * fallback_usdt_usd;
+        }
+        1.0 // Default fallback
+    }
+}
+
 /// Application state shared across components.
 pub struct AppState {
     /// Configuration.
@@ -121,6 +189,8 @@ pub struct AppState {
     /// Orderbook depth cache: (exchange, symbol) -> (bid_size, ask_size)
     /// Updated on every price update, used to enrich opportunity data.
     depth_cache: DashMap<DepthCacheKey, DepthCacheValue>,
+    /// Exchange-specific stablecoin prices (USDT/USD, USDC/USD, cross pairs).
+    stablecoin_prices: DashMap<Exchange, ExchangeStablecoinPrices>,
 }
 
 impl AppState {
@@ -142,6 +212,7 @@ impl AppState {
             usdc_usdt_price: AtomicU64::new(FixedPoint::from_f64(1.0).0), // Default 1:1
             common_markets: RwLock::new(None),
             depth_cache: DashMap::new(),
+            stablecoin_prices: DashMap::new(),
         }
     }
 
@@ -211,6 +282,82 @@ impl AppState {
         FixedPoint::from_f64(usdc_usdt * usdt_usd)
     }
 
+    /// Update exchange-specific stablecoin price.
+    /// Call this for each stablecoin pair received from an exchange.
+    pub fn update_exchange_stablecoin_price(
+        &self,
+        exchange: Exchange,
+        base: &str,
+        quote: &str,
+        price: f64,
+    ) {
+        let mut entry = self.stablecoin_prices.entry(exchange).or_default();
+        let prices = entry.value_mut();
+
+        match (base, quote) {
+            ("USDT", "USD") => prices.usdt_usd = Some(price),
+            ("USDC", "USD") => prices.usdc_usd = Some(price),
+            ("USDC", "USDT") => prices.usdc_usdt = Some(price),
+            ("USDT", "USDC") => prices.usdt_usdc = Some(price),
+            _ => {}
+        }
+    }
+
+    /// Update reference crypto prices for deriving stablecoin rates.
+    /// Uses BTC as reference: BTC/USD, BTC/USDT, BTC/USDC prices.
+    /// Call this for exchanges like Bybit that have USD markets but no direct stablecoin/USD pairs.
+    pub fn update_exchange_ref_crypto_price(
+        &self,
+        exchange: Exchange,
+        quote: &str,
+        price: f64,
+    ) {
+        let mut entry = self.stablecoin_prices.entry(exchange).or_default();
+        let prices = entry.value_mut();
+
+        match quote {
+            "USD" => prices.ref_crypto_usd = Some(price),
+            "USDT" => prices.ref_crypto_usdt = Some(price),
+            "USDC" => prices.ref_crypto_usdc = Some(price),
+            _ => {}
+        }
+    }
+
+    /// Get stablecoin prices for an exchange.
+    pub fn get_exchange_stablecoin_prices(&self, exchange: Exchange) -> ExchangeStablecoinPrices {
+        self.stablecoin_prices
+            .get(&exchange)
+            .map(|r| *r.value())
+            .unwrap_or_default()
+    }
+
+    /// Get USDT/USD price for a specific exchange.
+    /// Falls back to global average if not available.
+    pub fn get_usdt_usd_for_exchange(&self, exchange: Exchange) -> f64 {
+        let prices = self.get_exchange_stablecoin_prices(exchange);
+        let global_usdc_usd = self.get_usdc_usd_price().to_f64();
+        prices.get_usdt_usd(global_usdc_usd)
+    }
+
+    /// Get USDC/USD price for a specific exchange.
+    /// Falls back to global average if not available.
+    pub fn get_usdc_usd_for_exchange(&self, exchange: Exchange) -> f64 {
+        let prices = self.get_exchange_stablecoin_prices(exchange);
+        let global_usdt_usd = self.get_usdt_usd_price().to_f64();
+        prices.get_usdc_usd(global_usdt_usd)
+    }
+
+    /// Get stablecoin/USD price for a specific exchange and quote currency.
+    pub fn get_stablecoin_usd_for_exchange(&self, exchange: Exchange, quote: QuoteCurrency) -> f64 {
+        match quote {
+            QuoteCurrency::USDT => self.get_usdt_usd_for_exchange(exchange),
+            QuoteCurrency::USDC => self.get_usdc_usd_for_exchange(exchange),
+            QuoteCurrency::USD => 1.0,
+            QuoteCurrency::BUSD => 1.0, // BUSD is pegged to USD
+            QuoteCurrency::KRW => 1.0, // KRW conversion handled separately
+        }
+    }
+
     /// Update common markets.
     pub async fn update_common_markets(&self, markets: CommonMarkets) {
         let mut stored = self.common_markets.write().await;
@@ -272,10 +419,19 @@ impl AppState {
             // First try registry, then compute from pair_id if possible
             let symbol = detector.pair_id_to_symbol(pair_id);
             if let Some(sym) = &symbol {
-                // Update depth cache (only if we have non-zero depth)
+                // Merge with existing depth cache values
+                // Skip storing if both new values are zero (wait for WebSocket to provide depth)
+                let key = (format!("{:?}", exchange), sym.clone());
                 if bid_size.0 > 0 || ask_size.0 > 0 {
-                    let key = (format!("{:?}", exchange), sym.clone());
-                    self.depth_cache.insert(key, (bid_size, ask_size));
+                    let (final_bid_size, final_ask_size) = if let Some(existing) = self.depth_cache.get(&key) {
+                        let existing = *existing;
+                        let new_bid = if bid_size.0 > 0 { bid_size } else { existing.0 };
+                        let new_ask = if ask_size.0 > 0 { ask_size } else { existing.1 };
+                        (new_bid, new_ask)
+                    } else {
+                        (bid_size, ask_size)
+                    };
+                    self.depth_cache.insert(key, (final_bid_size, final_ask_size));
                 }
             }
             detector.update_price_with_bid_ask(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
@@ -303,10 +459,23 @@ impl AppState {
         self.prices.update(tick);
 
         // Update depth cache directly (we know the symbol)
+        // Merge with existing values: keep non-zero values from either source
+        // Skip storing if both new values are zero (wait for WebSocket to provide depth)
+        let key = (format!("{:?}", exchange), symbol.to_string());
         if bid_size.0 > 0 || ask_size.0 > 0 {
-            let key = (format!("{:?}", exchange), symbol.to_string());
-            self.depth_cache.insert(key, (bid_size, ask_size));
+            // We have some depth info - merge with existing
+            let (final_bid_size, final_ask_size) = if let Some(existing) = self.depth_cache.get(&key) {
+                let existing = *existing;
+                // Merge: prefer new non-zero values, fall back to existing non-zero values
+                let new_bid = if bid_size.0 > 0 { bid_size } else { existing.0 };
+                let new_ask = if ask_size.0 > 0 { ask_size } else { existing.1 };
+                (new_bid, new_ask)
+            } else {
+                (bid_size, ask_size)
+            };
+            self.depth_cache.insert(key, (final_bid_size, final_ask_size));
         }
+        // If both are zero, don't store - let WebSocket provide depth later
 
         // Update detector with bid/ask for accurate premium calculation
         {
