@@ -282,6 +282,12 @@ impl WsClient {
         let stale_timeout = Duration::from_secs(120);
         let mut last_message_time = std::time::Instant::now();
 
+        // Ping timeout detection: if no PONG received after sending PING, connection is dead
+        // Upbit and other exchanges may silently drop connections without proper close frames
+        let ping_timeout = Duration::from_secs(30); // Wait up to 30s for PONG after PING
+        let mut awaiting_pong = false;
+        let mut ping_sent_time = std::time::Instant::now();
+
         // For Gate.io debugging
         let mut last_ping_time = std::time::Instant::now();
         let mut message_count = 0u64;
@@ -296,6 +302,13 @@ impl WsClient {
                 warn!("{:?}: No messages received for {:?}, forcing reconnect",
                     self.config.exchange, last_message_time.elapsed());
                 return Err(FeedError::Disconnected("Stale connection - no messages received".to_string()));
+            }
+
+            // Check for ping timeout (no PONG received after sending PING)
+            if awaiting_pong && ping_sent_time.elapsed() > ping_timeout {
+                warn!("{:?}: No PONG received for {:?} after PING, forcing reconnect",
+                    self.config.exchange, ping_sent_time.elapsed());
+                return Err(FeedError::Disconnected("Ping timeout - no PONG received".to_string()));
             }
 
             tokio::select! {
@@ -337,7 +350,9 @@ impl WsClient {
                         }
                         Some(Ok(Message::Pong(_))) => {
                             // Pong received, connection is alive
-                            debug!("{:?}: Received WebSocket PONG", self.config.exchange);
+                            awaiting_pong = false;
+                            debug!("{:?}: Received WebSocket PONG (latency: {:?})",
+                                self.config.exchange, ping_sent_time.elapsed());
                         }
                         Some(Ok(Message::Close(frame))) => {
                             info!("{:?}: Received close frame: {:?}", self.config.exchange, frame);
@@ -370,12 +385,16 @@ impl WsClient {
                             return Err(FeedError::ConnectionFailed(format!("App ping failed: {}", e)));
                         }
                         last_ping_time = std::time::Instant::now();
+                        awaiting_pong = true;
+                        ping_sent_time = std::time::Instant::now();
                     } else {
                         // Other exchanges use WebSocket protocol-level ping
                         if let Err(e) = write.send(Message::Ping(vec![])).await {
                             error!("{:?}: Failed to send PING: {}", self.config.exchange, e);
                             return Err(FeedError::ConnectionFailed(format!("PING failed: {}", e)));
                         }
+                        awaiting_pong = true;
+                        ping_sent_time = std::time::Instant::now();
                     }
                 }
             }
