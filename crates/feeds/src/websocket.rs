@@ -332,6 +332,22 @@ impl WsClient {
                                 debug!("Gate.io: Received pong response (latency: {:?})", last_ping_time.elapsed());
                                 continue;
                             }
+
+                            // Handle Bybit application-level pong response
+                            // Bybit responds with {"success":true,"ret_msg":"pong","conn_id":"...","op":"pong"}
+                            if self.config.exchange == Exchange::Bybit && text.contains("\"op\":\"pong\"") {
+                                awaiting_pong = false;
+                                debug!("Bybit: Received pong response (latency: {:?})", ping_sent_time.elapsed());
+                                continue;
+                            }
+
+                            // Handle Coinbase heartbeats channel messages (connection keep-alive)
+                            // These are sent by the server every ~1s when subscribed to heartbeats channel
+                            if self.config.exchange == Exchange::Coinbase && text.contains("\"channel\":\"heartbeats\"") {
+                                // Heartbeat received - connection is alive
+                                // No need to track awaiting_pong since Coinbase sends these automatically
+                                continue;
+                            }
                             if let Err(e) = self.tx.send(WsMessage::Text(text)).await {
                                 if self.config.exchange == Exchange::GateIO && message_count % 10000 == 0 {
                                     warn!("Gate.io: Failed to send msg #{} to channel: {}", message_count, e);
@@ -385,6 +401,16 @@ impl WsClient {
                             return Err(FeedError::ConnectionFailed(format!("App ping failed: {}", e)));
                         }
                         last_ping_time = std::time::Instant::now();
+                        awaiting_pong = true;
+                        ping_sent_time = std::time::Instant::now();
+                    } else if self.config.exchange == Exchange::Bybit {
+                        // Bybit requires application-level ping: {"op": "ping"}
+                        // The server responds with {"op": "pong", ...}
+                        // Timeout is 10 minutes but we ping every 20s for safety
+                        if let Err(e) = write.send(Message::Text(r#"{"op": "ping"}"#.to_string())).await {
+                            error!("Bybit: Failed to send app-level ping: {}", e);
+                            return Err(FeedError::ConnectionFailed(format!("App ping failed: {}", e)));
+                        }
                         awaiting_pong = true;
                         ping_sent_time = std::time::Instant::now();
                     } else {

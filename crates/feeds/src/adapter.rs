@@ -846,8 +846,9 @@ impl CoinbaseAdapter {
         )
     }
 
-    /// Generate subscription messages for level2 channel.
+    /// Generate subscription messages for level2 and heartbeats channels.
     /// level2 provides real-time orderbook updates (immediate, not batched).
+    /// heartbeats is REQUIRED for connection keep-alive (60-90s timeout without it).
     pub fn subscribe_messages(product_ids: &[String]) -> Vec<String> {
         let products: Vec<String> = product_ids
             .iter()
@@ -859,8 +860,9 @@ impl CoinbaseAdapter {
             // Subscribe to level2 for real-time orderbook depth
             // level2: immediate updates per change
             // level2_batch: batched updates every 50ms (lower latency but less real-time)
+            // heartbeats: REQUIRED for connection keep-alive (Coinbase times out in 60-90s)
             format!(
-                r#"{{"type": "subscribe", "product_ids": [{}], "channels": ["level2"]}}"#,
+                r#"{{"type": "subscribe", "product_ids": [{}], "channels": ["level2", "heartbeats"]}}"#,
                 products_str
             ),
         ]
@@ -1286,8 +1288,9 @@ impl CoinbaseAdapter {
         Ok(format!("{}.{}.{}", header_b64, payload_b64, signature_b64))
     }
 
-    /// Generate subscription messages for level2 channel with JWT authentication.
+    /// Generate subscription messages for level2 and heartbeats channels with JWT authentication.
     /// The level2 channel requires authentication since 2024.
+    /// The heartbeats channel is REQUIRED for connection keep-alive (60-90s timeout).
     /// Returns subscription messages with JWT token included.
     /// Note: Uses single "channel" field (not "channels" array) per Coinbase Advanced Trade API.
     pub fn subscribe_messages_with_auth(product_ids: &[String], credentials: &CoinbaseCredentials) -> Result<Vec<String>, crate::FeedError> {
@@ -1299,11 +1302,18 @@ impl CoinbaseAdapter {
             .collect();
         let products_str = products.join(", ");
 
-        // level2 channel subscription with JWT authentication
-        // Note: Advanced Trade API uses "channel" (singular), not "channels" (array)
+        // Subscribe to both level2 and heartbeats channels
+        // heartbeats channel is crucial for connection keep-alive (Coinbase times out in 60-90s without it)
         Ok(vec![
+            // level2 channel subscription with JWT authentication
             format!(
                 r#"{{"type": "subscribe", "product_ids": [{}], "channel": "level2", "jwt": "{}"}}"#,
+                products_str,
+                jwt
+            ),
+            // heartbeats channel subscription (required for connection stability)
+            format!(
+                r#"{{"type": "subscribe", "product_ids": [{}], "channel": "heartbeats", "jwt": "{}"}}"#,
                 products_str,
                 jwt
             ),

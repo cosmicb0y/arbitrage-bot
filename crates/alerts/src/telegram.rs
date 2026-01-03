@@ -286,13 +286,18 @@ impl TelegramBot {
 }
 
 /// Format price with appropriate precision based on magnitude.
+/// Format USD price with comma separators to prevent phone number auto-detection on mobile.
 fn format_price(price: f64) -> String {
     if price == 0.0 {
         return "$0".to_string();
     }
     let abs_price = price.abs();
     if abs_price >= 1000.0 {
-        format!("${:.2}", price)
+        // Use comma separators for large numbers (e.g., $99,450.00)
+        // This prevents iOS/Android from detecting as phone number
+        let int_part = price.trunc() as i64;
+        let frac_part = ((price.fract().abs() * 100.0).round() as i64).min(99);
+        format!("${}.{:02}", format_with_commas(int_part), frac_part)
     } else if abs_price >= 1.0 {
         format!("${:.4}", price)
     } else if abs_price >= 0.01 {
@@ -322,13 +327,18 @@ fn format_krw_price(price: f64) -> String {
 }
 
 /// Format USDT/USDC price with appropriate precision.
+/// Uses comma separators for large numbers to prevent phone number auto-detection on mobile.
 fn format_stablecoin_price(price: f64, symbol: &str) -> String {
     if price == 0.0 {
         return format!("0 {}", symbol);
     }
     let abs_price = price.abs();
     if abs_price >= 1000.0 {
-        format!("{:.2} {}", price, symbol)
+        // Use comma separators for large numbers (e.g., 273,397.40)
+        // This prevents iOS/Android from detecting as phone number
+        let int_part = price.trunc() as i64;
+        let frac_part = ((price.fract().abs() * 100.0).round() as i64).min(99);
+        format!("{}.{:02} {}", format_with_commas(int_part), frac_part, symbol)
     } else if abs_price >= 1.0 {
         format!("{:.4} {}", price, symbol)
     } else if abs_price >= 0.01 {
