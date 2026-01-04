@@ -51,6 +51,15 @@ impl Default for BotStats {
     }
 }
 
+/// USD-like stablecoin premium data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsdlikePremium {
+    /// Premium in basis points
+    pub bps: i32,
+    /// Which stablecoin was used for comparison ("USDT", "USDC", "BUSD")
+    pub quote: String,
+}
+
 /// Opportunity data from CLI server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpportunityData {
@@ -66,12 +75,12 @@ pub struct OpportunityData {
     pub target_quote: String,
     /// Raw premium in basis points (direct price comparison)
     pub premium_bps: i32,
+    /// USD-like premium: same stablecoin comparison (USDT vs USDT or USDC vs USDC)
+    #[serde(default)]
+    pub usdlike_premium: Option<UsdlikePremium>,
     /// Kimchi premium: KRW converted via USD/KRW rate
     #[serde(default)]
     pub kimchi_premium_bps: i32,
-    /// Tether premium: KRW converted via USDT/KRW rate
-    #[serde(default)]
-    pub tether_premium_bps: i32,
     pub source_price: f64,
     pub target_price: f64,
     pub net_profit_bps: i32,
@@ -92,6 +101,15 @@ pub struct OpportunityData {
     /// Orderbook depth at target (bid size - quantity available to sell)
     #[serde(default)]
     pub target_depth: Option<f64>,
+    /// Optimal trade size from depth walking algorithm (in base asset)
+    #[serde(default)]
+    pub optimal_size: f64,
+    /// Expected profit at optimal_size (in quote currency, e.g., USDT)
+    #[serde(default)]
+    pub optimal_profit: f64,
+    /// Reason for optimal_size value: "ok" | "no_orderbook" | "not_profitable"
+    #[serde(default)]
+    pub optimal_size_reason: Option<String>,
 }
 
 /// Execution configuration.

@@ -1,8 +1,8 @@
 //! Application state management.
 
 use crate::config::AppConfig;
-use arbitrage_core::{symbol_to_pair_id, ArbitrageOpportunity, Exchange, FixedPoint, QuoteCurrency};
-use arbitrage_engine::{DetectorConfig, OpportunityDetector, PremiumMatrix};
+use arbitrage_core::{symbol_to_pair_id, ArbitrageOpportunity, Exchange, FixedPoint, OptimalSizeReason, QuoteCurrency};
+use arbitrage_engine::{DetectorConfig, FeeManager, OpportunityDetector, OrderbookCache, PremiumMatrix};
 use arbitrage_feeds::{CommonMarkets, PriceAggregator};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -175,9 +175,15 @@ pub struct AppState {
     /// USDT/KRW price from Upbit (for KRW to USD conversion).
     /// Stored as FixedPoint (e.g., 1438.5 KRW per USDT).
     upbit_usdt_krw: AtomicU64,
+    /// USDC/KRW price from Upbit.
+    /// Stored as FixedPoint (e.g., 1435.0 KRW per USDC).
+    upbit_usdc_krw: AtomicU64,
     /// USDT/KRW price from Bithumb.
     /// Stored as FixedPoint.
     bithumb_usdt_krw: AtomicU64,
+    /// USDC/KRW price from Bithumb.
+    /// Stored as FixedPoint.
+    bithumb_usdc_krw: AtomicU64,
     /// USDT/USD price (e.g., 1.0001 USD per USDT).
     /// Stored as FixedPoint.
     usdt_usd_price: AtomicU64,
@@ -191,6 +197,11 @@ pub struct AppState {
     depth_cache: DashMap<DepthCacheKey, DepthCacheValue>,
     /// Exchange-specific stablecoin prices (USDT/USD, USDC/USD, cross pairs).
     stablecoin_prices: DashMap<Exchange, ExchangeStablecoinPrices>,
+    /// Full orderbook cache: (exchange, pair_id) -> OrderbookCache
+    /// Used for optimal size calculation via depth walking algorithm.
+    orderbook_cache: DashMap<(Exchange, u32), OrderbookCache>,
+    /// Fee manager for all exchanges.
+    fee_manager: RwLock<FeeManager>,
 }
 
 impl AppState {
@@ -207,12 +218,16 @@ impl AppState {
             stats: BotStats::new(),
             running: AtomicBool::new(false),
             upbit_usdt_krw: AtomicU64::new(0), // 0 means not yet received
+            upbit_usdc_krw: AtomicU64::new(0), // 0 means not yet received
             bithumb_usdt_krw: AtomicU64::new(0), // 0 means not yet received
+            bithumb_usdc_krw: AtomicU64::new(0), // 0 means not yet received
             usdt_usd_price: AtomicU64::new(FixedPoint::from_f64(1.0).0), // Default 1:1
             usdc_usdt_price: AtomicU64::new(FixedPoint::from_f64(1.0).0), // Default 1:1
             common_markets: RwLock::new(None),
             depth_cache: DashMap::new(),
             stablecoin_prices: DashMap::new(),
+            orderbook_cache: DashMap::new(),
+            fee_manager: RwLock::new(FeeManager::new()),
         }
     }
 
@@ -246,12 +261,51 @@ impl AppState {
         }
     }
 
+    /// Update USDC/KRW price from Upbit.
+    pub fn update_upbit_usdc_krw(&self, price: FixedPoint) {
+        self.upbit_usdc_krw.store(price.0, Ordering::Relaxed);
+    }
+
+    /// Get Upbit USDC/KRW price. Returns None if not yet received.
+    pub fn get_upbit_usdc_krw(&self) -> Option<FixedPoint> {
+        let price = self.upbit_usdc_krw.load(Ordering::Relaxed);
+        if price == 0 {
+            None
+        } else {
+            Some(FixedPoint(price))
+        }
+    }
+
+    /// Update USDC/KRW price from Bithumb.
+    pub fn update_bithumb_usdc_krw(&self, price: FixedPoint) {
+        self.bithumb_usdc_krw.store(price.0, Ordering::Relaxed);
+    }
+
+    /// Get Bithumb USDC/KRW price. Returns None if not yet received.
+    pub fn get_bithumb_usdc_krw(&self) -> Option<FixedPoint> {
+        let price = self.bithumb_usdc_krw.load(Ordering::Relaxed);
+        if price == 0 {
+            None
+        } else {
+            Some(FixedPoint(price))
+        }
+    }
+
     /// Get USDT/KRW price for a specific exchange.
     pub fn get_usdt_krw_for_exchange(&self, exchange: Exchange) -> Option<FixedPoint> {
         match exchange {
             Exchange::Upbit => self.get_upbit_usdt_krw(),
             Exchange::Bithumb => self.get_bithumb_usdt_krw(),
             _ => None, // Non-KRW exchanges don't need USDT/KRW
+        }
+    }
+
+    /// Get USDC/KRW price for a specific exchange.
+    pub fn get_usdc_krw_for_exchange(&self, exchange: Exchange) -> Option<FixedPoint> {
+        match exchange {
+            Exchange::Upbit => self.get_upbit_usdc_krw(),
+            Exchange::Bithumb => self.get_bithumb_usdc_krw(),
+            _ => None, // Non-KRW exchanges don't need USDC/KRW
         }
     }
 
@@ -495,6 +549,60 @@ impl AppState {
         self.depth_cache.get(&key).map(|v| *v)
     }
 
+    /// Update full orderbook snapshot for depth walking calculation.
+    ///
+    /// # Arguments
+    /// * `exchange` - The exchange
+    /// * `pair_id` - The pair ID
+    /// * `bids` - Bids as (price, qty) in f64, sorted descending by price
+    /// * `asks` - Asks as (price, qty) in f64, sorted ascending by price
+    pub fn update_orderbook_snapshot(
+        &self,
+        exchange: Exchange,
+        pair_id: u32,
+        bids: &[(f64, f64)],
+        asks: &[(f64, f64)],
+    ) {
+        let key = (exchange, pair_id);
+        let mut entry = self.orderbook_cache.entry(key).or_insert_with(OrderbookCache::default);
+        entry.update_snapshot_f64(bids, asks);
+    }
+
+    /// Get orderbook for an exchange and pair.
+    pub fn get_orderbook(&self, exchange: Exchange, pair_id: u32) -> Option<OrderbookCache> {
+        self.orderbook_cache.get(&(exchange, pair_id)).map(|v| v.clone())
+    }
+
+    /// Get orderbooks for both sides of an arbitrage opportunity.
+    /// Returns (buy_orderbook, sell_orderbook) if both are available.
+    pub fn get_arbitrage_orderbooks(
+        &self,
+        buy_exchange: Exchange,
+        sell_exchange: Exchange,
+        pair_id: u32,
+    ) -> Option<(OrderbookCache, OrderbookCache)> {
+        let buy_ob = self.orderbook_cache.get(&(buy_exchange, pair_id))?;
+        let sell_ob = self.orderbook_cache.get(&(sell_exchange, pair_id))?;
+        Some((buy_ob.clone(), sell_ob.clone()))
+    }
+
+    /// Get fee manager for reading fees.
+    pub async fn get_fee_manager(&self) -> tokio::sync::RwLockReadGuard<'_, FeeManager> {
+        self.fee_manager.read().await
+    }
+
+    /// Update withdrawal fee for an asset (from exchange API).
+    pub async fn update_withdrawal_fee(
+        &self,
+        exchange: Exchange,
+        asset: &str,
+        fee: u64,
+        min_withdrawal: u64,
+    ) {
+        let mut manager = self.fee_manager.write().await;
+        manager.update_withdrawal_fee(exchange, asset, fee, min_withdrawal, None);
+    }
+
     /// Update price for a symbol (dynamic markets).
     /// Uses mid price as bid/ask when only price is available.
     pub async fn update_price_for_symbol(
@@ -550,15 +658,128 @@ impl AppState {
     /// Detect opportunities for a pair.
     /// Returns all detected opportunities (both new and updated).
     pub async fn detect_opportunities(&self, pair_id: u32) -> Vec<ArbitrageOpportunity> {
+        use arbitrage_engine::{calculate_optimal_size, DepthFeeConfig};
+
         let mut detector = self.detector.write().await;
 
-        // Get exchange rates for kimchi/tether premium calculation
-        // Use Upbit's USDT/KRW as both usd_krw and usdt_krw base
+        // Get exchange rates for multi-denomination premium calculation
+        // USDT/KRW from Upbit (primary Korean exchange)
         let usdt_krw = self.get_upbit_usdt_krw().map(|p| p.to_f64());
-        // For kimchi premium, we use the API rate if available, otherwise fall back to USDT/KRW
+        // USDC/KRW from Upbit
+        let usdc_krw = self.get_upbit_usdc_krw().map(|p| p.to_f64());
+        // USD/KRW from 하나은행 API for kimchi premium
         let usd_krw = crate::exchange_rate::get_api_rate().or(usdt_krw);
 
-        let opps = detector.detect_with_rates(pair_id, usd_krw, usdt_krw);
+        let mut opps = detector.detect_with_all_rates(pair_id, usd_krw, usdt_krw, usdc_krw);
+
+        // Calculate optimal_size for each opportunity using orderbook depth
+        let fee_manager = self.fee_manager.read().await;
+        for opp in &mut opps {
+            // Get orderbooks for both sides
+            let buy_ob = self.orderbook_cache.get(&(opp.source_exchange, pair_id));
+            let sell_ob = self.orderbook_cache.get(&(opp.target_exchange, pair_id));
+
+            // Check if orderbook available for both sides
+            if buy_ob.is_none() || sell_ob.is_none() {
+                opp.optimal_size_reason = OptimalSizeReason::NoOrderbook;
+                continue;
+            }
+
+            if let (Some(buy_ob), Some(sell_ob)) = (buy_ob, sell_ob) {
+                let mut buy_asks = buy_ob.asks_vec();
+                let mut sell_bids = sell_ob.bids_vec();
+
+                // Normalize prices to the overseas exchange's quote currency
+                // (same logic as calculate_multi_premiums in opportunity.rs)
+                let source_is_krw = opp.source_quote == QuoteCurrency::KRW;
+                let target_is_krw = opp.target_quote == QuoteCurrency::KRW;
+
+                // Determine the overseas quote currency (non-KRW side)
+                let overseas_quote = if source_is_krw {
+                    opp.target_quote
+                } else if target_is_krw {
+                    opp.source_quote
+                } else {
+                    // Both non-KRW: no conversion needed
+                    QuoteCurrency::USD
+                };
+
+                // Get the appropriate KRW rate based on overseas quote
+                let get_krw_rate_for_quote = |exchange: Exchange, quote: QuoteCurrency| -> Option<u64> {
+                    match quote {
+                        QuoteCurrency::USDT => self.get_usdt_krw_for_exchange(exchange).map(|p| p.0),
+                        QuoteCurrency::USDC => self.get_usdc_krw_for_exchange(exchange).map(|p| p.0),
+                        _ => self.get_usdt_krw_for_exchange(exchange).map(|p| p.0), // fallback to USDT
+                    }
+                };
+
+                // If source is Korean exchange, convert buy_asks from KRW to overseas quote
+                if source_is_krw {
+                    if let Some(rate) = get_krw_rate_for_quote(opp.source_exchange, overseas_quote) {
+                        if rate > 0 {
+                            buy_asks = buy_asks
+                                .iter()
+                                .map(|(price, qty)| {
+                                    // price is in KRW (FixedPoint), convert to overseas quote
+                                    // overseas_price = KRW / quote_KRW_rate
+                                    let converted = (*price as u128 * FixedPoint::SCALE as u128 / rate as u128) as u64;
+                                    (converted, *qty)
+                                })
+                                .collect();
+                        }
+                    }
+                }
+
+                // If target is Korean exchange, convert sell_bids from KRW to overseas quote
+                if target_is_krw {
+                    if let Some(rate) = get_krw_rate_for_quote(opp.target_exchange, overseas_quote) {
+                        if rate > 0 {
+                            sell_bids = sell_bids
+                                .iter()
+                                .map(|(price, qty)| {
+                                    // price is in KRW (FixedPoint), convert to overseas quote
+                                    let converted = (*price as u128 * FixedPoint::SCALE as u128 / rate as u128) as u64;
+                                    (converted, *qty)
+                                })
+                                .collect();
+                        }
+                    }
+                }
+
+                // Get fee config for this pair
+                let (buy_fee, sell_fee, withdrawal_fee) = fee_manager.get_arbitrage_fees(
+                    opp.source_exchange,
+                    opp.target_exchange,
+                    &opp.asset.symbol,
+                );
+
+                let fees = DepthFeeConfig {
+                    buy_fee_bps: buy_fee,
+                    sell_fee_bps: sell_fee,
+                    withdrawal_fee,
+                };
+
+                // Calculate optimal size using depth walking algorithm
+                // buy_asks = asks from buy exchange (where we buy), normalized to USD
+                // sell_bids = bids from sell exchange (where we sell), normalized to USD
+                let result = calculate_optimal_size(
+                    &buy_asks,
+                    &sell_bids,
+                    fees,
+                );
+
+                opp.optimal_size = result.amount;
+                opp.optimal_profit = result.profit;
+
+                // Set reason based on result
+                if result.amount > 0 {
+                    opp.optimal_size_reason = OptimalSizeReason::Ok;
+                } else {
+                    opp.optimal_size_reason = OptimalSizeReason::NotProfitable;
+                }
+            }
+        }
+        drop(fee_manager);
 
         if !opps.is_empty() {
             // Store recent opportunities (deduplicate by exchange pair)

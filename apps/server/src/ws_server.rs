@@ -48,6 +48,15 @@ pub struct WsStatsData {
     pub is_running: bool,
 }
 
+/// USD-like premium for WebSocket broadcast.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsUsdlikePremium {
+    /// Premium in basis points
+    pub bps: i32,
+    /// Which stablecoin was used for comparison ("USDT", "USDC", "BUSD")
+    pub quote: String,
+}
+
 /// Opportunity data for WebSocket broadcast.
 #[derive(Debug, Clone, Serialize)]
 pub struct WsOpportunityData {
@@ -61,10 +70,12 @@ pub struct WsOpportunityData {
     pub target_quote: String,
     /// Raw premium in basis points (direct price comparison)
     pub premium_bps: i32,
-    /// Kimchi premium: KRW converted via USD/KRW rate
+    /// USD-like premium: same stablecoin comparison (USDT vs USDT or USDC vs USDC)
+    /// For KRW markets, converts to overseas market's quote currency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usdlike_premium: Option<WsUsdlikePremium>,
+    /// Kimchi premium: USD price comparison (KRW/USD_KRW forex vs overseas USD)
     pub kimchi_premium_bps: i32,
-    /// Tether premium: KRW converted via USDT/KRW rate
-    pub tether_premium_bps: i32,
     pub source_price: f64,
     pub target_price: f64,
     pub net_profit_bps: i32,
@@ -90,6 +101,15 @@ pub struct WsOpportunityData {
     /// Orderbook depth at target (bid size - quantity available to sell)
     #[serde(default)]
     pub target_depth: f64,
+    /// Optimal trade size from depth walking algorithm (in base asset)
+    #[serde(default)]
+    pub optimal_size: f64,
+    /// Expected profit at optimal_size (in quote currency, e.g., USDT)
+    #[serde(default)]
+    pub optimal_profit: f64,
+    /// Reason for optimal_size value: "ok" | "no_orderbook" | "not_profitable"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimal_size_reason: Option<String>,
 }
 
 /// Exchange rate data for WebSocket broadcast.
@@ -99,9 +119,13 @@ pub struct WsExchangeRateData {
     pub usd_krw: f64,
     /// USDT/KRW from Upbit
     pub upbit_usdt_krw: f64,
+    /// USDC/KRW from Upbit
+    pub upbit_usdc_krw: f64,
     /// USDT/KRW from Bithumb
     pub bithumb_usdt_krw: f64,
-    /// USD/KRW rate from exchange rate API (optional, for reference)
+    /// USDC/KRW from Bithumb
+    pub bithumb_usdc_krw: f64,
+    /// USD/KRW rate from 하나은행 API (for kimchi premium)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_rate: Option<f64>,
     /// USDT/USD price from exchange feed
@@ -376,12 +400,16 @@ fn collect_stats(state: &SharedState) -> WsStatsData {
 /// Collect current exchange rate if loaded.
 fn collect_exchange_rate(state: &SharedState) -> Option<WsExchangeRateData> {
     let upbit_usdt_krw = state.get_upbit_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+    let upbit_usdc_krw = state.get_upbit_usdc_krw().map(|p| p.to_f64()).unwrap_or(0.0);
     let bithumb_usdt_krw = state.get_bithumb_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+    let bithumb_usdc_krw = state.get_bithumb_usdc_krw().map(|p| p.to_f64()).unwrap_or(0.0);
 
     exchange_rate::get_usd_krw_rate().map(|usd_krw| WsExchangeRateData {
         usd_krw,
         upbit_usdt_krw,
+        upbit_usdc_krw,
         bithumb_usdt_krw,
+        bithumb_usdc_krw,
         api_rate: exchange_rate::get_api_rate(),
         usdt_usd: state.get_usdt_usd_price().to_f64(),
         usdc_usd: state.get_usdc_usd_price().to_f64(),
@@ -465,6 +493,12 @@ async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
             .map(|(bid_size, _)| bid_size.to_f64())
             .unwrap_or_else(|| FixedPoint(opp.target_depth).to_f64());
 
+        // Convert UsdlikePremium to WsUsdlikePremium
+        let usdlike_premium = opp.usdlike_premium.map(|p| WsUsdlikePremium {
+            bps: p.bps,
+            quote: p.quote.as_str().to_string(),
+        });
+
         WsOpportunityData {
             id: opp.id,
             symbol,
@@ -473,8 +507,8 @@ async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
             source_quote: opp.source_quote.as_str().to_string(),
             target_quote: opp.target_quote.as_str().to_string(),
             premium_bps: opp.premium_bps,
+            usdlike_premium,
             kimchi_premium_bps: opp.kimchi_premium_bps,
-            tether_premium_bps: opp.tether_premium_bps,
             source_price: FixedPoint(opp.source_price).to_f64(),
             target_price: FixedPoint(opp.target_price).to_f64(),
             net_profit_bps: (opp.net_profit_estimate / 100) as i32,
@@ -485,6 +519,13 @@ async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
             wallet_status_known,
             source_depth,
             target_depth,
+            optimal_size: FixedPoint(opp.optimal_size).to_f64(),
+            optimal_profit: FixedPoint(opp.optimal_profit as u64).to_f64(),
+            optimal_size_reason: Some(match opp.optimal_size_reason {
+                arbitrage_core::OptimalSizeReason::Ok => "ok".to_string(),
+                arbitrage_core::OptimalSizeReason::NoOrderbook => "no_orderbook".to_string(),
+                arbitrage_core::OptimalSizeReason::NotProfitable => "not_profitable".to_string(),
+            }),
         }
     }).collect();
 
@@ -579,6 +620,15 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
         .map(|(bid_size, _)| bid_size.to_f64())
         .unwrap_or_else(|| FixedPoint(opp.target_depth).to_f64());
 
+    // Convert UsdlikePremium to WsUsdlikePremium
+    let usdlike_premium = opp.usdlike_premium.map(|p| WsUsdlikePremium {
+        bps: p.bps,
+        quote: p.quote.as_str().to_string(),
+    });
+
+    let optimal_size_f64 = FixedPoint(opp.optimal_size).to_f64();
+    let optimal_profit_f64 = FixedPoint(opp.optimal_profit as u64).to_f64();
+
     let ws_opp = WsOpportunityData {
         id: opp.id,
         symbol,
@@ -587,8 +637,8 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
         source_quote: opp.source_quote.as_str().to_string(),
         target_quote: opp.target_quote.as_str().to_string(),
         premium_bps: opp.premium_bps,
+        usdlike_premium,
         kimchi_premium_bps: opp.kimchi_premium_bps,
-        tether_premium_bps: opp.tether_premium_bps,
         source_price: FixedPoint(opp.source_price).to_f64(),
         target_price: FixedPoint(opp.target_price).to_f64(),
         net_profit_bps: (opp.net_profit_estimate / 100) as i32, // Convert to bps approximation
@@ -602,6 +652,13 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
         wallet_status_known,
         source_depth,
         target_depth,
+        optimal_size: optimal_size_f64,
+        optimal_profit: optimal_profit_f64,
+        optimal_size_reason: Some(match opp.optimal_size_reason {
+            arbitrage_core::OptimalSizeReason::Ok => "ok".to_string(),
+            arbitrage_core::OptimalSizeReason::NoOrderbook => "no_orderbook".to_string(),
+            arbitrage_core::OptimalSizeReason::NotProfitable => "not_profitable".to_string(),
+        }),
     };
 
     let _ = tx.send(WsServerMessage::Opportunity(ws_opp));
@@ -610,12 +667,16 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
 /// Broadcast exchange rate update to all clients.
 pub fn broadcast_exchange_rate(tx: &BroadcastSender, state: &SharedState, usd_krw: f64) {
     let upbit_usdt_krw = state.get_upbit_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+    let upbit_usdc_krw = state.get_upbit_usdc_krw().map(|p| p.to_f64()).unwrap_or(0.0);
     let bithumb_usdt_krw = state.get_bithumb_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+    let bithumb_usdc_krw = state.get_bithumb_usdc_krw().map(|p| p.to_f64()).unwrap_or(0.0);
 
     let rate_data = WsExchangeRateData {
         usd_krw,
         upbit_usdt_krw,
+        upbit_usdc_krw,
         bithumb_usdt_krw,
+        bithumb_usdc_krw,
         api_rate: exchange_rate::get_api_rate(),
         usdt_usd: state.get_usdt_usd_price().to_f64(),
         usdc_usd: state.get_usdc_usd_price().to_f64(),

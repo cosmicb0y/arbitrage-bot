@@ -298,6 +298,13 @@ fn process_upbit_ticker(
         return;
     }
 
+    // Handle USDC/KRW for exchange rate
+    if UpbitAdapter::is_usdc_market(code) {
+        state.update_upbit_usdc_krw(price);
+        tracing::debug!("Updated Upbit USDC/KRW rate: {:.2}", price.to_f64());
+        return;
+    }
+
     // Handle trading pairs - extract symbol from code (e.g., "KRW-BTC" -> "BTC")
     if let Some(symbol) = UpbitAdapter::extract_base_symbol(code) {
         // Use canonical name if mapping exists
@@ -338,8 +345,8 @@ fn process_upbit_orderbook(
     ask_size: FixedPoint,
     orderbook_cache: &OrderbookCache,
 ) {
-    // Skip USDT market
-    if UpbitAdapter::is_usdt_market(code) {
+    // Skip stablecoin markets (USDT, USDC)
+    if UpbitAdapter::is_stablecoin_market(code) {
         return;
     }
     // Store bid/ask and sizes in cache for use by ticker handler
@@ -363,8 +370,16 @@ async fn run_upbit_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Single parse with type dispatch
-                if let Ok(upbit_msg) = UpbitAdapter::parse_message(&text) {
+                // Try full orderbook parse first for depth walking
+                if let Ok((code, bid, ask, bid_size, ask_size, bids, asks)) = UpbitAdapter::parse_orderbook_full(&text) {
+                    process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                    // Store full orderbook for depth walking
+                    if let Some(symbol) = UpbitAdapter::extract_base_symbol(&code) {
+                        let display_symbol = symbol_mappings.canonical_name("Upbit", &symbol);
+                        let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                        state.update_orderbook_snapshot(Exchange::Upbit, pair_id, &bids, &asks);
+                    }
+                } else if let Ok(upbit_msg) = UpbitAdapter::parse_message(&text) {
                     match upbit_msg {
                         arbitrage_feeds::UpbitMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
                             process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
@@ -376,14 +391,29 @@ async fn run_upbit_feed(
                 }
             }
             WsMessage::Binary(data) => {
-                // Single parse with type dispatch (MessagePack)
-                if let Ok(upbit_msg) = UpbitAdapter::parse_message_binary(&data) {
-                    match upbit_msg {
-                        arbitrage_feeds::UpbitMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
-                            process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                // Try full orderbook parse first for depth walking
+                match UpbitAdapter::parse_orderbook_full_binary(&data) {
+                    Ok((code, bid, ask, bid_size, ask_size, bids, asks)) => {
+                        process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                        // Store full orderbook for depth walking
+                        if let Some(symbol) = UpbitAdapter::extract_base_symbol(&code) {
+                            let display_symbol = symbol_mappings.canonical_name("Upbit", &symbol);
+                            let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                            state.update_orderbook_snapshot(Exchange::Upbit, pair_id, &bids, &asks);
                         }
-                        arbitrage_feeds::UpbitMessage::Ticker { code, price } => {
-                            process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
+                    }
+                    Err(_) => {
+                        // Not an orderbook - try ticker
+                        if let Ok(upbit_msg) = UpbitAdapter::parse_message_binary(&data) {
+                            // Fall back to ticker/orderbook parsing for non-full orderbook messages
+                            match upbit_msg {
+                                arbitrage_feeds::UpbitMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
+                                    process_upbit_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                                }
+                                arbitrage_feeds::UpbitMessage::Ticker { code, price } => {
+                                    process_upbit_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
+                                }
+                            }
                         }
                     }
                 }
@@ -419,9 +449,9 @@ async fn run_binance_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Process bookTicker only (real-time bid/ask with depth)
-                if BinanceAdapter::is_book_ticker_message(&text) {
-                    if let Ok((tick, symbol, quote)) = BinanceAdapter::parse_book_ticker_with_base_quote(&text) {
+                // Process partial depth stream (20 levels orderbook snapshot)
+                if BinanceAdapter::is_partial_depth_message(&text) {
+                    if let Ok((tick, symbol, quote, bids, asks)) = BinanceAdapter::parse_partial_depth_with_base_quote(&text) {
                         // Update stablecoin prices for this exchange
                         if symbol == "USDT" || symbol == "USDC" {
                             state.update_exchange_stablecoin_price(
@@ -440,6 +470,11 @@ async fn run_binance_feed(
                         let display_symbol = symbol_mappings.canonical_name("Binance", &symbol);
                         let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
                         let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+
+                        // Store full orderbook for depth walking calculation
+                        if bids.len() > 0 && asks.len() > 0 {
+                        }
+                        state.update_orderbook_snapshot(Exchange::Binance, pair_id, &bids, &asks);
 
                         // Update state with orderbook bid/ask (use symbol variant to ensure depth cache is updated)
                         state.update_price_with_bid_ask_and_symbol(Exchange::Binance, pair_id, &display_symbol, tick.price(), tick.bid(), tick.ask(), tick.bid_size(), tick.ask_size(), quote_currency).await;
@@ -525,7 +560,19 @@ async fn run_coinbase_feed(
                             debug!("Coinbase snapshot: {} bid={:.4} ask={:.4} (levels: {} bids, {} asks)",
                                 product_id, best_bid, best_ask, bid_map.len(), ask_map.len());
 
-                            orderbook_cache.insert(product_id.clone(), (bid_map, ask_map));
+                            orderbook_cache.insert(product_id.clone(), (bid_map.clone(), ask_map.clone()));
+
+                            // Store full orderbook for depth walking calculation
+                            let bids_vec: Vec<(f64, f64)> = bid_map.iter()
+                                .map(|(Reverse(k), v)| (*k as f64 / 100_000_000.0, *v))
+                                .collect();
+                            let asks_vec: Vec<(f64, f64)> = ask_map.iter()
+                                .map(|(k, v)| (*k as f64 / 100_000_000.0, *v))
+                                .collect();
+                            if let Some(base) = CoinbaseAdapter::extract_base_symbol(&product_id) {
+                                let pair_id = arbitrage_core::symbol_to_pair_id(&base);
+                                state.update_orderbook_snapshot(Exchange::Coinbase, pair_id, &bids_vec, &asks_vec);
+                            }
 
                             let bid = FixedPoint::from_f64(best_bid);
                             let ask = FixedPoint::from_f64(best_ask);
@@ -564,6 +611,18 @@ async fn run_coinbase_feed(
                                     .unwrap_or((0.0, 0.0));
 
                                 if best_bid > 0.0 && best_ask > 0.0 {
+                                    // Update full orderbook for depth walking
+                                    let bids_vec: Vec<(f64, f64)> = bid_map.iter()
+                                        .map(|(Reverse(k), v)| (*k as f64 / 100_000_000.0, *v))
+                                        .collect();
+                                    let asks_vec: Vec<(f64, f64)> = ask_map.iter()
+                                        .map(|(k, v)| (*k as f64 / 100_000_000.0, *v))
+                                        .collect();
+                                    if let Some(base) = CoinbaseAdapter::extract_base_symbol(&product_id) {
+                                        let pair_id = arbitrage_core::symbol_to_pair_id(&base);
+                                        state.update_orderbook_snapshot(Exchange::Coinbase, pair_id, &bids_vec, &asks_vec);
+                                    }
+
                                     let bid = FixedPoint::from_f64(best_bid);
                                     let ask = FixedPoint::from_f64(best_ask);
                                     let bid_sz = FixedPoint::from_f64(bid_size);
@@ -657,6 +716,13 @@ fn process_bithumb_ticker(
         return;
     }
 
+    // Handle USDC/KRW for exchange rate
+    if BithumbAdapter::is_usdc_market(code) {
+        state.update_bithumb_usdc_krw(price);
+        tracing::debug!("Updated Bithumb USDC/KRW rate: {:.2}", price.to_f64());
+        return;
+    }
+
     // Handle trading pairs - extract symbol from code (e.g., "KRW-BTC" -> "BTC")
     if let Some(symbol) = BithumbAdapter::extract_base_symbol(code) {
         // Use canonical name if mapping exists
@@ -697,8 +763,8 @@ fn process_bithumb_orderbook(
     ask_size: FixedPoint,
     orderbook_cache: &OrderbookCache,
 ) {
-    // Skip USDT market
-    if BithumbAdapter::is_usdt_market(code) {
+    // Skip stablecoin markets (USDT, USDC)
+    if BithumbAdapter::is_stablecoin_market(code) {
         return;
     }
     // Store bid/ask and sizes in cache for use by ticker handler
@@ -722,8 +788,16 @@ async fn run_bithumb_feed(
 
         match msg {
             WsMessage::Text(text) => {
-                // Single parse with type dispatch
-                if let Ok(bithumb_msg) = BithumbAdapter::parse_message(&text) {
+                // Try full orderbook parse first for depth walking
+                if let Ok((code, bid, ask, bid_size, ask_size, bids, asks)) = BithumbAdapter::parse_orderbook_full(&text) {
+                    process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                    // Store full orderbook for depth walking
+                    if let Some(symbol) = BithumbAdapter::extract_base_symbol(&code) {
+                        let display_symbol = symbol_mappings.canonical_name("Bithumb", &symbol);
+                        let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                        state.update_orderbook_snapshot(Exchange::Bithumb, pair_id, &bids, &asks);
+                    }
+                } else if let Ok(bithumb_msg) = BithumbAdapter::parse_message(&text) {
                     match bithumb_msg {
                         arbitrage_feeds::BithumbMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
                             process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
@@ -735,14 +809,28 @@ async fn run_bithumb_feed(
                 }
             }
             WsMessage::Binary(data) => {
-                // Single parse with type dispatch (MessagePack)
-                if let Ok(bithumb_msg) = BithumbAdapter::parse_message_binary(&data) {
-                    match bithumb_msg {
-                        arbitrage_feeds::BithumbMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
-                            process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                // Try full orderbook parse first for depth walking
+                match BithumbAdapter::parse_orderbook_full_binary(&data) {
+                    Ok((code, bid, ask, bid_size, ask_size, bids, asks)) => {
+                        process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                        // Store full orderbook for depth walking
+                        if let Some(symbol) = BithumbAdapter::extract_base_symbol(&code) {
+                            let display_symbol = symbol_mappings.canonical_name("Bithumb", &symbol);
+                            let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                            state.update_orderbook_snapshot(Exchange::Bithumb, pair_id, &bids, &asks);
                         }
-                        arbitrage_feeds::BithumbMessage::Ticker { code, price } => {
-                            process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
+                    }
+                    Err(_) => {
+                        // Not a full orderbook message - try ticker/orderbook parsing
+                        if let Ok(bithumb_msg) = BithumbAdapter::parse_message_binary(&data) {
+                            match bithumb_msg {
+                                arbitrage_feeds::BithumbMessage::Orderbook { code, bid, ask, bid_size, ask_size } => {
+                                    process_bithumb_orderbook(&code, bid, ask, bid_size, ask_size, &orderbook_cache);
+                                }
+                                arbitrage_feeds::BithumbMessage::Ticker { code, price } => {
+                                    process_bithumb_ticker(&code, price, &state, &broadcast_tx, &symbol_mappings, &orderbook_cache);
+                                }
+                            }
                         }
                     }
                 }
@@ -780,7 +868,7 @@ async fn run_bybit_feed(
             WsMessage::Text(text) => {
                 // Process orderbook only (accurate bid/ask with depth)
                 if BybitAdapter::is_orderbook_message(&text) {
-                    if let Ok((tick, symbol, quote)) = BybitAdapter::parse_orderbook_with_base_quote(&text) {
+                    if let Ok((tick, symbol, quote, bids, asks)) = BybitAdapter::parse_orderbook_full(&text) {
                         // Update stablecoin prices for this exchange
                         if symbol == "USDT" || symbol == "USDC" {
                             state.update_exchange_stablecoin_price(
@@ -805,6 +893,11 @@ async fn run_bybit_feed(
                         let display_symbol = symbol_mappings.canonical_name("Bybit", &symbol);
                         let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
                         let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+
+                        // Store full orderbook for depth walking calculation
+                        if bids.len() > 0 && asks.len() > 0 {
+                        }
+                        state.update_orderbook_snapshot(Exchange::Bybit, pair_id, &bids, &asks);
 
                         // Update state with orderbook bid/ask (use symbol variant to ensure depth cache is updated)
                         state.update_price_with_bid_ask_and_symbol(Exchange::Bybit, pair_id, &display_symbol, tick.price(), tick.bid(), tick.ask(), tick.bid_size(), tick.ask_size(), quote_currency).await;
@@ -847,8 +940,8 @@ async fn run_gateio_feed(
             WsMessage::Text(text) => {
                 // Process orderbook message only (depth with bid/ask sizes)
                 if GateIOAdapter::is_orderbook_message(&text) {
-                    match GateIOAdapter::parse_orderbook_with_symbol(&text) {
-                        Ok((currency_pair, bid, ask, bid_size, ask_size)) => {
+                    match GateIOAdapter::parse_orderbook_full(&text) {
+                        Ok((currency_pair, bid, ask, bid_size, ask_size, bids, asks)) => {
                         // Extract base symbol and quote from currency_pair (e.g., BTC_USDT -> BTC, USDT)
                         if let Some((symbol, quote)) = GateIOAdapter::extract_base_quote(&currency_pair) {
                             // Calculate mid price from bid/ask
@@ -868,6 +961,11 @@ async fn run_gateio_feed(
                             let display_symbol = symbol_mappings.canonical_name("GateIO", &symbol);
                             let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
                             let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
+
+                            // Store full orderbook for depth walking calculation
+                            if bids.len() > 0 && asks.len() > 0 {
+                            }
+                            state.update_orderbook_snapshot(Exchange::GateIO, pair_id, &bids, &asks);
 
                             let tick = PriceTick::new(Exchange::GateIO, pair_id, mid_price, bid, ask)
                                 .with_sizes(bid_size, ask_size);
@@ -1026,8 +1124,10 @@ async fn fetch_initial_orderbooks(
     info!("  GateIO: {} orderbooks loaded", gateio_result.len());
 
     // Process Upbit orderbooks (prices are in KRW, need conversion to USD)
-    // First, extract USDT/KRW rate from the result (if KRW-USDT was fetched)
+    // First, extract USDT/KRW and USDC/KRW rates from the result
     let usdt_krw_rate = upbit_result.get("KRW-USDT")
+        .map(|(bid, ask, _, _)| (bid.to_f64() + ask.to_f64()) / 2.0);
+    let usdc_krw_rate = upbit_result.get("KRW-USDC")
         .map(|(bid, ask, _, _)| (bid.to_f64() + ask.to_f64()) / 2.0);
 
     if let Some(rate) = usdt_krw_rate {
@@ -1035,14 +1135,19 @@ async fn fetch_initial_orderbooks(
         state.update_upbit_usdt_krw(FixedPoint::from_f64(rate));
         info!("  Upbit: USDT/KRW rate from REST: {:.2}", rate);
     }
+    if let Some(rate) = usdc_krw_rate {
+        // Store the USDC/KRW rate in state
+        state.update_upbit_usdc_krw(FixedPoint::from_f64(rate));
+        info!("  Upbit: USDC/KRW rate from REST: {:.2}", rate);
+    }
 
     // Get the USDT/KRW rate for conversion (from REST or existing state)
     let usdt_krw = usdt_krw_rate.or_else(|| state.get_upbit_usdt_krw().map(|p| p.to_f64()));
     let usdt_usd = state.get_usdt_usd_price().to_f64();
 
     for (market, (bid, ask, bid_size, ask_size)) in &upbit_result {
-        // Skip USDT market (already processed above)
-        if market == "KRW-USDT" {
+        // Skip stablecoin markets (already processed above)
+        if market == "KRW-USDT" || market == "KRW-USDC" {
             continue;
         }
 
@@ -1090,17 +1195,28 @@ async fn fetch_initial_orderbooks(
     info!("  Upbit: {} orderbooks loaded", upbit_result.len());
 
     // Process Bithumb orderbooks (similar to Upbit, prices are in KRW)
-    // Extract USDT/KRW rate if available
+    // Extract USDT/KRW and USDC/KRW rates if available
     let bithumb_usdt_krw = bithumb_result.get("USDT")
+        .map(|(bid, ask, _, _)| (bid.to_f64() + ask.to_f64()) / 2.0);
+    let bithumb_usdc_krw = bithumb_result.get("USDC")
         .map(|(bid, ask, _, _)| (bid.to_f64() + ask.to_f64()) / 2.0);
 
     if let Some(rate) = bithumb_usdt_krw {
         state.update_bithumb_usdt_krw(FixedPoint::from_f64(rate));
         info!("  Bithumb: USDT/KRW rate from REST: {:.2}", rate);
     }
+    if let Some(rate) = bithumb_usdc_krw {
+        state.update_bithumb_usdc_krw(FixedPoint::from_f64(rate));
+        info!("  Bithumb: USDC/KRW rate from REST: {:.2}", rate);
+    }
 
     for (symbol, (bid, ask, bid_size, ask_size)) in &bithumb_result {
-        // Bithumb REST fetcher uses base symbol (e.g., "USDT", "BTC")
+        // Skip stablecoin markets (already processed above)
+        if symbol == "USDT" || symbol == "USDC" {
+            continue;
+        }
+
+        // Bithumb REST fetcher uses base symbol (e.g., "BTC", "ETH")
         let display_symbol = symbol_mappings.canonical_name("Bithumb", symbol);
         let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
 
@@ -1211,9 +1327,11 @@ async fn spawn_live_feeds(
     let mut bybit_set: HashSet<String> = HashSet::new();
     let mut gateio_set: HashSet<String> = HashSet::new();
 
-    // Always include USDT for exchange rate
+    // Always include USDT and USDC for exchange rate calculation
     upbit_set.insert("KRW-USDT".to_string());
+    upbit_set.insert("KRW-USDC".to_string());
     bithumb_set.insert("KRW-USDT".to_string());
+    bithumb_set.insert("KRW-USDC".to_string());
 
     // Use by_quote to get all quote variants (USDT, USDC, KRW)
     // by_quote already filters to markets on 2+ exchanges
@@ -1312,7 +1430,6 @@ async fn spawn_live_feeds(
 
     // Binance
     if !binance_symbols.is_empty() {
-        let binance_config = FeedConfig::for_exchange(Exchange::Binance);
         let (binance_tx, binance_rx) = mpsc::channel(5000); // ~10x symbols for high volume
 
         // Add stablecoin rate symbols to subscription
@@ -1321,11 +1438,16 @@ async fn spawn_live_feeds(
         all_binance_symbols.push("USDCUSDT".to_string());
         all_binance_symbols.push("USDCUSD".to_string());
 
-        let binance_subscribe_msgs = BinanceAdapter::subscribe_messages(&all_binance_symbols);
+        // Use combined stream URL (includes stream name in response, needed for depth streams)
+        // Depth stream responses don't include symbol, so we need the wrapper format
+        let combined_url = BinanceAdapter::ws_url_combined(&all_binance_symbols);
+        let mut binance_config = FeedConfig::for_exchange(Exchange::Binance);
+        binance_config.ws_url = combined_url;
 
         let binance_client = WsClient::new(binance_config.clone(), binance_tx);
         handles.push(tokio::spawn(async move {
-            if let Err(e) = binance_client.run_with_messages(Some(binance_subscribe_msgs)).await {
+            // Combined stream URL auto-subscribes, no need to send SUBSCRIBE messages
+            if let Err(e) = binance_client.run(None).await {
                 warn!("Binance WebSocket error: {}", e);
             }
         }));
@@ -1457,7 +1579,7 @@ async fn spawn_live_feeds(
     // Bybit
     if !bybit_symbols.is_empty() {
         let bybit_config = FeedConfig::for_exchange(Exchange::Bybit);
-        let (bybit_tx, bybit_rx) = mpsc::channel(5000); // ~9x symbols for high volume
+        let (bybit_tx, bybit_rx) = mpsc::channel(10000); // Larger buffer for orderbook.50 (50 levels per update)
 
         // Add stablecoin rate symbols to subscription
         // Bybit doesn't have USDT/USD pair, but has USDC/USDT

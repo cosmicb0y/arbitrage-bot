@@ -13,6 +13,17 @@ export interface PriceData {
   quote?: string;
 }
 
+// USD-like stablecoin quote type
+export type UsdlikeQuote = "USDT" | "USDC" | "BUSD";
+
+// USD-like premium (same stablecoin comparison)
+export interface UsdlikePremium {
+  // Premium in basis points
+  bps: number;
+  // Which stablecoin was used for comparison
+  quote: UsdlikeQuote;
+}
+
 export interface ArbitrageOpportunity {
   id: number;
   symbol: string;
@@ -26,10 +37,11 @@ export interface ArbitrageOpportunity {
   target_price: number;
   // Raw premium in basis points (direct price comparison)
   premium_bps: number;
-  // Kimchi premium: KRW converted via USD/KRW rate
+  // USD-like premium: same stablecoin comparison (USDT vs USDT or USDC vs USDC)
+  // For KRW markets, converts to overseas market's quote currency.
+  usdlike_premium?: UsdlikePremium;
+  // Kimchi premium: USD price comparison (KRW via forex rate)
   kimchi_premium_bps: number;
-  // Tether premium: KRW converted via USDT/KRW rate
-  tether_premium_bps: number;
   net_profit_bps: number;
   confidence_score: number;
   timestamp: number;
@@ -43,6 +55,12 @@ export interface ArbitrageOpportunity {
   source_depth?: number;
   // Orderbook depth at target (bid size - quantity available to sell)
   target_depth?: number;
+  // Optimal trade size from depth walking algorithm
+  optimal_size?: number;
+  // Expected profit at optimal size (after fees)
+  optimal_profit?: number;
+  // Reason for optimal_size value: "ok" | "no_orderbook" | "not_profitable"
+  optimal_size_reason?: "ok" | "no_orderbook" | "not_profitable";
 }
 
 export interface BotStats {

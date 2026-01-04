@@ -13,24 +13,7 @@ interface PriceChanges {
 const getOppKey = (opp: { symbol: string; source_exchange: string; target_exchange: string }) =>
   `${opp.symbol}-${opp.source_exchange}-${opp.target_exchange}`;
 
-// Format elapsed time since opportunity was detected
-const formatElapsedTime = (timestampMs: number): string => {
-  const now = Date.now();
-  const elapsedMs = now - timestampMs;
-
-  if (elapsedMs < 0) return "0s";
-
-  const seconds = Math.floor(elapsedMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
-
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-};
-
-type PremiumMode = "kimchi" | "tether";
+type PremiumMode = "usdlike" | "kimchi";
 
 function Opportunities() {
   const { opportunities: rawOpportunities, executeOpportunity } = useOpportunities();
@@ -43,7 +26,7 @@ function Opportunities() {
   const prevDataRef = useRef<Map<OppKey, { source: number; target: number; spread: number }>>(new Map());
   const [minVolume, setMinVolume] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState("");
-  const [premiumMode, setPremiumMode] = useState<PremiumMode>("tether");
+  const [premiumMode, setPremiumMode] = useState<PremiumMode>("usdlike");
   const [pathOnly, setPathOnly] = useState<boolean>(false);
   const [, setTick] = useState(0); // Force re-render for elapsed time updates
 
@@ -80,17 +63,52 @@ function Opportunities() {
     return map;
   }, [prices]);
 
+  // Get premium info based on mode and overseas quote currency
+  const getPremiumInfo = (opp: typeof rawOpportunities[0]): { value: number; label: string; color: string } => {
+    const sourceIsKRW = opp.source_quote === "KRW";
+    const targetIsKRW = opp.target_quote === "KRW";
+    const bothKRW = sourceIsKRW && targetIsKRW;
+    const hasKRW = sourceIsKRW || targetIsKRW;
+
+    // KRW ↔ KRW (한국 거래소 간): 라벨 없이 raw premium 표시
+    if (bothKRW) {
+      return { value: opp.premium_bps, label: "", color: "" };
+    }
+
+    // Non-KRW trades (해외 ↔ 해외): 라벨 없이 표시
+    if (!hasKRW) {
+      if (opp.usdlike_premium) {
+        return { value: opp.usdlike_premium.bps, label: "", color: "" };
+      }
+      return { value: opp.kimchi_premium_bps ?? opp.premium_bps, label: "", color: "" };
+    }
+
+    // KRW ↔ 해외: 프리미엄 모드에 따라 표시
+    // Kimchi mode: force Kimchi display
+    if (premiumMode === "kimchi") {
+      return {
+        value: opp.kimchi_premium_bps ?? opp.premium_bps,
+        label: "Kimchi",
+        color: "text-yellow-500"
+      };
+    }
+
+    // USDlike mode: use usdlike_premium based on overseas market's quote
+    if (opp.usdlike_premium) {
+      return {
+        value: opp.usdlike_premium.bps,
+        label: "USDlike",
+        color: "text-green-500"
+      };
+    }
+
+    // Fallback to Kimchi if no usdlike_premium
+    return { value: opp.kimchi_premium_bps ?? opp.premium_bps, label: "Kimchi", color: "text-yellow-500" };
+  };
+
   // Helper to get sort premium based on mode
   const getSortPremium = (opp: typeof rawOpportunities[0]): number => {
-    const hasKRW = opp.source_quote === "KRW" || opp.target_quote === "KRW";
-    if (!hasKRW) return opp.premium_bps;
-
-    if (premiumMode === "kimchi") {
-      return opp.kimchi_premium_bps ?? opp.premium_bps;
-    } else if (premiumMode === "tether") {
-      return opp.tether_premium_bps ?? opp.premium_bps;
-    }
-    return opp.premium_bps;
+    return getPremiumInfo(opp).value;
   };
 
   // Sort and filter opportunities (show all, no premium mode filtering)
@@ -309,30 +327,6 @@ function Opportunities() {
     return null;
   };
 
-  // Get the appropriate premium value based on mode and whether it's a KRW trade
-  const getDisplayPremium = (opp: typeof opportunities[0]): number => {
-    const hasKRW = opp.source_quote === "KRW" || opp.target_quote === "KRW";
-
-    if (!hasKRW) {
-      // Non-KRW trades always show raw premium
-      return opp.premium_bps;
-    }
-
-    // KRW trades: show 김프 or 테프 based on mode
-    if (premiumMode === "kimchi") {
-      return opp.kimchi_premium_bps ?? opp.premium_bps;
-    }
-    // tether mode
-    return opp.tether_premium_bps ?? opp.premium_bps;
-  };
-
-  // Get premium label for display (only for KRW trades)
-  const getPremiumLabel = (opp: typeof opportunities[0]): string | null => {
-    const hasKRW = opp.source_quote === "KRW" || opp.target_quote === "KRW";
-    if (!hasKRW) return null;
-    return premiumMode === "kimchi" ? "김프" : "테프";
-  };
-
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -348,10 +342,20 @@ function Opportunities() {
             />
             <span className="text-sm text-gray-400">Path만</span>
           </label>
-          {/* Premium Mode Toggle (김프/테프 for KRW trades) */}
+          {/* Premium Mode Toggle (USDlike/Kimchi for KRW trades) */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500">KRW:</span>
             <div className="flex bg-dark-700 rounded-lg p-0.5">
+              <button
+                onClick={() => setPremiumMode("usdlike")}
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  premiumMode === "usdlike"
+                    ? "bg-primary-600 text-white"
+                    : "text-gray-400 hover:text-white"
+                }`}
+              >
+                USDlike
+              </button>
               <button
                 onClick={() => setPremiumMode("kimchi")}
                 className={`px-3 py-1 text-sm rounded-md transition-colors ${
@@ -360,17 +364,7 @@ function Opportunities() {
                     : "text-gray-400 hover:text-white"
                 }`}
               >
-                김프
-              </button>
-              <button
-                onClick={() => setPremiumMode("tether")}
-                className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                  premiumMode === "tether"
-                    ? "bg-green-600 text-white"
-                    : "text-gray-400 hover:text-white"
-                }`}
-              >
-                테프
+                Kimchi
               </button>
             </div>
           </div>
@@ -424,7 +418,7 @@ function Opportunities() {
               <th className="text-center text-gray-400 text-sm p-4">Transfer</th>
               <th className="text-right text-gray-400 text-sm p-4">Buy Price</th>
               <th className="text-right text-gray-400 text-sm p-4">Sell Price</th>
-              <th className="text-right text-gray-400 text-sm p-4">Depth</th>
+              <th className="text-right text-gray-400 text-sm p-4">Optimal Size</th>
               <th className="text-right text-gray-400 text-sm p-4">Spread</th>
               <th className="text-center text-gray-400 text-sm p-4">Action</th>
             </tr>
@@ -593,51 +587,74 @@ function Opportunities() {
                   </td>
                   <td className="p-4 text-right">
                     {(() => {
-                      const sourceDepth = opp.source_depth ?? 0;
-                      const targetDepth = opp.target_depth ?? 0;
-                      // Calculate USD value: depth * price
-                      const sourceUsd = sourceDepth > 0 ? sourceDepth * opp.source_price : 0;
-                      const targetUsd = targetDepth > 0 ? targetDepth * opp.target_price : 0;
+                      const optimalSize = opp.optimal_size ?? 0;
+                      const optimalProfit = opp.optimal_profit ?? 0;
+                      const reason = opp.optimal_size_reason;
+                      // Calculate USD value for optimal size
+                      const optimalUsd = optimalSize > 0 ? optimalSize * opp.source_price : 0;
                       // Format USD value (compact: $1.2K, $15K, $1.2M)
                       const formatUsd = (value: number) => {
                         if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
                         if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
                         return `$${value.toFixed(0)}`;
                       };
+                      // Format quantity (adaptive decimals)
+                      const formatQty = (qty: number) => {
+                        if (qty >= 1000) return qty.toFixed(1);
+                        if (qty >= 100) return qty.toFixed(2);
+                        if (qty >= 10) return qty.toFixed(3);
+                        if (qty >= 1) return qty.toFixed(4);
+                        if (qty >= 0.01) return qty.toFixed(5);
+                        return qty.toFixed(6);
+                      };
                       return (
                         <div className="flex flex-col items-end text-xs font-mono">
-                          <span className="text-gray-400" title={`Buy depth: ${sourceDepth.toFixed(4)} @ $${opp.source_price.toFixed(2)}`}>
-                            B: {sourceDepth > 0 ? <><span>{sourceDepth.toFixed(4)}</span> <span className="text-gray-500">({formatUsd(sourceUsd)})</span></> : "-"}
-                          </span>
-                          <span className="text-gray-400" title={`Sell depth: ${targetDepth.toFixed(4)} @ $${opp.target_price.toFixed(2)}`}>
-                            S: {targetDepth > 0 ? <><span>{targetDepth.toFixed(4)}</span> <span className="text-gray-500">({formatUsd(targetUsd)})</span></> : "-"}
-                          </span>
+                          {optimalSize > 0 ? (
+                            <>
+                              <span className="text-primary-400" title={`Optimal trade size from depth walking: ${optimalSize} ${opp.symbol}`}>
+                                {formatQty(optimalSize)} <span className="text-gray-500">({formatUsd(optimalUsd)})</span>
+                              </span>
+                              <span
+                                className={`${optimalProfit > 0 ? 'text-success-400' : 'text-danger-400'}`}
+                                title={`Expected profit after fees at optimal size`}
+                              >
+                                {optimalProfit > 0 ? '+' : ''}{formatUsd(optimalProfit)}
+                              </span>
+                            </>
+                          ) : reason === "no_orderbook" ? (
+                            <span className="text-yellow-500" title="Orderbook data not available for one or both exchanges">
+                              No OB
+                            </span>
+                          ) : reason === "not_profitable" ? (
+                            <span className="text-gray-500" title="Trade is not profitable after considering orderbook depth and fees">
+                              No Profit
+                            </span>
+                          ) : (
+                            <span className="text-gray-500">-</span>
+                          )}
                         </div>
                       );
                     })()}
                   </td>
                   <td className="p-4 text-right">
                     {(() => {
-                      const displayPremium = getDisplayPremium(opp);
-                      const premiumLabel = getPremiumLabel(opp);
+                      const premiumInfo = getPremiumInfo(opp);
                       return (
                         <div className="flex flex-col items-end">
                           <span
                             className={`font-mono font-bold ${
-                              displayPremium >= 50
+                              premiumInfo.value >= 50
                                 ? "text-success-500"
-                                : displayPremium >= 30
+                                : premiumInfo.value >= 30
                                   ? "text-yellow-500"
                                   : "text-gray-400"
                             } ${getChangeClass(changes?.spread)}`}
                           >
-                            {displayPremium >= 0 ? "+" : ""}{(displayPremium / 100).toFixed(2)}%
+                            {premiumInfo.value >= 0 ? "+" : ""}{(premiumInfo.value / 100).toFixed(2)}%
                           </span>
-                          {premiumLabel && (
-                            <span className={`text-xs mt-0.5 ${
-                              premiumMode === "kimchi" ? "text-yellow-500" : "text-green-500"
-                            }`}>
-                              {premiumLabel}
+                          {premiumInfo.label && (
+                            <span className={`text-xs mt-0.5 ${premiumInfo.color}`}>
+                              {premiumInfo.label}
                             </span>
                           )}
                         </div>

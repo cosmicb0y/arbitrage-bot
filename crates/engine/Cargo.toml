@@ -10,6 +10,9 @@ arbitrage-feeds = { path = "../feeds" }
 # Async runtime
 tokio = { workspace = true }
 
+# Serialization
+serde = { workspace = true }
+
 # Concurrency
 dashmap = { workspace = true }
 crossbeam = { workspace = true }

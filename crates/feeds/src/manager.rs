@@ -90,6 +90,7 @@ impl FeedConfig {
         let ping_interval_ms = match exchange {
             Exchange::GateIO => 5000,    // 5 seconds for Gate.io (official: ping_interval=5)
             Exchange::Coinbase => 20000, // 20 seconds for Coinbase (more aggressive than default)
+            Exchange::Bybit => 20000,    // 20 seconds for Bybit (official timeout: 10 min, but more aggressive for stability)
             _ => 30000,                  // 30 seconds for others
         };
 

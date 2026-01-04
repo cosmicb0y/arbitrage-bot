@@ -2,8 +2,8 @@
 //!
 //! Monitors price feeds and detects profitable arbitrage opportunities.
 
-use arbitrage_core::{ArbitrageOpportunity, Asset, Chain, Exchange, FixedPoint, QuoteCurrency};
-use crate::PremiumMatrix;
+use arbitrage_core::{ArbitrageOpportunity, Asset, Chain, Exchange, FixedPoint, QuoteCurrency, UsdlikePremium, UsdlikeQuote};
+use crate::{ConversionRates, PremiumMatrix};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -156,6 +156,46 @@ impl OpportunityDetector {
         usd_krw_rate: Option<f64>,
         usdt_krw_rate: Option<f64>,
     ) -> Vec<ArbitrageOpportunity> {
+        // Use USDT rate as fallback for USDC
+        self.detect_with_all_rates(pair_id, usd_krw_rate, usdt_krw_rate, usdt_krw_rate)
+    }
+
+    /// Detect opportunities for a specific pair with all exchange rates.
+    /// - `usd_krw_rate`: USD/KRW exchange rate from 하나은행 (e.g., 1450.0)
+    /// - `usdt_krw_rate`: USDT/KRW rate from Korean exchange (e.g., 1455.0)
+    /// - `usdc_krw_rate`: USDC/KRW rate from Korean exchange (e.g., 1453.0)
+    pub fn detect_with_all_rates(
+        &mut self,
+        pair_id: u32,
+        usd_krw_rate: Option<f64>,
+        usdt_krw_rate: Option<f64>,
+        usdc_krw_rate: Option<f64>,
+    ) -> Vec<ArbitrageOpportunity> {
+        // Build ConversionRates for premium calculation
+        let rates = ConversionRates {
+            usdt_usd: 1.0,  // Assume 1:1 for stablecoin
+            usdc_usd: 1.0,
+            usd_krw: usd_krw_rate.unwrap_or(0.0),
+            // For now, use the same rate for both Upbit and Bithumb
+            // TODO: Support per-exchange rates when available
+            upbit_usdt_krw: usdt_krw_rate.unwrap_or(0.0),
+            upbit_usdc_krw: usdc_krw_rate.unwrap_or(0.0),
+            bithumb_usdt_krw: usdt_krw_rate.unwrap_or(0.0),
+            bithumb_usdc_krw: usdc_krw_rate.unwrap_or(0.0),
+        };
+
+        self.detect_with_conversion_rates(pair_id, &rates, usd_krw_rate, usdt_krw_rate, usdc_krw_rate)
+    }
+
+    /// Detect opportunities using full ConversionRates (supports per-exchange rates).
+    pub fn detect_with_conversion_rates(
+        &mut self,
+        pair_id: u32,
+        rates: &ConversionRates,
+        usd_krw_rate: Option<f64>,
+        usdt_krw_rate: Option<f64>,
+        usdc_krw_rate: Option<f64>,
+    ) -> Vec<ArbitrageOpportunity> {
         let Some(matrix) = self.matrices.get(&pair_id) else {
             return Vec::new();
         };
@@ -163,22 +203,33 @@ impl OpportunityDetector {
         let mut opportunities = Vec::new();
         let asset = asset_for_pair_id(pair_id, &self.symbol_registry);
 
-        // Use all_premiums_with_depth to get accurate bid/ask prices and sizes for premium calculation
-        let premiums = matrix.all_premiums_with_depth();
+        // Use all_premiums_multi_denomination to get USDlike and Kimchi premiums
+        let premiums = matrix.all_premiums_multi_denomination(rates);
 
-        for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_size, sell_bid_size, premium) in premiums {
+        for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_size, sell_bid_size, usdlike_premium_bps, _unused, kimchi_premium) in premiums {
             // Skip opportunities without orderbook depth data
             // If both sides have zero depth, we can't verify the opportunity is real
             if buy_ask_size.0 == 0 && sell_bid_size.0 == 0 {
                 continue;
             }
 
-            if premium >= self.config.min_premium_bps {
-                // For display: source_price is buy_ask (price we pay to buy)
-                //              target_price is sell_bid (price we receive when selling)
-                //              source_depth is buy_ask_size (how much we can buy at this price)
-                //              target_depth is sell_bid_size (how much we can sell at this price)
-                let opp = ArbitrageOpportunity::with_quotes_and_rates(
+            // Use usdlike_premium as the primary premium for filtering
+            if usdlike_premium_bps >= self.config.min_premium_bps {
+                // Determine USDlike quote from the overseas market (non-KRW side)
+                let usdlike_quote = if buy_quote == QuoteCurrency::KRW {
+                    UsdlikeQuote::from_quote_currency(sell_quote)
+                } else {
+                    UsdlikeQuote::from_quote_currency(buy_quote)
+                };
+
+                // Create UsdlikePremium if we have a valid quote
+                let usdlike_premium = usdlike_quote.map(|quote| UsdlikePremium {
+                    bps: usdlike_premium_bps,
+                    quote,
+                });
+
+                // Create opportunity with all premium types
+                let mut opp = ArbitrageOpportunity::with_all_rates(
                     OPPORTUNITY_ID.fetch_add(1, Ordering::SeqCst),
                     buy_ex,
                     sell_ex,
@@ -189,14 +240,24 @@ impl OpportunityDetector {
                     sell_bid,  // target_price: the bid price we receive when selling
                     usd_krw_rate,
                     usdt_krw_rate,
+                    usdc_krw_rate,
                 ).with_depth(buy_ask_size, sell_bid_size);
+
+                // Override premiums with matrix-calculated values
+                opp.usdlike_premium = usdlike_premium;
+                opp.kimchi_premium_bps = kimchi_premium;
+                opp.premium_bps = usdlike_premium_bps; // Use USDlike as the primary
 
                 opportunities.push(opp);
             }
         }
 
-        // Sort by premium descending
-        opportunities.sort_by(|a, b| b.premium_bps.cmp(&a.premium_bps));
+        // Sort by USDlike premium descending (primary metric)
+        opportunities.sort_by(|a, b| {
+            let a_bps = a.usdlike_premium.map(|p| p.bps).unwrap_or(a.premium_bps);
+            let b_bps = b.usdlike_premium.map(|p| p.bps).unwrap_or(b.premium_bps);
+            b_bps.cmp(&a_bps)
+        });
 
         // Store the best opportunity
         if let Some(best) = opportunities.first().cloned() {
@@ -217,11 +278,21 @@ impl OpportunityDetector {
         usd_krw_rate: Option<f64>,
         usdt_krw_rate: Option<f64>,
     ) -> Vec<ArbitrageOpportunity> {
+        self.detect_all_with_all_rates(usd_krw_rate, usdt_krw_rate, usdt_krw_rate)
+    }
+
+    /// Detect opportunities for all tracked pairs with all exchange rates.
+    pub fn detect_all_with_all_rates(
+        &mut self,
+        usd_krw_rate: Option<f64>,
+        usdt_krw_rate: Option<f64>,
+        usdc_krw_rate: Option<f64>,
+    ) -> Vec<ArbitrageOpportunity> {
         let pair_ids: Vec<u32> = self.matrices.keys().copied().collect();
         let mut all_opportunities = Vec::new();
 
         for pair_id in pair_ids {
-            all_opportunities.extend(self.detect_with_rates(pair_id, usd_krw_rate, usdt_krw_rate));
+            all_opportunities.extend(self.detect_with_all_rates(pair_id, usd_krw_rate, usdt_krw_rate, usdc_krw_rate));
         }
 
         all_opportunities

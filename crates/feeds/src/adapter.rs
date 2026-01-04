@@ -218,6 +218,104 @@ impl BinanceAdapter {
         json.contains("\"B\":") && json.contains("\"A\":") && !json.contains("\"c\":")
     }
 
+    /// Check if a message is a partial depth message (@depth5/10/20).
+    pub fn is_partial_depth_message(json: &str) -> bool {
+        // Partial depth messages have "bids" and "asks" arrays, and "lastUpdateId"
+        json.contains("\"bids\":") && json.contains("\"asks\":") && json.contains("\"lastUpdateId\":")
+    }
+
+    /// Parse a partial depth message from Binance (@depth5/10/20@100ms).
+    /// Returns (symbol, bids, asks) where bids/asks are Vec<(price, qty)>.
+    /// Bids are sorted descending, asks are sorted ascending.
+    pub fn parse_partial_depth(json: &str) -> Result<(String, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct BinancePartialDepth {
+            #[serde(rename = "lastUpdateId")]
+            last_update_id: u64,
+            bids: Vec<[String; 2]>,  // [[price, qty], ...]
+            asks: Vec<[String; 2]>,
+        }
+
+        // For combined stream, the message is wrapped: {"stream":"btcusdt@depth20@100ms","data":{...}}
+        // For single stream, it's just the data object
+        let depth: BinancePartialDepth = if json.contains("\"stream\":") {
+            #[derive(Debug, Deserialize)]
+            struct StreamWrapper {
+                stream: String,
+                data: BinancePartialDepth,
+            }
+            let wrapper: StreamWrapper = serde_json::from_str(json)?;
+            wrapper.data
+        } else {
+            serde_json::from_str(json)?
+        };
+
+        // Parse bids (already sorted descending by Binance)
+        let bids: Vec<(f64, f64)> = depth.bids.iter()
+            .filter_map(|[price, qty]| {
+                let p = price.parse::<f64>().ok()?;
+                let q = qty.parse::<f64>().ok()?;
+                Some((p, q))
+            })
+            .collect();
+
+        // Parse asks (already sorted ascending by Binance)
+        let asks: Vec<(f64, f64)> = depth.asks.iter()
+            .filter_map(|[price, qty]| {
+                let p = price.parse::<f64>().ok()?;
+                let q = qty.parse::<f64>().ok()?;
+                Some((p, q))
+            })
+            .collect();
+
+        // Extract symbol from stream name if available
+        let symbol = if json.contains("\"stream\":") {
+            #[derive(Debug, Deserialize)]
+            struct StreamOnly {
+                stream: String,
+            }
+            let s: StreamOnly = serde_json::from_str(json)?;
+            // stream format: "btcusdt@depth20@100ms" -> extract "BTCUSDT"
+            s.stream.split('@').next()
+                .map(|s| s.to_uppercase())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        Ok((symbol, bids, asks))
+    }
+
+    /// Parse partial depth message with base and quote extraction.
+    /// Returns (PriceTick, base_symbol, quote_currency, bids, asks).
+    pub fn parse_partial_depth_with_base_quote(json: &str) -> Result<(PriceTick, String, String, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+        let (symbol, bids, asks) = Self::parse_partial_depth(json)?;
+
+        if bids.is_empty() || asks.is_empty() {
+            return Err(FeedError::ParseError("Empty orderbook".to_string()));
+        }
+
+        let (base, quote) = Self::extract_base_quote(&symbol)
+            .ok_or_else(|| FeedError::ParseError(format!("Unknown symbol: {}", symbol)))?;
+        let pair_id = symbol_to_pair_id(&base);
+
+        let best_bid = bids[0].0;
+        let best_ask = asks[0].0;
+        let bid_size = bids[0].1;
+        let ask_size = asks[0].1;
+        let mid = (best_bid + best_ask) / 2.0;
+
+        let tick = PriceTick::new(
+            Exchange::Binance,
+            pair_id,
+            FixedPoint::from_f64(mid),
+            FixedPoint::from_f64(best_bid),
+            FixedPoint::from_f64(best_ask),
+        ).with_sizes(FixedPoint::from_f64(bid_size), FixedPoint::from_f64(ask_size));
+
+        Ok((tick, base, quote, bids, asks))
+    }
+
     /// Generate a subscription message for Binance WebSocket.
     pub fn subscribe_message(symbols: &[String]) -> String {
         let streams: Vec<String> = symbols
@@ -231,22 +329,43 @@ impl BinanceAdapter {
         )
     }
 
-    /// Generate subscription messages for bookTicker stream only.
-    /// bookTicker provides real-time best bid/ask with depth for opportunity detection.
+    /// Generate subscription messages for partial depth stream (20 levels).
+    /// @depth20@100ms provides full orderbook snapshot every 100ms without REST sync.
+    /// Binance limits payload size, so we chunk symbols into smaller batches.
     pub fn subscribe_messages(symbols: &[String]) -> Vec<String> {
-        // Subscribe to bookTicker only (for real-time best bid/ask with depth)
-        let book_ticker_streams: Vec<String> = symbols
-            .iter()
-            .map(|s| format!("\"{}@bookTicker\"", s.to_lowercase()))
-            .collect();
+        let mut messages = Vec::new();
+        let mut id = 1;
 
-        vec![format!(
-            r#"{{"method": "SUBSCRIBE", "params": [{}], "id": 1}}"#,
-            book_ticker_streams.join(", ")
-        )]
+        // Chunk into 50 symbols per message to stay within Binance payload limits
+        for chunk in symbols.chunks(50) {
+            let depth_streams: Vec<String> = chunk
+                .iter()
+                .map(|s| format!("\"{}@depth20@100ms\"", s.to_lowercase()))
+                .collect();
+
+            messages.push(format!(
+                r#"{{"method": "SUBSCRIBE", "params": [{}], "id": {}}}"#,
+                depth_streams.join(", "),
+                id
+            ));
+            id += 1;
+        }
+
+        messages
     }
 
-    /// Get WebSocket URL for Binance.
+    /// Build combined stream URL for Binance WebSocket.
+    /// Uses the `/stream?streams=` endpoint which wraps each message with stream name.
+    /// This is required for depth streams which don't include symbol in response.
+    pub fn ws_url_combined(symbols: &[String]) -> String {
+        let streams: Vec<String> = symbols
+            .iter()
+            .map(|s| format!("{}@depth20@100ms", s.to_lowercase()))
+            .collect();
+        format!("wss://stream.binance.com:9443/stream?streams={}", streams.join("/"))
+    }
+
+    /// Get WebSocket URL for Binance (single stream endpoint, requires SUBSCRIBE).
     pub fn ws_url() -> &'static str {
         "wss://stream.binance.com:9443/ws"
     }
@@ -401,6 +520,68 @@ impl UpbitAdapter {
         }
     }
 
+    /// Parse Upbit orderbook message with full depth (JSON).
+    /// Returns (code, bid, ask, bid_size, ask_size, bids_full, asks_full).
+    /// bids_full and asks_full are Vec<(price, size)> for depth walking.
+    pub fn parse_orderbook_full(json: &str) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct OrderbookUnit {
+            #[serde(alias = "ap", alias = "ask_price")]
+            ask_price: f64,
+            #[serde(alias = "bp", alias = "bid_price")]
+            bid_price: f64,
+            #[serde(alias = "as", alias = "ask_size")]
+            ask_size: f64,
+            #[serde(alias = "bs", alias = "bid_size")]
+            bid_size: f64,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GenericMessage {
+            #[serde(alias = "ty", alias = "type")]
+            msg_type: String,
+            #[serde(alias = "cd", alias = "code")]
+            code: String,
+            #[serde(alias = "obu", alias = "orderbook_units", default)]
+            orderbook_units: Vec<OrderbookUnit>,
+        }
+
+        let msg: GenericMessage = serde_json::from_str(json)?;
+
+        if msg.msg_type != "orderbook" {
+            return Err(FeedError::ParseError(format!("Not an orderbook message: {}", msg.msg_type)));
+        }
+
+        let best = msg.orderbook_units.first()
+            .ok_or_else(|| FeedError::ParseError("Empty orderbook".to_string()))?;
+
+        // Collect all bids (descending by price) and asks (ascending by price)
+        let bids: Vec<(f64, f64)> = msg.orderbook_units.iter()
+            .map(|u| (u.bid_price, u.bid_size))
+            .collect();
+        let asks: Vec<(f64, f64)> = msg.orderbook_units.iter()
+            .map(|u| (u.ask_price, u.ask_size))
+            .collect();
+
+        Ok((
+            msg.code,
+            FixedPoint::from_f64(best.bid_price),
+            FixedPoint::from_f64(best.ask_price),
+            FixedPoint::from_f64(best.bid_size),
+            FixedPoint::from_f64(best.ask_size),
+            bids,
+            asks,
+        ))
+    }
+
+    /// Parse Upbit orderbook message with full depth (binary format is JSON as bytes).
+    pub fn parse_orderbook_full_binary(data: &[u8]) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+        // Upbit sends JSON as binary bytes, not MessagePack
+        let json_str = std::str::from_utf8(data)
+            .map_err(|e| FeedError::ParseError(format!("Invalid UTF-8: {}", e)))?;
+        Self::parse_orderbook_full(json_str)
+    }
+
     /// Map market code to pair_id.
     /// Extracts base asset from market code (e.g., KRW-BTC -> BTC) and generates pair_id.
     pub fn market_to_pair_id(code: &str) -> Option<u32> {
@@ -426,6 +607,17 @@ impl UpbitAdapter {
     /// Check if market code is for USDT (exchange rate).
     pub fn is_usdt_market(code: &str) -> bool {
         code.to_uppercase() == "KRW-USDT"
+    }
+
+    /// Check if market code is for USDC (exchange rate).
+    pub fn is_usdc_market(code: &str) -> bool {
+        code.to_uppercase() == "KRW-USDC"
+    }
+
+    /// Check if market code is a stablecoin market (USDT or USDC).
+    pub fn is_stablecoin_market(code: &str) -> bool {
+        let upper = code.to_uppercase();
+        upper == "KRW-USDT" || upper == "KRW-USDC"
     }
 
     /// Parse a ticker message from Upbit (JSON format).
@@ -514,25 +706,26 @@ impl UpbitAdapter {
 
     /// Generate a subscription message for Upbit WebSocket.
     /// Upbit uses a unique format: array of ticket, type, and codes.
-    /// Subscribes to both ticker (for trade price and volume) and orderbook (for bid/ask).
+    /// Subscribes to both ticker (for trade price and volume) and orderbook (full depth).
+    ///
+    /// Orderbook subscription requires "level" parameter:
+    /// - level: 0 means full orderbook (all levels, no aggregation)
+    /// - level: N means aggregate orderbook at N KRW increments
     pub fn subscribe_message(markets: &[String]) -> String {
         let codes: Vec<String> = markets.iter().map(|m| format!("\"{}\"", m)).collect();
         let codes_str = codes.join(",");
 
         // Subscribe to both ticker and orderbook in a single message
-        // Use .1 suffix for orderbook to get only level 1 (best bid/ask)
-        let orderbook_codes: Vec<String> = markets.iter().map(|m| format!("\"{}.1\"", m)).collect();
-        let orderbook_codes_str = orderbook_codes.join(",");
-
+        // level: 0 = full orderbook without aggregation (all levels)
         format!(
-            r#"[{{"ticket":"arbitrage-bot"}},{{"type":"ticker","codes":[{}]}},{{"type":"orderbook","codes":[{}]}},{{"format":"SIMPLE"}}]"#,
-            codes_str, orderbook_codes_str
+            r#"[{{"ticket":"arbitrage-bot"}},{{"type":"ticker","codes":[{}]}},{{"type":"orderbook","codes":[{}],"level":0}},{{"format":"SIMPLE"}}]"#,
+            codes_str, codes_str
         )
     }
 
     /// Generate a subscription message for orderbook only.
     pub fn subscribe_orderbook_message(markets: &[String]) -> String {
-        let codes: Vec<String> = markets.iter().map(|m| format!("\"{}.1\"", m)).collect();
+        let codes: Vec<String> = markets.iter().map(|m| format!("\"{}\"", m)).collect();
 
         format!(
             r#"[{{"ticket":"arbitrage-bot"}},{{"type":"orderbook","codes":[{}]}},{{"format":"SIMPLE"}}]"#,
@@ -1505,6 +1698,47 @@ impl BybitAdapter {
         ).with_sizes(FixedPoint::from_f64(bid_size), FixedPoint::from_f64(ask_size)), base, quote))
     }
 
+    /// Parse orderbook message and return full depth data.
+    /// Returns (PriceTick, symbol, quote, bids, asks) where bids/asks are Vec<(price, qty)>.
+    pub fn parse_orderbook_full(json: &str) -> Result<(PriceTick, String, String, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+        let msg: BybitOrderbookMessage = serde_json::from_str(json)?;
+
+        let (base, quote) = Self::extract_base_quote(&msg.data.s)
+            .ok_or_else(|| FeedError::ParseError(format!("Unknown symbol: {}", msg.data.s)))?;
+        let pair_id = symbol_to_pair_id(&base);
+
+        // Parse all bids (descending order by price)
+        let bids: Vec<(f64, f64)> = msg.data.b.iter()
+            .filter_map(|level| {
+                let price = level[0].parse::<f64>().ok()?;
+                let qty = level[1].parse::<f64>().ok()?;
+                Some((price, qty))
+            })
+            .collect();
+
+        // Parse all asks (ascending order by price)
+        let asks: Vec<(f64, f64)> = msg.data.a.iter()
+            .filter_map(|level| {
+                let price = level[0].parse::<f64>().ok()?;
+                let qty = level[1].parse::<f64>().ok()?;
+                Some((price, qty))
+            })
+            .collect();
+
+        // Get best bid/ask for PriceTick
+        let (bid, bid_size) = bids.first().copied().unwrap_or((0.0, 0.0));
+        let (ask, ask_size) = asks.first().copied().unwrap_or((0.0, 0.0));
+        let mid = if bid > 0.0 && ask > 0.0 { (bid + ask) / 2.0 } else { bid.max(ask) };
+
+        Ok((PriceTick::new(
+            Exchange::Bybit,
+            pair_id,
+            FixedPoint::from_f64(mid),
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+        ).with_sizes(FixedPoint::from_f64(bid_size), FixedPoint::from_f64(ask_size)), base, quote, bids, asks))
+    }
+
     /// Check if a message is an orderbook message.
     pub fn is_orderbook_message(json: &str) -> bool {
         json.contains("\"topic\":\"orderbook.")
@@ -1529,15 +1763,16 @@ impl BybitAdapter {
 
     /// Generate multiple subscription messages for Bybit WebSocket (batched by 10).
     /// Bybit has a limit of 10 args per subscription message.
-    /// Subscribes to orderbook.1 only for accurate bid/ask with depth.
+    /// Subscribes to orderbook.50 for full orderbook with snapshot+delta.
     pub fn subscribe_messages(symbols: &[String]) -> Vec<String> {
         let mut messages = Vec::new();
 
-        // Subscribe to orderbook level 1 only (for accurate bid/ask with depth)
+        // Subscribe to orderbook.50 (50 levels with snapshot+delta)
+        // First message is snapshot, subsequent messages are delta updates
         for chunk in symbols.chunks(10) {
             let topics: Vec<String> = chunk
                 .iter()
-                .map(|s| format!("\"orderbook.1.{}\"", s.to_uppercase()))
+                .map(|s| format!("\"orderbook.50.{}\"", s.to_uppercase()))
                 .collect();
             messages.push(format!(
                 r#"{{"op": "subscribe", "args": [{}]}}"#,
@@ -1701,6 +1936,66 @@ impl BithumbAdapter {
         }
     }
 
+    /// Parse Bithumb orderbook message with full depth (JSON).
+    /// Returns (code, bid, ask, bid_size, ask_size, bids_full, asks_full).
+    pub fn parse_orderbook_full(json: &str) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct OrderbookUnit {
+            #[serde(alias = "ap", alias = "ask_price")]
+            ask_price: f64,
+            #[serde(alias = "bp", alias = "bid_price")]
+            bid_price: f64,
+            #[serde(alias = "as", alias = "ask_size")]
+            ask_size: f64,
+            #[serde(alias = "bs", alias = "bid_size")]
+            bid_size: f64,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GenericMessage {
+            #[serde(alias = "ty", alias = "type")]
+            msg_type: String,
+            #[serde(alias = "cd", alias = "code")]
+            code: String,
+            #[serde(alias = "obu", alias = "orderbook_units", default)]
+            orderbook_units: Vec<OrderbookUnit>,
+        }
+
+        let msg: GenericMessage = serde_json::from_str(json)?;
+
+        if msg.msg_type != "orderbook" {
+            return Err(FeedError::ParseError(format!("Not an orderbook message: {}", msg.msg_type)));
+        }
+
+        let best = msg.orderbook_units.first()
+            .ok_or_else(|| FeedError::ParseError("Empty orderbook".to_string()))?;
+
+        let bids: Vec<(f64, f64)> = msg.orderbook_units.iter()
+            .map(|u| (u.bid_price, u.bid_size))
+            .collect();
+        let asks: Vec<(f64, f64)> = msg.orderbook_units.iter()
+            .map(|u| (u.ask_price, u.ask_size))
+            .collect();
+
+        Ok((
+            msg.code,
+            FixedPoint::from_f64(best.bid_price),
+            FixedPoint::from_f64(best.ask_price),
+            FixedPoint::from_f64(best.bid_size),
+            FixedPoint::from_f64(best.ask_size),
+            bids,
+            asks,
+        ))
+    }
+
+    /// Parse Bithumb orderbook message with full depth (binary format is JSON as bytes).
+    pub fn parse_orderbook_full_binary(data: &[u8]) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+        // Bithumb sends JSON as binary bytes, not MessagePack
+        let json_str = std::str::from_utf8(data)
+            .map_err(|e| FeedError::ParseError(format!("Invalid UTF-8: {}", e)))?;
+        Self::parse_orderbook_full(json_str)
+    }
+
     /// Map market code to pair_id.
     /// Extracts base asset from market code (e.g., KRW-BTC -> BTC) and generates pair_id.
     pub fn market_to_pair_id(code: &str) -> Option<u32> {
@@ -1726,6 +2021,17 @@ impl BithumbAdapter {
     /// Check if market code is for USDT (exchange rate).
     pub fn is_usdt_market(code: &str) -> bool {
         code.to_uppercase() == "KRW-USDT"
+    }
+
+    /// Check if market code is for USDC (exchange rate).
+    pub fn is_usdc_market(code: &str) -> bool {
+        code.to_uppercase() == "KRW-USDC"
+    }
+
+    /// Check if market code is a stablecoin market (USDT or USDC).
+    pub fn is_stablecoin_market(code: &str) -> bool {
+        let upper = code.to_uppercase();
+        upper == "KRW-USDT" || upper == "KRW-USDC"
     }
 
     /// Parse a ticker message from Bithumb (JSON format).
@@ -1778,19 +2084,20 @@ impl BithumbAdapter {
 
     /// Generate a subscription message for Bithumb WebSocket.
     /// Bithumb uses the same format as Upbit: array of ticket, type, and codes.
-    /// Subscribes to both ticker (for trade price and volume) and orderbook (for bid/ask).
+    /// Subscribes to both ticker (for trade price and volume) and orderbook (full depth - 15 levels max).
+    ///
+    /// Orderbook subscription requires "level" parameter:
+    /// - level: 1 means smallest aggregation unit (1 KRW)
+    /// - level: N means aggregate orderbook at N increments
     pub fn subscribe_message(markets: &[String]) -> String {
         let codes: Vec<String> = markets.iter().map(|m| format!("\"{}\"", m)).collect();
         let codes_str = codes.join(",");
 
         // Subscribe to both ticker and orderbook in a single message
-        // Use .1 suffix for orderbook to get only level 1 (best bid/ask)
-        let orderbook_codes: Vec<String> = markets.iter().map(|m| format!("\"{}.1\"", m)).collect();
-        let orderbook_codes_str = orderbook_codes.join(",");
-
+        // level: 1 = smallest aggregation (Bithumb doesn't support level: 0)
         format!(
-            r#"[{{"ticket":"arbitrage-bot"}},{{"type":"ticker","codes":[{}]}},{{"type":"orderbook","codes":[{}]}},{{"format":"SIMPLE"}}]"#,
-            codes_str, orderbook_codes_str
+            r#"[{{"ticket":"arbitrage-bot"}},{{"type":"ticker","codes":[{}]}},{{"type":"orderbook","codes":[{}],"level":1}},{{"format":"SIMPLE"}}]"#,
+            codes_str, codes_str
         )
     }
 
@@ -2069,7 +2376,7 @@ impl GateIOAdapter {
     }
 
     /// Generate subscription messages for order_book channel only.
-    /// order_book provides depth (best bid/ask with size) for opportunity detection.
+    /// order_book provides full orderbook snapshot every 100ms (20 levels).
     pub fn subscribe_messages(symbols: &[String]) -> Vec<String> {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2078,11 +2385,11 @@ impl GateIOAdapter {
 
         let mut messages = Vec::new();
 
-        // Subscribe to order_book only for each symbol (level 5, 100ms update)
-        // Gate.io requires separate subscription per symbol for order_book
+        // Subscribe to order_book for each symbol (level 20, 100ms update)
+        // Gate.io provides full snapshot every update - no delta sync needed
         for symbol in symbols {
             messages.push(format!(
-                r#"{{"time": {}, "channel": "spot.order_book", "event": "subscribe", "payload": ["{}", "5", "100ms"]}}"#,
+                r#"{{"time": {}, "channel": "spot.order_book", "event": "subscribe", "payload": ["{}", "20", "100ms"]}}"#,
                 timestamp,
                 symbol.to_uppercase()
             ));
@@ -2143,6 +2450,71 @@ impl GateIOAdapter {
             FixedPoint::from_f64(ask),
             FixedPoint::from_f64(bid_size),
             FixedPoint::from_f64(ask_size),
+        ))
+    }
+
+    /// Parse orderbook message and return full depth data.
+    /// Returns (currency_pair, bid, ask, bid_size, ask_size, bids, asks) where bids/asks are Vec<(price, qty)>.
+    pub fn parse_orderbook_full(json: &str) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+        #[derive(Debug, Deserialize)]
+        struct GateIOOrderbookResult {
+            /// Currency pair (e.g., "BTC_USDT")
+            s: String,
+            /// Bids: [[price, size], ...] sorted high to low
+            bids: Vec<[String; 2]>,
+            /// Asks: [[price, size], ...] sorted low to high
+            asks: Vec<[String; 2]>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GateIOOrderbookMessage {
+            #[allow(dead_code)]
+            channel: String,
+            event: String,
+            result: GateIOOrderbookResult,
+        }
+
+        let msg: GateIOOrderbookMessage = serde_json::from_str(json)?;
+
+        // Skip non-update messages
+        if msg.event != "update" {
+            return Err(FeedError::ParseError("Not an update message".to_string()));
+        }
+
+        // Parse all bids (descending order by price)
+        let bids: Vec<(f64, f64)> = msg.result.bids.iter()
+            .filter_map(|level| {
+                let price = level[0].parse::<f64>().ok()?;
+                let qty = level[1].parse::<f64>().ok()?;
+                Some((price, qty))
+            })
+            .collect();
+
+        // Parse all asks (ascending order by price)
+        let asks: Vec<(f64, f64)> = msg.result.asks.iter()
+            .filter_map(|level| {
+                let price = level[0].parse::<f64>().ok()?;
+                let qty = level[1].parse::<f64>().ok()?;
+                Some((price, qty))
+            })
+            .collect();
+
+        // Get best bid/ask
+        let (bid, bid_size) = bids.first().copied().unwrap_or((0.0, 0.0));
+        let (ask, ask_size) = asks.first().copied().unwrap_or((0.0, 0.0));
+
+        if bid == 0.0 || ask == 0.0 {
+            return Err(FeedError::ParseError("Empty bids or asks".to_string()));
+        }
+
+        Ok((
+            msg.result.s,
+            FixedPoint::from_f64(bid),
+            FixedPoint::from_f64(ask),
+            FixedPoint::from_f64(bid_size),
+            FixedPoint::from_f64(ask_size),
+            bids,
+            asks,
         ))
     }
 

@@ -487,8 +487,8 @@ pub fn format_alert_message(
     source_price: f64,
     target_price: f64,
     premium_bps: i32,
-    source_depth: Option<f64>,
-    target_depth: Option<f64>,
+    optimal_size: Option<f64>,
+    optimal_profit: Option<f64>,
     rates: Option<&ExchangeRates>,
 ) -> String {
     let premium_pct = premium_bps as f64 / 100.0;
@@ -521,14 +521,16 @@ pub fn format_alert_message(
         premium_pct
     );
 
-    if let (Some(src), Some(tgt)) = (source_depth, target_depth) {
-        let buy_value = src * source_price;
-        let sell_value = tgt * target_price;
-        msg.push_str(&format!(
-            "\n\n<b>Depth:</b>\n  Buy: {:.4} ({})\n  Sell: {:.4} ({})",
-            src, format_usd_value(buy_value),
-            tgt, format_usd_value(sell_value)
-        ));
+    // Show optimal trade size and expected profit
+    if let (Some(size), Some(profit)) = (optimal_size, optimal_profit) {
+        if size > 0.0 && profit > 0.0 {
+            let notional_value = size * source_price;
+            msg.push_str(&format!(
+                "\n\n<b>Optimal Trade:</b>\n  Size: {:.4} {} ({})\n  Expected Profit: {}",
+                size, symbol, format_usd_value(notional_value),
+                format_usd_value(profit)
+            ));
+        }
     }
 
     let now = chrono::Utc::now();

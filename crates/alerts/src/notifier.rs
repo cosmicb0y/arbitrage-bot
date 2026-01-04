@@ -95,15 +95,15 @@ impl Notifier {
         let target_exchange = format!("{:?}", opportunity.target_exchange);
         let premium_bps = opportunity.premium_bps;
 
-        // Skip if depth is not available on both sides
-        if opportunity.source_depth == 0 || opportunity.target_depth == 0 {
+        // Skip if optimal trade is not viable
+        if opportunity.optimal_size == 0 || opportunity.optimal_profit <= 0 {
             debug!(
                 symbol = symbol,
                 source = source_exchange,
                 target = target_exchange,
-                source_depth = opportunity.source_depth,
-                target_depth = opportunity.target_depth,
-                "Skipping alert: depth not available on both sides"
+                optimal_size = opportunity.optimal_size,
+                optimal_profit = opportunity.optimal_profit,
+                "Skipping alert: optimal trade not viable"
             );
             return Ok(0);
         }
@@ -169,13 +169,13 @@ impl Notifier {
             // Format and send alert
             let source_price = FixedPoint(opportunity.source_price).to_f64();
             let target_price = FixedPoint(opportunity.target_price).to_f64();
-            let source_depth = if opportunity.source_depth > 0 {
-                Some(FixedPoint(opportunity.source_depth).to_f64())
+            let optimal_size = if opportunity.optimal_size > 0 {
+                Some(FixedPoint(opportunity.optimal_size).to_f64())
             } else {
                 None
             };
-            let target_depth = if opportunity.target_depth > 0 {
-                Some(FixedPoint(opportunity.target_depth).to_f64())
+            let optimal_profit = if opportunity.optimal_profit > 0 {
+                Some(FixedPoint(opportunity.optimal_profit as u64).to_f64())
             } else {
                 None
             };
@@ -195,8 +195,8 @@ impl Notifier {
                 source_price,
                 target_price,
                 premium_bps,
-                source_depth,
-                target_depth,
+                optimal_size,
+                optimal_profit,
                 rates.as_ref(),
             );
 

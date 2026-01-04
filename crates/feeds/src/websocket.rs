@@ -110,9 +110,10 @@ impl WsClient {
                                 let _ = write.send(Message::Pong(data.clone())).await;
                             }
                             Message::Text(text) => {
-                                // Forward orderbook updates to the channel
+                                // Forward orderbook updates to the channel (non-blocking)
+                                // Gate.io uses partial snapshots, so dropping is OK during subscription phase
                                 if text.contains("\"channel\":\"spot.order_book\"") && text.contains("\"event\":\"update\"") {
-                                    let _ = self.tx.send(WsMessage::Text(text.clone())).await;
+                                    let _ = self.tx.try_send(WsMessage::Text(text.clone()));
                                 }
                             }
                             _ => {}
@@ -156,14 +157,14 @@ impl WsClient {
             }
         }
 
-        // Final drain - forward orderbook updates
+        // Final drain - forward orderbook updates (non-blocking)
         let mut final_drain = 0;
         loop {
             match tokio::time::timeout(Duration::from_millis(100), read.next()).await {
                 Ok(Some(Ok(Message::Text(text)))) => {
                     final_drain += 1;
                     if text.contains("\"channel\":\"spot.order_book\"") && text.contains("\"event\":\"update\"") {
-                        let _ = self.tx.send(WsMessage::Text(text)).await;
+                        let _ = self.tx.try_send(WsMessage::Text(text));
                     }
                 }
                 Ok(Some(Ok(_))) => final_drain += 1,
@@ -266,7 +267,9 @@ impl WsClient {
                         return Err(FeedError::ConnectionFailed(format!("Subscription failed: {}", e)));
                     }
                     if msgs.len() > 1 && i < msgs.len() - 1 {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        // Binance has stricter rate limits, use longer delay
+                        let delay = if self.config.exchange == Exchange::Binance { 250 } else { 50 };
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
                     }
                 }
                 info!("{:?}: Subscription complete", self.config.exchange);
@@ -296,6 +299,9 @@ impl WsClient {
             debug!("Gate.io: ping interval set to {}ms (dual ping: WS + app-level)", self.config.ping_interval_ms);
         }
 
+        // Track if we've received any message at all after connect
+        let mut any_message_received = false;
+
         loop {
             // Check for stale connection
             if last_message_time.elapsed() > stale_timeout {
@@ -313,14 +319,16 @@ impl WsClient {
 
             tokio::select! {
                 msg = read.next() => {
+                    any_message_received = true;
                     // Update last message time for any received message
                     last_message_time = std::time::Instant::now();
 
                     match msg {
                         Some(Ok(Message::Text(text))) => {
+                            message_count += 1;
+
                             // Gate.io debugging
                             if self.config.exchange == Exchange::GateIO {
-                                message_count += 1;
                                 // Log errors only
                                 if text.contains("error") {
                                     warn!("Gate.io msg #{}: {}", message_count, &text[..text.len().min(200)]);
@@ -348,14 +356,32 @@ impl WsClient {
                                 // No need to track awaiting_pong since Coinbase sends these automatically
                                 continue;
                             }
-                            if let Err(e) = self.tx.send(WsMessage::Text(text)).await {
-                                if self.config.exchange == Exchange::GateIO && message_count % 10000 == 0 {
-                                    warn!("Gate.io: Failed to send msg #{} to channel: {}", message_count, e);
+                            // Use try_send to avoid blocking on channel full
+                            // If channel is full, force reconnection to resync orderbook
+                            // (dropping messages would break delta-based orderbook sync)
+                            if let Err(e) = self.tx.try_send(WsMessage::Text(text)) {
+                                match e {
+                                    mpsc::error::TrySendError::Full(_) => {
+                                        // Channel full - reconnect to resync orderbook
+                                        // This is critical for delta-based exchanges (Bybit, Coinbase)
+                                        warn!("{:?}: Channel full, forcing reconnect to resync orderbook",
+                                            self.config.exchange);
+                                        return Err(FeedError::Disconnected("Channel full - resync needed".to_string()));
+                                    }
+                                    mpsc::error::TrySendError::Closed(_) => {
+                                        error!("{:?}: Channel closed", self.config.exchange);
+                                        return Err(FeedError::Disconnected("Channel closed".to_string()));
+                                    }
                                 }
                             }
                         }
                         Some(Ok(Message::Binary(data))) => {
-                            let _ = self.tx.send(WsMessage::Binary(data)).await;
+                            message_count += 1;
+                            // Use try_send for binary data too - reconnect if full
+                            if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(WsMessage::Binary(data.clone())) {
+                                warn!("{:?}: Channel full (binary), forcing reconnect", self.config.exchange);
+                                return Err(FeedError::Disconnected("Channel full - resync needed".to_string()));
+                            }
                         }
                         Some(Ok(Message::Ping(data))) => {
                             debug!("{:?}: Received WebSocket PING, sending PONG", self.config.exchange);
@@ -382,7 +408,10 @@ impl WsClient {
                             warn!("{:?}: WebSocket stream ended", self.config.exchange);
                             return Err(FeedError::Disconnected("Stream ended".to_string()));
                         }
-                        _ => {}
+                        Some(Ok(other)) => {
+                            // Catch-all for unexpected message types
+                            warn!("{:?}: Unexpected message type: {:?}", self.config.exchange, other);
+                        }
                     }
                 }
                 _ = ping_timer.tick() => {
