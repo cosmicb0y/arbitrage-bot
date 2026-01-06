@@ -421,6 +421,11 @@ async fn run_upbit_feed(
             WsMessage::Connected => {
                 debug!("Upbit: Connected to WebSocket");
             }
+            WsMessage::Reconnected => {
+                info!("Upbit: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                orderbook_cache.clear();
+                state.clear_orderbooks_for_exchange(Exchange::Upbit);
+            }
             WsMessage::Disconnected => {
                 warn!("Upbit: Disconnected from WebSocket");
             }
@@ -484,6 +489,10 @@ async fn run_binance_feed(
             }
             WsMessage::Connected => {
                 debug!("Binance: Connected to WebSocket");
+            }
+            WsMessage::Reconnected => {
+                info!("Binance: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                state.clear_orderbooks_for_exchange(Exchange::Binance);
             }
             WsMessage::Disconnected => {
                 warn!("Binance: Disconnected from WebSocket");
@@ -636,6 +645,11 @@ async fn run_coinbase_feed(
             }
             WsMessage::Connected => {
                 debug!("Coinbase: Connected to WebSocket");
+            }
+            WsMessage::Reconnected => {
+                info!("Coinbase: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                orderbook_cache.clear();
+                state.clear_orderbooks_for_exchange(Exchange::Coinbase);
             }
             WsMessage::Disconnected => {
                 warn!("Coinbase: Disconnected from WebSocket");
@@ -838,6 +852,11 @@ async fn run_bithumb_feed(
             WsMessage::Connected => {
                 debug!("Bithumb: Connected to WebSocket");
             }
+            WsMessage::Reconnected => {
+                info!("Bithumb: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                orderbook_cache.clear();
+                state.clear_orderbooks_for_exchange(Exchange::Bithumb);
+            }
             WsMessage::Disconnected => {
                 warn!("Bithumb: Disconnected from WebSocket");
             }
@@ -910,6 +929,10 @@ async fn run_bybit_feed(
             }
             WsMessage::Connected => {
                 debug!("Bybit: Connected to WebSocket");
+            }
+            WsMessage::Reconnected => {
+                info!("Bybit: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                state.clear_orderbooks_for_exchange(Exchange::Bybit);
             }
             WsMessage::Disconnected => {
                 warn!("Bybit: Disconnected from WebSocket");
@@ -987,6 +1010,10 @@ async fn run_gateio_feed(
             }
             WsMessage::Connected => {
                 debug!("Gate.io: Connected to WebSocket");
+            }
+            WsMessage::Reconnected => {
+                info!("Gate.io: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                state.clear_orderbooks_for_exchange(Exchange::GateIO);
             }
             WsMessage::Disconnected => {
                 warn!("Gate.io: Disconnected from WebSocket");

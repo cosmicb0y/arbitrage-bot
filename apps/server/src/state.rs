@@ -573,6 +573,14 @@ impl AppState {
         self.orderbook_cache.get(&(exchange, pair_id)).map(|v| v.clone())
     }
 
+    /// Clear all orderbook and depth cache for a specific exchange.
+    pub fn clear_orderbooks_for_exchange(&self, exchange: Exchange) {
+        let exchange_str = format!("{:?}", exchange);
+        self.orderbook_cache.retain(|key, _| key.0 != exchange);
+        self.depth_cache.retain(|key, _| key.0 != exchange_str);
+        tracing::info!("{:?}: Orderbook cache cleared (No OB until snapshot)", exchange);
+    }
+
     /// Get orderbooks for both sides of an arbitrage opportunity.
     /// Returns (buy_orderbook, sell_orderbook) if both are available.
     pub fn get_arbitrage_orderbooks(
