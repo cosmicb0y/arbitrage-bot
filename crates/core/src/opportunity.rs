@@ -14,6 +14,8 @@ pub enum OptimalSizeReason {
     NoOrderbook,
     /// Orderbook available but trade is not profitable after fees.
     NotProfitable,
+    /// Missing KRW conversion rate for cross-currency calculation.
+    NoConversionRate,
 }
 
 /// USD-like stablecoin type for premium calculation.
@@ -432,7 +434,10 @@ impl ArbitrageOpportunity {
 
         // If neither side is KRW, USDlike premium is raw premium (same currency comparison)
         if !source_is_krw && !target_is_krw {
-            let usdlike = usdlike_quote.map(|q| UsdlikePremium { bps: raw_premium, quote: q });
+            let usdlike = usdlike_quote.map(|q| UsdlikePremium {
+                bps: raw_premium,
+                quote: q,
+            });
             return (usdlike, raw_premium);
         }
 
@@ -455,7 +460,10 @@ impl ArbitrageOpportunity {
                     } else {
                         ((krw_price - overseas_price) / overseas_price * 10000.0) as i32
                     };
-                    UsdlikePremium { bps, quote: UsdlikeQuote::USDT }
+                    UsdlikePremium {
+                        bps,
+                        quote: UsdlikeQuote::USDT,
+                    }
                 })
             }
             Some(UsdlikeQuote::USDC) => {
@@ -473,12 +481,18 @@ impl ArbitrageOpportunity {
                     } else {
                         ((krw_price - overseas_price) / overseas_price * 10000.0) as i32
                     };
-                    UsdlikePremium { bps, quote: UsdlikeQuote::USDC }
+                    UsdlikePremium {
+                        bps,
+                        quote: UsdlikeQuote::USDC,
+                    }
                 })
             }
             Some(UsdlikeQuote::BUSD) => {
                 // BUSD not commonly used, fallback to raw premium
-                Some(UsdlikePremium { bps: raw_premium, quote: UsdlikeQuote::BUSD })
+                Some(UsdlikePremium {
+                    bps: raw_premium,
+                    quote: UsdlikeQuote::BUSD,
+                })
             }
             None => None, // Overseas market doesn't use USDlike quote (e.g., USD)
         };
@@ -557,11 +571,7 @@ mod tests {
 
     #[test]
     fn test_route_step_bridge() {
-        let step = RouteStep::bridge(
-            BridgeProtocol::Stargate,
-            Chain::Ethereum,
-            Chain::Arbitrum,
-        );
+        let step = RouteStep::bridge(BridgeProtocol::Stargate, Chain::Ethereum, Chain::Arbitrum);
 
         assert!(matches!(step, RouteStep::Bridge { .. }));
     }

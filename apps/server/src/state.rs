@@ -721,35 +721,38 @@ impl AppState {
                     }
                 };
 
-                // If source is Korean exchange, convert buy_asks from KRW to overseas quote
                 if source_is_krw {
-                    if let Some(rate) = get_krw_rate_for_quote(opp.source_exchange, overseas_quote) {
-                        if rate > 0 {
+                    match get_krw_rate_for_quote(opp.source_exchange, overseas_quote) {
+                        Some(rate) if rate > 0 => {
                             buy_asks = buy_asks
                                 .iter()
                                 .map(|(price, qty)| {
-                                    // price is in KRW (FixedPoint), convert to overseas quote
-                                    // overseas_price = KRW / quote_KRW_rate
                                     let converted = (*price as u128 * FixedPoint::SCALE as u128 / rate as u128) as u64;
                                     (converted, *qty)
                                 })
                                 .collect();
                         }
+                        _ => {
+                            opp.optimal_size_reason = OptimalSizeReason::NoConversionRate;
+                            continue;
+                        }
                     }
                 }
 
-                // If target is Korean exchange, convert sell_bids from KRW to overseas quote
                 if target_is_krw {
-                    if let Some(rate) = get_krw_rate_for_quote(opp.target_exchange, overseas_quote) {
-                        if rate > 0 {
+                    match get_krw_rate_for_quote(opp.target_exchange, overseas_quote) {
+                        Some(rate) if rate > 0 => {
                             sell_bids = sell_bids
                                 .iter()
                                 .map(|(price, qty)| {
-                                    // price is in KRW (FixedPoint), convert to overseas quote
                                     let converted = (*price as u128 * FixedPoint::SCALE as u128 / rate as u128) as u64;
                                     (converted, *qty)
                                 })
                                 .collect();
+                        }
+                        _ => {
+                            opp.optimal_size_reason = OptimalSizeReason::NoConversionRate;
+                            continue;
                         }
                     }
                 }

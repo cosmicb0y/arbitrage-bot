@@ -525,6 +525,7 @@ async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
                 arbitrage_core::OptimalSizeReason::Ok => "ok".to_string(),
                 arbitrage_core::OptimalSizeReason::NoOrderbook => "no_orderbook".to_string(),
                 arbitrage_core::OptimalSizeReason::NotProfitable => "not_profitable".to_string(),
+                arbitrage_core::OptimalSizeReason::NoConversionRate => "no_conversion_rate".to_string(),
             }),
         }
     }).collect();
@@ -658,6 +659,7 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
             arbitrage_core::OptimalSizeReason::Ok => "ok".to_string(),
             arbitrage_core::OptimalSizeReason::NoOrderbook => "no_orderbook".to_string(),
             arbitrage_core::OptimalSizeReason::NotProfitable => "not_profitable".to_string(),
+            arbitrage_core::OptimalSizeReason::NoConversionRate => "no_conversion_rate".to_string(),
         }),
     };
 
