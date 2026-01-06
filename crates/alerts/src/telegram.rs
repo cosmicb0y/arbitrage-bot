@@ -25,6 +25,8 @@ pub enum Command {
     Config,
     #[command(description = "Set minimum premium (bps). Usage: /premium 50")]
     Premium(String),
+    #[command(description = "Set minimum profit (USD). Usage: /minprofit 10 (or 0 to disable)")]
+    Minprofit(String),
     #[command(description = "Set symbols to monitor. Usage: /symbols BTC,ETH (or 'all')")]
     Symbols(String),
     #[command(description = "Exclude symbols from alerts. Usage: /exclude BTC,DOGE (or 'clear')")]
@@ -107,15 +109,22 @@ impl TelegramBot {
         match cmd {
             Command::Start => {
                 let config = self.db.get_or_create_config(&chat_id).await?;
+                let min_profit_str = if config.min_profit_usd > 0.0 {
+                    format!("${:.2}", config.min_profit_usd)
+                } else {
+                    "Disabled".to_string()
+                };
                 let text = format!(
                     "Welcome to Arbitrage Alert Bot!\n\n\
                      Your chat is now registered.\n\
                      Current settings:\n\
                      - Min premium: {} bps\n\
+                     - Min profit: {}\n\
                      - Symbols: {}\n\
                      - Exchanges: {}\n\n\
                      Use /help to see available commands.",
                     config.min_premium_bps,
+                    min_profit_str,
                     if config.symbols.is_empty() {
                         "All".to_string()
                     } else {
@@ -133,15 +142,23 @@ impl TelegramBot {
             Command::Config => {
                 let config = self.db.get_or_create_config(&chat_id).await?;
                 let status = if config.enabled { "Active" } else { "Paused" };
+                let min_profit_str = if config.min_profit_usd > 0.0 {
+                    format!("${:.2}", config.min_profit_usd)
+                } else {
+                    "Disabled".to_string()
+                };
                 let text = format!(
                     "<b>Current Configuration</b>\n\n\
                      Status: {}\n\
                      Min Premium: {} bps\n\
+                     Min Profit: {}\n\
                      Symbols: {}\n\
                      Excluded: {}\n\
-                     Exchanges: {}",
+                     Exchanges: {}\n\n\
+                     <i>Alert triggers when: Premium >= {} bps{}</i>",
                     status,
                     config.min_premium_bps,
+                    min_profit_str,
                     if config.symbols.is_empty() {
                         "All".to_string()
                     } else {
@@ -156,6 +173,12 @@ impl TelegramBot {
                         "All".to_string()
                     } else {
                         config.exchanges.join(", ")
+                    },
+                    config.min_premium_bps,
+                    if config.min_profit_usd > 0.0 {
+                        format!(" OR Profit >= ${:.2}", config.min_profit_usd)
+                    } else {
+                        String::new()
                     }
                 );
                 bot.send_message(msg.chat.id, text)
@@ -181,6 +204,36 @@ impl TelegramBot {
                     }
                 } else {
                     bot.send_message(msg.chat.id, "Usage: /premium <number>\nExample: /premium 50")
+                        .await?;
+                }
+            }
+
+            Command::Minprofit(value) => {
+                let value = value.trim();
+                if let Ok(usd) = value.parse::<f64>() {
+                    if usd >= 0.0 && usd <= 1_000_000.0 {
+                        let mut config = self.db.get_or_create_config(&chat_id).await?;
+                        config.min_profit_usd = usd;
+                        self.db.update_config(&config).await?;
+                        if usd > 0.0 {
+                            bot.send_message(
+                                msg.chat.id,
+                                format!("Minimum profit set to ${:.2} USD\n\nAlerts will trigger when:\n• Premium >= {} bps OR\n• Expected profit >= ${:.2}", usd, config.min_premium_bps, usd),
+                            )
+                            .await?;
+                        } else {
+                            bot.send_message(
+                                msg.chat.id,
+                                "Minimum profit disabled. Alerts will only use premium threshold.",
+                            )
+                            .await?;
+                        }
+                    } else {
+                        bot.send_message(msg.chat.id, "Profit must be between 0 and 1,000,000 USD")
+                            .await?;
+                    }
+                } else {
+                    bot.send_message(msg.chat.id, "Usage: /minprofit <number>\nExample: /minprofit 10\nSet to 0 to disable profit-based alerts")
                         .await?;
                 }
             }

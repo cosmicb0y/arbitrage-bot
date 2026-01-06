@@ -151,11 +151,6 @@ impl Notifier {
         let mut sent_count = 0u32;
 
         for config in configs {
-            // Check if opportunity meets config criteria
-            if premium_bps < config.min_premium_bps {
-                continue;
-            }
-
             if !config.should_alert_symbol(symbol) {
                 continue;
             }
@@ -166,7 +161,19 @@ impl Notifier {
                 continue;
             }
 
-            // Format and send alert
+            let optimal_profit_usd = if opportunity.optimal_profit > 0 {
+                FixedPoint(opportunity.optimal_profit as u64).to_f64()
+            } else {
+                0.0
+            };
+
+            let meets_premium = premium_bps >= config.min_premium_bps;
+            let meets_profit = config.min_profit_usd > 0.0 && optimal_profit_usd >= config.min_profit_usd;
+
+            if !meets_premium && !meets_profit {
+                continue;
+            }
+
             let source_price = FixedPoint(opportunity.source_price).to_f64();
             let target_price = FixedPoint(opportunity.target_price).to_f64();
             let optimal_size = if opportunity.optimal_size > 0 {

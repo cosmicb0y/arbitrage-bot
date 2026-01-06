@@ -62,6 +62,13 @@ impl Database {
         .execute(&self.pool)
         .await;
 
+        // Migration: add min_profit_usd column if it doesn't exist
+        let _ = sqlx::query(
+            "ALTER TABLE alert_config ADD COLUMN min_profit_usd REAL NOT NULL DEFAULT 0.0",
+        )
+        .execute(&self.pool)
+        .await;
+
         // Active opportunities table - tracks currently active opportunities to avoid duplicate alerts
         sqlx::query(
             r#"
@@ -111,15 +118,14 @@ impl Database {
 
     /// Get or create config for a chat.
     pub async fn get_or_create_config(&self, chat_id: &str) -> Result<AlertConfig, DbError> {
-        // Try to get existing
-        let existing = sqlx::query_as::<_, (i64, String, i32, String, String, String, bool)>(
-            "SELECT id, telegram_chat_id, min_premium_bps, symbols, excluded_symbols, exchanges, enabled FROM alert_config WHERE telegram_chat_id = ?",
+        let existing = sqlx::query_as::<_, (i64, String, i32, f64, String, String, String, bool)>(
+            "SELECT id, telegram_chat_id, min_premium_bps, min_profit_usd, symbols, excluded_symbols, exchanges, enabled FROM alert_config WHERE telegram_chat_id = ?",
         )
         .bind(chat_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        if let Some((id, telegram_chat_id, min_premium_bps, symbols_json, excluded_symbols_json, exchanges_json, enabled)) =
+        if let Some((id, telegram_chat_id, min_premium_bps, min_profit_usd, symbols_json, excluded_symbols_json, exchanges_json, enabled)) =
             existing
         {
             let symbols: Vec<String> =
@@ -133,6 +139,7 @@ impl Database {
                 id,
                 telegram_chat_id,
                 min_premium_bps,
+                min_profit_usd,
                 symbols,
                 excluded_symbols,
                 exchanges,
@@ -140,7 +147,6 @@ impl Database {
             });
         }
 
-        // Create new
         let result = sqlx::query("INSERT INTO alert_config (telegram_chat_id) VALUES (?)")
             .bind(chat_id)
             .execute(&self.pool)
@@ -162,11 +168,12 @@ impl Database {
         sqlx::query(
             r#"
             UPDATE alert_config
-            SET min_premium_bps = ?, symbols = ?, excluded_symbols = ?, exchanges = ?, enabled = ?
+            SET min_premium_bps = ?, min_profit_usd = ?, symbols = ?, excluded_symbols = ?, exchanges = ?, enabled = ?
             WHERE telegram_chat_id = ?
             "#,
         )
         .bind(config.min_premium_bps)
+        .bind(config.min_profit_usd)
         .bind(&symbols_json)
         .bind(&excluded_symbols_json)
         .bind(&exchanges_json)
@@ -180,15 +187,15 @@ impl Database {
 
     /// Get all enabled configs.
     pub async fn get_all_enabled_configs(&self) -> Result<Vec<AlertConfig>, DbError> {
-        let rows = sqlx::query_as::<_, (i64, String, i32, String, String, String, bool)>(
-            "SELECT id, telegram_chat_id, min_premium_bps, symbols, excluded_symbols, exchanges, enabled FROM alert_config WHERE enabled = 1",
+        let rows = sqlx::query_as::<_, (i64, String, i32, f64, String, String, String, bool)>(
+            "SELECT id, telegram_chat_id, min_premium_bps, min_profit_usd, symbols, excluded_symbols, exchanges, enabled FROM alert_config WHERE enabled = 1",
         )
         .fetch_all(&self.pool)
         .await?;
 
         let configs = rows
             .into_iter()
-            .map(|(id, telegram_chat_id, min_premium_bps, symbols_json, excluded_symbols_json, exchanges_json, enabled)| {
+            .map(|(id, telegram_chat_id, min_premium_bps, min_profit_usd, symbols_json, excluded_symbols_json, exchanges_json, enabled)| {
                 let symbols: Vec<String> =
                     serde_json::from_str(&symbols_json).unwrap_or_default();
                 let excluded_symbols: Vec<String> =
@@ -199,6 +206,7 @@ impl Database {
                     id,
                     telegram_chat_id,
                     min_premium_bps,
+                    min_profit_usd,
                     symbols,
                     excluded_symbols,
                     exchanges,
@@ -337,7 +345,7 @@ mod tests {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         let config = db.get_or_create_config("123456").await.unwrap();
         assert_eq!(config.telegram_chat_id, "123456");
-        assert_eq!(config.min_premium_bps, 50);
+        assert_eq!(config.min_premium_bps, 400);
     }
 
     #[tokio::test]

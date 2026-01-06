@@ -11,6 +11,8 @@ pub struct AlertConfig {
     pub telegram_chat_id: String,
     /// Minimum premium in basis points to trigger alert
     pub min_premium_bps: i32,
+    /// Minimum expected profit in USD to trigger alert (0 = disabled)
+    pub min_profit_usd: f64,
     /// Symbols to monitor (empty = all)
     pub symbols: Vec<String>,
     /// Symbols to exclude from alerts (blacklist)
@@ -27,6 +29,7 @@ impl Default for AlertConfig {
             id: 0,
             telegram_chat_id: String::new(),
             min_premium_bps: 400,
+            min_profit_usd: 0.0,
             symbols: Vec::new(),
             excluded_symbols: Vec::new(),
             exchanges: Vec::new(),
@@ -49,7 +52,11 @@ impl AlertConfig {
     /// Returns true if symbols list is empty (all allowed) or symbol is in allowed list.
     pub fn should_alert_symbol(&self, symbol: &str) -> bool {
         // Check blacklist first
-        if self.excluded_symbols.iter().any(|s| s.eq_ignore_ascii_case(symbol)) {
+        if self
+            .excluded_symbols
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(symbol))
+        {
             return false;
         }
         // Check whitelist (empty = all allowed)
