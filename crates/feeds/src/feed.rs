@@ -160,6 +160,9 @@ impl PriceFeed {
                 WsMessage::Connected => {
                     info!("{:?}: Connected", exchange);
                 }
+                WsMessage::Reconnected => {
+                    info!("{:?}: Reconnected", exchange);
+                }
                 WsMessage::Disconnected => {
                     warn!("{:?}: Disconnected", exchange);
                 }

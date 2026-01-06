@@ -15,10 +15,14 @@ pub enum WsMessage {
     Text(String),
     /// Binary message.
     Binary(Vec<u8>),
-    /// Connection established.
+    /// Connection established (first time).
     Connected,
     /// Connection closed.
     Disconnected,
+    /// Reconnected after disconnection.
+    /// Consumers should clear orderbook cache when receiving this,
+    /// as delta updates are invalid without a fresh snapshot.
+    Reconnected,
     /// Error occurred.
     Error(String),
 }
@@ -193,17 +197,20 @@ impl WsClient {
     pub async fn run_with_messages(self, subscribe_msgs: Option<Vec<String>>) -> Result<(), FeedError> {
         let mut reconnect_attempts = 0u32;
         let mut connection_start: std::time::Instant;
+        let mut has_connected_once = false;
 
         loop {
             connection_start = std::time::Instant::now();
+            let is_reconnect = has_connected_once;
 
-            match self.connect_and_handle(&subscribe_msgs).await {
+            match self.connect_and_handle(&subscribe_msgs, is_reconnect).await {
                 Ok(()) => {
                     debug!("WebSocket connection closed normally for {:?}", self.config.exchange);
                     break;
                 }
                 Err(e) => {
                     let connection_duration = connection_start.elapsed();
+                    has_connected_once = true;
 
                     // Reset reconnect counter if connection was stable (5+ minutes)
                     if connection_duration > Duration::from_secs(300) {
@@ -240,13 +247,17 @@ impl WsClient {
         Ok(())
     }
 
-    async fn connect_and_handle(&self, subscribe_msgs: &Option<Vec<String>>) -> Result<(), FeedError> {
+    async fn connect_and_handle(&self, subscribe_msgs: &Option<Vec<String>>, is_reconnect: bool) -> Result<(), FeedError> {
         let is_gateio = self.config.exchange == Exchange::GateIO;
         info!("Connecting to {:?}: {}", self.config.exchange, self.config.ws_url);
 
         let (ws_stream, response) = connect_async(&self.config.ws_url).await?;
         info!("{:?}: Connected (status: {:?})", self.config.exchange, response.status());
-        let _ = self.tx.send(WsMessage::Connected).await;
+        if is_reconnect {
+            let _ = self.tx.send(WsMessage::Reconnected).await;
+        } else {
+            let _ = self.tx.send(WsMessage::Connected).await;
+        }
 
         let (mut write, mut read) = ws_stream.split();
 
