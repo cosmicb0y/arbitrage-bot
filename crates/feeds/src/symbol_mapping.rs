@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::warn;
 
 /// A single symbol mapping entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,22 +134,16 @@ fn get_mappings_path() -> PathBuf {
     path.join("symbol_mappings.json")
 }
 
-/// Load symbol mappings from file.
 pub fn load_mappings() -> SymbolMappings {
     let path = get_mappings_path();
-    info!("Loading symbol mappings from: {:?}", path);
 
     if !path.exists() {
-        info!("No symbol mappings file found, using defaults");
         return SymbolMappings::default();
     }
 
     match fs::read_to_string(&path) {
         Ok(content) => match serde_json::from_str(&content) {
-            Ok(mappings) => {
-                info!("Loaded symbol mappings successfully");
-                mappings
-            }
+            Ok(mappings) => mappings,
             Err(e) => {
                 warn!("Failed to parse symbol mappings: {}", e);
                 SymbolMappings::default()
@@ -162,17 +156,14 @@ pub fn load_mappings() -> SymbolMappings {
     }
 }
 
-/// Save symbol mappings to file.
 pub fn save_mappings(mappings: &SymbolMappings) -> Result<(), String> {
     let path = get_mappings_path();
-    info!("Saving symbol mappings to: {:?}", path);
 
     let content = serde_json::to_string_pretty(mappings)
         .map_err(|e| format!("Failed to serialize mappings: {}", e))?;
 
     fs::write(&path, content).map_err(|e| format!("Failed to write mappings file: {}", e))?;
 
-    info!("Symbol mappings saved successfully");
     Ok(())
 }
 

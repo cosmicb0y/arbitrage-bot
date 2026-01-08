@@ -75,7 +75,7 @@ impl WsClient {
         let sent_count = Arc::new(AtomicUsize::new(0));
         let sent_count_clone = sent_count.clone();
 
-        info!("Gate.io: Starting subscription of {} symbols", total);
+        debug!("Gate.io: Starting subscription of {} symbols", total);
 
         // Spawn a task to drain incoming messages
         let (drain_tx, mut drain_rx) = mpsc::channel::<()>(1);
@@ -249,10 +249,10 @@ impl WsClient {
 
     async fn connect_and_handle(&self, subscribe_msgs: &Option<Vec<String>>, is_reconnect: bool) -> Result<(), FeedError> {
         let is_gateio = self.config.exchange == Exchange::GateIO;
-        info!("Connecting to {:?}: {}", self.config.exchange, self.config.ws_url);
+        debug!("Connecting to {:?}: {}", self.config.exchange, self.config.ws_url);
 
         let (ws_stream, response) = connect_async(&self.config.ws_url).await?;
-        info!("{:?}: Connected (status: {:?})", self.config.exchange, response.status());
+        debug!("{:?}: Connected (status: {:?})", self.config.exchange, response.status());
         if is_reconnect {
             let _ = self.tx.send(WsMessage::Reconnected).await;
         } else {
@@ -270,7 +270,7 @@ impl WsClient {
         } else {
             // Other exchanges: simple sequential subscription
             if let Some(ref msgs) = subscribe_msgs {
-                info!("{:?}: Sending {} subscription message(s)", self.config.exchange, msgs.len());
+                debug!("{:?}: Sending {} subscription message(s)", self.config.exchange, msgs.len());
                 for (i, msg) in msgs.iter().enumerate() {
                     debug!("{:?}: Sending subscription {}/{}", self.config.exchange, i + 1, msgs.len());
                     if let Err(e) = write.send(Message::Text(msg.clone())).await {
@@ -283,7 +283,7 @@ impl WsClient {
                         tokio::time::sleep(Duration::from_millis(delay)).await;
                     }
                 }
-                info!("{:?}: Subscription complete", self.config.exchange);
+                debug!("{:?}: Subscription complete", self.config.exchange);
             }
         }
 
@@ -408,7 +408,7 @@ impl WsClient {
                                 self.config.exchange, ping_sent_time.elapsed());
                         }
                         Some(Ok(Message::Close(frame))) => {
-                            info!("{:?}: Received close frame: {:?}", self.config.exchange, frame);
+                            debug!("{:?}: Received close frame: {:?}", self.config.exchange, frame);
                             return Ok(());
                         }
                         Some(Err(e)) => {

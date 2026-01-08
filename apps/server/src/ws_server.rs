@@ -19,7 +19,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use arbitrage_core::{Exchange, FixedPoint, PriceTick};
 
 /// Price data for WebSocket broadcast.
@@ -262,7 +262,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
     // Subscribe to broadcast channel
     let mut broadcast_rx = state.broadcast_tx.subscribe();
 
-    info!("WebSocket client connected");
+    debug!("WebSocket client connected");
 
     // Send initial data
     let initial_prices = collect_prices(&state.app_state).await;
@@ -345,7 +345,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
 
     // Abort send task when connection closes
     send_task.abort();
-    info!("WebSocket client disconnected");
+    debug!("WebSocket client disconnected");
 }
 
 /// Collect current prices from state.

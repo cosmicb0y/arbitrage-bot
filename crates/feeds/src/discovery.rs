@@ -7,7 +7,7 @@ use crate::symbol_mapping::SymbolMappings;
 use crate::FeedError;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// Normalized market info.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -759,7 +759,7 @@ impl MarketDiscovery {
         let partial_count = common.len() - all_count;
 
         if excluded_count > 0 || remapped_count > 0 {
-            info!(
+            debug!(
                 "Found {} markets on {}+ exchanges ({} on all {}, {} on 2+ but not all, {} excluded, {} remapped by symbol mappings)",
                 common.len(),
                 min_exchanges,
@@ -770,7 +770,7 @@ impl MarketDiscovery {
                 remapped_count
             );
         } else {
-            info!(
+            debug!(
                 "Found {} markets on {}+ exchanges ({} on all {}, {} on 2+ but not all)",
                 common.len(),
                 min_exchanges,
@@ -842,7 +842,7 @@ impl MarketDiscovery {
         let usdc_count = by_quote.keys().filter(|k| k.ends_with("/USDC")).count();
         let krw_count = by_quote.keys().filter(|k| k.ends_with("/KRW")).count();
 
-        info!(
+        debug!(
             "By quote: {} USDT markets, {} USDC markets, {} KRW markets on {}+ exchanges",
             usdt_count, usdc_count, krw_count, min_exchanges
         );

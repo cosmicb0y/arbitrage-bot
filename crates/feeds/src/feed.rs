@@ -7,7 +7,7 @@ use crate::{
 use arbitrage_core::{Exchange, PriceTick};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// Trait for exchange feed handlers.
 pub trait FeedHandler: Send + Sync {
@@ -126,7 +126,7 @@ impl PriceFeed {
     /// Run the feed, processing messages from the WebSocket.
     pub async fn run(self, mut rx: mpsc::Receiver<WsMessage>) {
         let exchange = self.handler.exchange();
-        info!("Starting price feed for {:?}", exchange);
+        debug!("Starting price feed for {:?}", exchange);
 
         let mut message_count = 0u64;
         let mut error_count = 0u64;
@@ -158,10 +158,10 @@ impl PriceFeed {
                     }
                 }
                 WsMessage::Connected => {
-                    info!("{:?}: Connected", exchange);
+                    debug!("{:?}: Connected", exchange);
                 }
                 WsMessage::Reconnected => {
-                    info!("{:?}: Reconnected", exchange);
+                    debug!("{:?}: Reconnected", exchange);
                 }
                 WsMessage::Disconnected => {
                     warn!("{:?}: Disconnected", exchange);
@@ -175,7 +175,7 @@ impl PriceFeed {
             }
         }
 
-        info!(
+        debug!(
             "{:?}: Feed stopped. Total messages: {}, errors: {}",
             exchange, message_count, error_count
         );

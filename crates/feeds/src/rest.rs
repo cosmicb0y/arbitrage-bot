@@ -7,7 +7,7 @@ use crate::error::FeedError;
 use arbitrage_core::FixedPoint;
 use futures_util::future::join_all;
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Orderbook entry: (bid, ask, bid_size, ask_size)
 pub type OrderbookEntry = (FixedPoint, FixedPoint, FixedPoint, FixedPoint);
@@ -448,7 +448,7 @@ impl GateIORestFetcher {
             .cloned()
             .collect();
 
-        info!("GateIO: Got {} prices, {} stablecoins need depth fetch (others via WebSocket)",
+        debug!("GateIO: Got {} prices, {} stablecoins need depth fetch (others via WebSocket)",
               result.len(), stablecoin_pairs.len());
 
         // Fetch depth only for stablecoins (small number, no batching needed)
@@ -465,7 +465,7 @@ impl GateIORestFetcher {
                     success_count += 1;
                 }
             }
-            info!("GateIO: Fetched depth for {}/{} stablecoins", success_count, stablecoin_pairs.len());
+            debug!("GateIO: Fetched depth for {}/{} stablecoins", success_count, stablecoin_pairs.len());
         }
 
         debug!("GateIO: Successfully fetched {} orderbooks", result.len());
@@ -689,7 +689,7 @@ pub async fn fetch_all_initial_orderbooks(
     bybit_symbols: &[String],
     gateio_pairs: &[String],
 ) -> HashMap<(String, String), OrderbookEntry> {
-    info!("Fetching initial orderbooks from all exchanges...");
+    debug!("Fetching initial orderbooks from all exchanges...");
 
     // Fetch from all exchanges in parallel
     let (binance_result, coinbase_result, bybit_result, gateio_result) = tokio::join!(
@@ -705,27 +705,27 @@ pub async fn fetch_all_initial_orderbooks(
     for (symbol, entry) in binance_result {
         all_orderbooks.insert(("Binance".to_string(), symbol), entry);
     }
-    info!("Binance: Fetched {} orderbooks", all_orderbooks.iter().filter(|((ex, _), _)| ex == "Binance").count());
+    debug!("Binance: Fetched {} orderbooks", all_orderbooks.iter().filter(|((ex, _), _)| ex == "Binance").count());
 
     // Add Coinbase results
     for (product_id, entry) in coinbase_result {
         all_orderbooks.insert(("Coinbase".to_string(), product_id), entry);
     }
-    info!("Coinbase: Fetched {} orderbooks", all_orderbooks.iter().filter(|((ex, _), _)| ex == "Coinbase").count());
+    debug!("Coinbase: Fetched {} orderbooks", all_orderbooks.iter().filter(|((ex, _), _)| ex == "Coinbase").count());
 
     // Add Bybit results
     for (symbol, entry) in bybit_result {
         all_orderbooks.insert(("Bybit".to_string(), symbol), entry);
     }
-    info!("Bybit: Fetched {} orderbooks", all_orderbooks.iter().filter(|((ex, _), _)| ex == "Bybit").count());
+    debug!("Bybit: Fetched {} orderbooks", all_orderbooks.iter().filter(|((ex, _), _)| ex == "Bybit").count());
 
     // Add GateIO results
     for (pair, entry) in gateio_result {
         all_orderbooks.insert(("GateIO".to_string(), pair), entry);
     }
-    info!("GateIO: Fetched {} orderbooks", all_orderbooks.iter().filter(|((ex, _), _)| ex == "GateIO").count());
+    debug!("GateIO: Fetched {} orderbooks", all_orderbooks.iter().filter(|((ex, _), _)| ex == "GateIO").count());
 
-    info!("Total: Fetched {} orderbooks from all exchanges", all_orderbooks.len());
+    debug!("Total: Fetched {} orderbooks from all exchanges", all_orderbooks.len());
     all_orderbooks
 }
 

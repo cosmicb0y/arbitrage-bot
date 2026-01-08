@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Cached wallet status for initial sync when clients connect.
 static CACHED_WALLET_STATUS: RwLock<Vec<ExchangeWalletStatus>> = RwLock::new(Vec::new());
@@ -109,7 +109,7 @@ pub fn load_network_mapping() -> Option<NetworkNameMapping> {
 
     for path in &paths {
         if let Ok(mapping) = NetworkNameMapping::load_from_file(path) {
-            info!("Loaded network name mapping from {} ({} networks)", path, mapping.mappings.len());
+            debug!("Loaded network name mapping from {} ({} networks)", path, mapping.mappings.len());
             return Some(mapping);
         }
     }
@@ -1133,7 +1133,7 @@ pub fn save_network_mappings(statuses: &[ExchangeWalletStatus]) {
             if let Err(e) = file.write_all(json.as_bytes()) {
                 warn!("Failed to write network mappings: {}", e);
             } else {
-                info!("Saved network mappings to {} ({} assets need mapping)", path, multi_exchange_assets.len());
+                debug!("Saved network mappings to {} ({} assets need mapping)", path, multi_exchange_assets.len());
             }
         }
         Err(e) => {

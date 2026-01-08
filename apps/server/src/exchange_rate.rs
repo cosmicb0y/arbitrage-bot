@@ -6,7 +6,7 @@ use crate::ws_server::{self, BroadcastSender};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::warn;
 
 /// Atomic storage for exchange rate (stored as rate * 100 for 2 decimal precision)
 /// e.g., 1350.25 stored as 135025
