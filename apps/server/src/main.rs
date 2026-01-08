@@ -432,6 +432,9 @@ async fn run_upbit_feed(
             WsMessage::Error(e) => {
                 warn!("Upbit: Error - {}", e);
             }
+            WsMessage::CircuitBreakerOpen(wait_time) => {
+                warn!("Upbit: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
+            }
         }
     }
 
@@ -863,6 +866,9 @@ async fn run_bithumb_feed(
             WsMessage::Error(e) => {
                 warn!("Bithumb: Error - {}", e);
             }
+            WsMessage::CircuitBreakerOpen(wait_time) => {
+                warn!("Bithumb: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
+            }
         }
     }
 
@@ -939,6 +945,9 @@ async fn run_bybit_feed(
             }
             WsMessage::Error(e) => {
                 warn!("Bybit: Error - {}", e);
+            }
+            WsMessage::CircuitBreakerOpen(wait_time) => {
+                warn!("Bybit: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
             }
         }
     }
@@ -1020,6 +1029,9 @@ async fn run_gateio_feed(
             }
             WsMessage::Error(e) => {
                 warn!("Gate.io: Error - {}", e);
+            }
+            WsMessage::CircuitBreakerOpen(wait_time) => {
+                warn!("Gate.io: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
             }
         }
     }

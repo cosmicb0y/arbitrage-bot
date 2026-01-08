@@ -172,6 +172,12 @@ impl PriceFeed {
                 WsMessage::Binary(_) => {
                     // Some exchanges use binary format
                 }
+                WsMessage::CircuitBreakerOpen(wait_time) => {
+                    warn!(
+                        "{:?}: Circuit breaker OPEN - connection blocked for {:?}",
+                        exchange, wait_time
+                    );
+                }
             }
         }
 
