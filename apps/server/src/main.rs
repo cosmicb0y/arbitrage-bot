@@ -20,9 +20,9 @@ use arbitrage_alerts::{Database, Notifier, NotifierConfig, TelegramBot};
 use arbitrage_core::{Exchange, FixedPoint, PriceTick, QuoteCurrency};
 use arbitrage_feeds::{
     load_mappings, BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, CoinbaseCredentials,
-    FeedConfig, GateIOAdapter, MarketDiscovery, SymbolMappings, UpbitAdapter, WsClient, WsMessage,
-    BinanceRestFetcher, BybitRestFetcher, GateIORestFetcher, UpbitRestFetcher,
-    BithumbRestFetcher, CoinbaseRestFetcher,
+    ExchangeAdapter, FeedConfig, GateIOAdapter, KoreanExchangeAdapter, MarketDiscovery, SymbolMappings,
+    UpbitAdapter, WsClient, WsMessage, BinanceRestFetcher, BybitRestFetcher, GateIORestFetcher,
+    UpbitRestFetcher, BithumbRestFetcher, CoinbaseRestFetcher,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -1043,9 +1043,7 @@ async fn fetch_initial_orderbooks(
     // Binance, Bybit, GateIO: batch ticker APIs
     // Upbit: batch API with comma-separated markets
     // Coinbase, Bithumb: individual API calls for stablecoins
-    info!("📚 Fetching initial orderbooks via REST API...");
-    info!("  Binance: {}, Bybit: {}, GateIO: {}, Upbit: {}, Bithumb: {}",
-        binance_symbols.len(), bybit_symbols.len(), gateio_symbols.len(), upbit_symbols.len(), bithumb_symbols.len());
+    debug!("📚 Fetching initial orderbooks via REST API...");
 
     // Fetch from all exchanges in parallel
     // Coinbase stablecoin prices via individual API calls
@@ -1090,7 +1088,7 @@ async fn fetch_initial_orderbooks(
             total_updated += 1;
         }
     }
-    info!("  Binance: {} orderbooks loaded", binance_result.len());
+    debug!("  Binance: {} orderbooks loaded", binance_result.len());
 
     // Process Bybit orderbooks
     for (symbol, (bid, ask, bid_size, ask_size)) in &bybit_result {
@@ -1122,7 +1120,7 @@ async fn fetch_initial_orderbooks(
             total_updated += 1;
         }
     }
-    info!("  Bybit: {} orderbooks loaded", bybit_result.len());
+    debug!("  Bybit: {} orderbooks loaded", bybit_result.len());
 
     // Process GateIO orderbooks
     for (currency_pair, (bid, ask, bid_size, ask_size)) in &gateio_result {
@@ -1148,7 +1146,7 @@ async fn fetch_initial_orderbooks(
             total_updated += 1;
         }
     }
-    info!("  GateIO: {} orderbooks loaded", gateio_result.len());
+    debug!("  GateIO: {} orderbooks loaded", gateio_result.len());
 
     // Process Upbit orderbooks (prices are in KRW, need conversion to USD)
     // First, extract USDT/KRW and USDC/KRW rates from the result
@@ -1158,14 +1156,12 @@ async fn fetch_initial_orderbooks(
         .map(|(bid, ask, _, _)| (bid.to_f64() + ask.to_f64()) / 2.0);
 
     if let Some(rate) = usdt_krw_rate {
-        // Store the USDT/KRW rate in state for other uses
         state.update_upbit_usdt_krw(FixedPoint::from_f64(rate));
-        info!("  Upbit: USDT/KRW rate from REST: {:.2}", rate);
+        debug!("  Upbit: USDT/KRW rate from REST: {:.2}", rate);
     }
     if let Some(rate) = usdc_krw_rate {
-        // Store the USDC/KRW rate in state
         state.update_upbit_usdc_krw(FixedPoint::from_f64(rate));
-        info!("  Upbit: USDC/KRW rate from REST: {:.2}", rate);
+        debug!("  Upbit: USDC/KRW rate from REST: {:.2}", rate);
     }
 
     // Get the USDT/KRW rate for conversion (from REST or existing state)
@@ -1219,7 +1215,7 @@ async fn fetch_initial_orderbooks(
             total_updated += 1;
         }
     }
-    info!("  Upbit: {} orderbooks loaded", upbit_result.len());
+    debug!("  Upbit: {} orderbooks loaded", upbit_result.len());
 
     // Process Bithumb orderbooks (similar to Upbit, prices are in KRW)
     // Extract USDT/KRW and USDC/KRW rates if available
@@ -1230,11 +1226,11 @@ async fn fetch_initial_orderbooks(
 
     if let Some(rate) = bithumb_usdt_krw {
         state.update_bithumb_usdt_krw(FixedPoint::from_f64(rate));
-        info!("  Bithumb: USDT/KRW rate from REST: {:.2}", rate);
+        debug!("  Bithumb: USDT/KRW rate from REST: {:.2}", rate);
     }
     if let Some(rate) = bithumb_usdc_krw {
         state.update_bithumb_usdc_krw(FixedPoint::from_f64(rate));
-        info!("  Bithumb: USDC/KRW rate from REST: {:.2}", rate);
+        debug!("  Bithumb: USDC/KRW rate from REST: {:.2}", rate);
     }
 
     for (symbol, (bid, ask, bid_size, ask_size)) in &bithumb_result {
@@ -1271,7 +1267,7 @@ async fn fetch_initial_orderbooks(
         // KRW prices without conversion would be invalid in USD terms.
         total_updated += 1;
     }
-    info!("  Bithumb: {} orderbooks loaded", bithumb_result.len());
+    debug!("  Bithumb: {} orderbooks loaded", bithumb_result.len());
 
     // Process Coinbase stablecoin orderbooks
     for (product_id, (bid, ask, bid_size, ask_size)) in &coinbase_stablecoin_result {
@@ -1293,7 +1289,7 @@ async fn fetch_initial_orderbooks(
             let tick = PriceTick::with_depth(Exchange::Coinbase, pair_id, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency);
             ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Coinbase, pair_id, base, Some(quote), &tick);
             total_updated += 1;
-            info!("  Coinbase: {} @ {:.4} (REST)", product_id, mid_price.to_f64());
+            debug!("  Coinbase: {} @ {:.4} (REST)", product_id, mid_price.to_f64());
         }
     }
 
@@ -1534,12 +1530,10 @@ async fn spawn_live_feeds(
             }
 
             if !all_subscribe_msgs.is_empty() {
-                let num_batches = all_subscribe_msgs.len();
-                info!(
-                    "Coinbase: Subscribing to {} symbols in {} batches (first 5: {:?})",
+                debug!(
+                    "Coinbase: Subscribing to {} symbols in {} batches",
                     prioritized_symbols.len(),
-                    num_batches,
-                    &prioritized_symbols[..prioritized_symbols.len().min(5)]
+                    all_subscribe_msgs.len()
                 );
 
                 let coinbase_client = WsClient::new(coinbase_config.clone(), coinbase_tx);
