@@ -15,7 +15,8 @@ pub mod websocket;
 
 pub use adapter::{
     BinanceAdapter, BithumbAdapter, BithumbMessage, BybitAdapter, CoinbaseAdapter,
-    CoinbaseCredentials, CoinbaseL2Event, GateIOAdapter, UpbitAdapter, UpbitMessage,
+    CoinbaseCredentials, CoinbaseL2Event, ExchangeAdapter, GateIOAdapter,
+    KoreanExchangeAdapter, UpbitAdapter, UpbitMessage,
 };
 pub use aggregator::*;
 pub use discovery::*;
