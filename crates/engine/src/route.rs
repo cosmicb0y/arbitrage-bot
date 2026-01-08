@@ -28,6 +28,7 @@ impl RouteCosts {
 #[derive(Debug, Clone)]
 pub struct Route {
     steps: Vec<RouteStep>,
+    #[allow(dead_code)]
     amount: u64,
     buy_price: u64,
     sell_price: u64,
@@ -51,16 +52,16 @@ impl Route {
 
     /// Check if this is a direct trade (no bridges or withdrawals).
     pub fn is_direct(&self) -> bool {
-        self.steps.iter().all(|step| {
-            matches!(step, RouteStep::Trade { .. })
-        })
+        self.steps
+            .iter()
+            .all(|step| matches!(step, RouteStep::Trade { .. }))
     }
 
     /// Check if route includes a bridge.
     pub fn has_bridge(&self) -> bool {
-        self.steps.iter().any(|step| {
-            matches!(step, RouteStep::Bridge { .. })
-        })
+        self.steps
+            .iter()
+            .any(|step| matches!(step, RouteStep::Bridge { .. }))
     }
 
     /// Estimate costs for this route.
@@ -71,11 +72,11 @@ impl Route {
             match step {
                 RouteStep::Trade { .. } => {
                     costs.trading_fee += 10; // 0.1% per trade
-                    costs.gas_cost += 5;     // Gas for DEX trades
+                    costs.gas_cost += 5; // Gas for DEX trades
                 }
                 RouteStep::Bridge { .. } => {
-                    costs.bridge_fee += 30;  // 0.3% bridge fee
-                    costs.gas_cost += 20;    // Gas for bridge tx
+                    costs.bridge_fee += 30; // 0.3% bridge fee
+                    costs.gas_cost += 20; // Gas for bridge tx
                 }
                 RouteStep::Withdraw { .. } => {
                     costs.withdrawal_fee += 5;
@@ -149,19 +150,13 @@ impl RouteBuilder {
 
     /// Add a withdrawal step.
     pub fn withdraw(mut self, exchange: Exchange, chain: Chain) -> Self {
-        self.steps.push(RouteStep::Withdraw {
-            exchange,
-            chain,
-        });
+        self.steps.push(RouteStep::Withdraw { exchange, chain });
         self
     }
 
     /// Add a deposit step.
     pub fn deposit(mut self, exchange: Exchange, chain: Chain) -> Self {
-        self.steps.push(RouteStep::Deposit {
-            exchange,
-            chain,
-        });
+        self.steps.push(RouteStep::Deposit { exchange, chain });
         self
     }
 
@@ -242,11 +237,7 @@ impl RouteFinder {
         let mut routes = Vec::new();
 
         // Direct route (same chain or CEX-to-CEX)
-        routes.push(
-            RouteBuilder::new()
-                .buy(source, 1, 0)
-                .sell(target, 1, 0)
-        );
+        routes.push(RouteBuilder::new().buy(source, 1, 0).sell(target, 1, 0));
 
         // If different chains might be involved, add bridge routes
         // This is a simplified implementation
@@ -256,7 +247,7 @@ impl RouteFinder {
                     RouteBuilder::new()
                         .buy(source, 1, 0)
                         .bridge(bridge.protocol, bridge.source, bridge.dest)
-                        .sell(target, 1, 0)
+                        .sell(target, 1, 0),
                 );
             }
         }
@@ -351,11 +342,7 @@ mod tests {
     fn test_route_finder_find_best() {
         let finder = RouteFinder::new();
 
-        let routes = finder.find_routes(
-            Exchange::Binance,
-            Exchange::Coinbase,
-            Chain::Ethereum,
-        );
+        let routes = finder.find_routes(Exchange::Binance, Exchange::Coinbase, Chain::Ethereum);
 
         assert!(!routes.is_empty());
     }

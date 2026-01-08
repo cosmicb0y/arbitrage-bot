@@ -18,6 +18,7 @@ struct BinanceTicker {
     ask: String,
     #[serde(rename = "v", default)]
     volume: String,
+    #[allow(dead_code)]
     #[serde(rename = "E", default)]
     event_time: u64,
 }
@@ -265,6 +266,7 @@ impl BinanceAdapter {
         let depth: BinancePartialDepth = if json.contains("\"stream\":") {
             #[derive(Debug, Deserialize)]
             struct StreamWrapper {
+                #[allow(dead_code)]
                 stream: String,
                 data: BinancePartialDepth,
             }

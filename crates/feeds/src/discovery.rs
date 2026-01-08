@@ -514,6 +514,7 @@ impl MarketDiscovery {
 
         #[derive(Debug, Deserialize)]
         struct KrakenPair {
+            #[allow(dead_code)]
             wsname: Option<String>,
             base: String,
             quote: String,

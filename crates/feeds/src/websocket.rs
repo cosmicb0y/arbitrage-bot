@@ -73,7 +73,7 @@ impl WsClient {
 
         let total = msgs.len();
         let sent_count = Arc::new(AtomicUsize::new(0));
-        let sent_count_clone = sent_count.clone();
+        let _sent_count_clone = sent_count.clone();
 
         debug!("Gate.io: Starting subscription of {} symbols", total);
 
@@ -311,7 +311,7 @@ impl WsClient {
         }
 
         // Track if we've received any message at all after connect
-        let mut any_message_received = false;
+        let mut _any_message_received = false;
 
         loop {
             // Check for stale connection
@@ -330,7 +330,7 @@ impl WsClient {
 
             tokio::select! {
                 msg = read.next() => {
-                    any_message_received = true;
+                    _any_message_received = true;
                     // Update last message time for any received message
                     last_message_time = std::time::Instant::now();
 
@@ -470,6 +470,7 @@ impl WsClient {
 
 /// Multi-exchange WebSocket manager.
 pub struct WsManager {
+    #[allow(dead_code)]
     receivers: Vec<mpsc::Receiver<WsMessage>>,
 }
 

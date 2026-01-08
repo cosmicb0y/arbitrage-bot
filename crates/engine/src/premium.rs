@@ -130,7 +130,12 @@ impl DenominatedPrices {
     /// * `usdt_krw` - USDT/KRW rate from Korean exchange (e.g., 1430.0)
     /// * `usdc_krw` - USDC/KRW rate (unused in new system)
     /// * `usd_krw` - USD/KRW forex rate from 하나은행 (e.g., 1450.0)
-    pub fn from_krw_with_rates(krw: FixedPoint, usdt_krw: f64, _usdc_krw: f64, usd_krw: f64) -> Self {
+    pub fn from_krw_with_rates(
+        krw: FixedPoint,
+        usdt_krw: f64,
+        _usdc_krw: f64,
+        usd_krw: f64,
+    ) -> Self {
         let krw_f64 = krw.to_f64();
         Self {
             usdlike: if usdt_krw > 0.0 {
@@ -215,7 +220,12 @@ impl DenominatedPrices {
     /// # Arguments
     /// * `target_quote` - The overseas market's quote currency
     /// * `rates` - Conversion rates containing USDT/KRW, USDC/KRW, etc.
-    pub fn to_usdlike(&self, target_quote: UsdlikeQuote, rates: &ConversionRates, exchange: Exchange) -> Option<UsdlikePrice> {
+    pub fn to_usdlike(
+        &self,
+        target_quote: UsdlikeQuote,
+        rates: &ConversionRates,
+        exchange: Exchange,
+    ) -> Option<UsdlikePrice> {
         // If usdlike is already set (even for KRW markets pre-converted to USDT), use it
         if let Some(existing) = self.usdlike {
             return Some(existing);
@@ -348,10 +358,10 @@ pub struct PremiumConfig {
 impl Default for PremiumConfig {
     fn default() -> Self {
         Self {
-            min_premium_bps: 30,     // 0.3%
-            max_staleness_ms: 5000,  // 5 seconds
-            trading_fee_bps: 10,     // 0.1% per trade
-            gas_cost_bps: 5,         // 0.05%
+            min_premium_bps: 30,    // 0.3%
+            max_staleness_ms: 5000, // 5 seconds
+            trading_fee_bps: 10,    // 0.1% per trade
+            gas_cost_bps: 5,        // 0.05%
         }
     }
 }
@@ -381,6 +391,7 @@ struct PriceEntry {
     bid_size: FixedPoint,
     /// Best ask size (quantity available at best ask)
     ask_size: FixedPoint,
+    #[allow(dead_code)]
     timestamp_ms: u64,
 }
 
@@ -439,9 +450,13 @@ impl PremiumMatrix {
 
     /// Update price for an exchange with specified quote currency.
     /// Legacy method - prefer update_price_with_denominations for new code.
-    pub fn update_price_with_quote(&mut self, exchange: Exchange, price: FixedPoint, quote: QuoteCurrency) {
-        let usdlike = UsdlikeQuote::from_quote_currency(quote)
-            .map(|q| UsdlikePrice::new(price, q));
+    pub fn update_price_with_quote(
+        &mut self,
+        exchange: Exchange,
+        price: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
+        let usdlike = UsdlikeQuote::from_quote_currency(quote).map(|q| UsdlikePrice::new(price, q));
         let denominated = DenominatedPrices {
             usdlike,
             usd: Some(price),
@@ -473,12 +488,13 @@ impl PremiumMatrix {
     ) {
         // For USD and KRW quotes, treat as USDT equivalent for USDlike comparison
         // KRW prices are already converted to USDT in main.rs via USDT/KRW rate
-        let usdlike_quote = UsdlikeQuote::from_quote_currency(quote)
-            .or_else(|| if quote == QuoteCurrency::USD || quote == QuoteCurrency::KRW {
+        let usdlike_quote = UsdlikeQuote::from_quote_currency(quote).or_else(|| {
+            if quote == QuoteCurrency::USD || quote == QuoteCurrency::KRW {
                 Some(UsdlikeQuote::USDT)
             } else {
                 None
-            });
+            }
+        });
 
         let mid_denom = DenominatedPrices {
             usdlike: usdlike_quote.map(|q| UsdlikePrice::new(price, q)),
@@ -498,7 +514,9 @@ impl PremiumMatrix {
             raw: ask,
             original_quote: quote,
         };
-        self.update_price_with_denominations(exchange, mid_denom, bid_denom, ask_denom, bid_size, ask_size);
+        self.update_price_with_denominations(
+            exchange, mid_denom, bid_denom, ask_denom, bid_size, ask_size,
+        );
     }
 
     /// Update price for an exchange with full multi-denomination support.
@@ -521,8 +539,16 @@ impl PremiumMatrix {
 
         // Preserve previous depth values if new ones are zero
         let (final_bid_size, final_ask_size) = if let Some(existing) = self.prices.get(&key) {
-            let new_bid_size = if bid_size.0 == 0 { existing.bid_size } else { bid_size };
-            let new_ask_size = if ask_size.0 == 0 { existing.ask_size } else { ask_size };
+            let new_bid_size = if bid_size.0 == 0 {
+                existing.bid_size
+            } else {
+                bid_size
+            };
+            let new_ask_size = if ask_size.0 == 0 {
+                existing.ask_size
+            } else {
+                ask_size
+            };
             (new_bid_size, new_ask_size)
         } else {
             (bid_size, ask_size)
@@ -548,17 +574,23 @@ impl PremiumMatrix {
 
     /// Get USDlike-denominated price for an exchange.
     pub fn get_usdlike_price(&self, exchange: Exchange) -> Option<UsdlikePrice> {
-        self.prices.get(&(exchange as u16)).and_then(|e| e.mid.usdlike)
+        self.prices
+            .get(&(exchange as u16))
+            .and_then(|e| e.mid.usdlike)
     }
 
     /// Get USDT-denominated price for an exchange (legacy compatibility).
     pub fn get_usdt_price(&self, exchange: Exchange) -> Option<FixedPoint> {
-        self.prices.get(&(exchange as u16)).and_then(|e| e.mid.usdlike.map(|p| p.price))
+        self.prices
+            .get(&(exchange as u16))
+            .and_then(|e| e.mid.usdlike.map(|p| p.price))
     }
 
     /// Get USDC-denominated price for an exchange (legacy compatibility).
     pub fn get_usdc_price(&self, exchange: Exchange) -> Option<FixedPoint> {
-        self.prices.get(&(exchange as u16)).and_then(|e| e.mid.usdlike.map(|p| p.price))
+        self.prices
+            .get(&(exchange as u16))
+            .and_then(|e| e.mid.usdlike.map(|p| p.price))
     }
 
     /// Get USD-denominated price for an exchange.
@@ -567,23 +599,37 @@ impl PremiumMatrix {
     }
 
     /// Get price for an exchange with specific quote currency (legacy).
-    pub fn get_price_with_quote(&self, exchange: Exchange, _quote: QuoteCurrency) -> Option<FixedPoint> {
+    pub fn get_price_with_quote(
+        &self,
+        exchange: Exchange,
+        _quote: QuoteCurrency,
+    ) -> Option<FixedPoint> {
         self.get_price(exchange)
     }
 
     /// Get bid price for an exchange (raw).
-    pub fn get_bid_with_quote(&self, exchange: Exchange, _quote: QuoteCurrency) -> Option<FixedPoint> {
+    pub fn get_bid_with_quote(
+        &self,
+        exchange: Exchange,
+        _quote: QuoteCurrency,
+    ) -> Option<FixedPoint> {
         self.prices.get(&(exchange as u16)).map(|e| e.bid.raw)
     }
 
     /// Get ask price for an exchange (raw).
-    pub fn get_ask_with_quote(&self, exchange: Exchange, _quote: QuoteCurrency) -> Option<FixedPoint> {
+    pub fn get_ask_with_quote(
+        &self,
+        exchange: Exchange,
+        _quote: QuoteCurrency,
+    ) -> Option<FixedPoint> {
         self.prices.get(&(exchange as u16)).map(|e| e.ask.raw)
     }
 
     /// Get quote currency for an exchange.
     pub fn get_quote(&self, exchange: Exchange) -> Option<QuoteCurrency> {
-        self.prices.get(&(exchange as u16)).map(|e| e.mid.original_quote)
+        self.prices
+            .get(&(exchange as u16))
+            .map(|e| e.mid.original_quote)
     }
 
     // ============ Denomination-specific premium methods ============
@@ -610,8 +656,12 @@ impl PremiumMatrix {
         };
 
         // Convert KRW prices to target quote if needed
-        let buy_usdlike = buy_entry.ask.to_usdlike(target_quote, rates, buy_exchange)?;
-        let sell_usdlike = sell_entry.bid.to_usdlike(target_quote, rates, sell_exchange)?;
+        let buy_usdlike = buy_entry
+            .ask
+            .to_usdlike(target_quote, rates, buy_exchange)?;
+        let sell_usdlike = sell_entry
+            .bid
+            .to_usdlike(target_quote, rates, sell_exchange)?;
 
         let premium = FixedPoint::premium_bps(buy_usdlike.price, sell_usdlike.price);
         Some((premium, target_quote))
@@ -626,7 +676,10 @@ impl PremiumMatrix {
         let buy_ask_usdlike = buy_entry.ask.usdlike?;
         let sell_bid_usdlike = sell_entry.bid.usdlike?;
 
-        Some(FixedPoint::premium_bps(buy_ask_usdlike.price, sell_bid_usdlike.price))
+        Some(FixedPoint::premium_bps(
+            buy_ask_usdlike.price,
+            sell_bid_usdlike.price,
+        ))
     }
 
     /// Calculate USDC premium between buy and sell exchanges (legacy compatibility).
@@ -676,10 +729,9 @@ impl PremiumMatrix {
                     let premium = FixedPoint::premium_bps(buy_ask, sell_bid);
 
                     if best.is_none() || premium > best.as_ref().unwrap().2 {
-                        if let (Some(buy_ex), Some(sell_ex)) = (
-                            Exchange::from_id(buy_ex_id),
-                            Exchange::from_id(sell_ex_id),
-                        ) {
+                        if let (Some(buy_ex), Some(sell_ex)) =
+                            (Exchange::from_id(buy_ex_id), Exchange::from_id(sell_ex_id))
+                        {
                             best = Some((buy_ex, sell_ex, premium));
                         }
                     }
@@ -699,7 +751,9 @@ impl PremiumMatrix {
     }
 
     /// Get all premium pairs with quote currencies (using USDlike prices).
-    pub fn all_premiums_with_quotes(&self) -> Vec<(Exchange, Exchange, QuoteCurrency, QuoteCurrency, i32)> {
+    pub fn all_premiums_with_quotes(
+        &self,
+    ) -> Vec<(Exchange, Exchange, QuoteCurrency, QuoteCurrency, i32)> {
         let mut result = Vec::new();
 
         for (&buy_ex_id, buy_entry) in &self.prices {
@@ -708,15 +762,20 @@ impl PremiumMatrix {
                     continue;
                 }
 
-                if let (Some(buy_ex), Some(sell_ex)) = (
-                    Exchange::from_id(buy_ex_id),
-                    Exchange::from_id(sell_ex_id),
-                ) {
+                if let (Some(buy_ex), Some(sell_ex)) =
+                    (Exchange::from_id(buy_ex_id), Exchange::from_id(sell_ex_id))
+                {
                     let buy_ask = buy_entry.ask.usdlike.map(|p| p.price);
                     let sell_bid = sell_entry.bid.usdlike.map(|p| p.price);
                     if let (Some(buy_ask), Some(sell_bid)) = (buy_ask, sell_bid) {
                         let premium = FixedPoint::premium_bps(buy_ask, sell_bid);
-                        result.push((buy_ex, sell_ex, buy_entry.mid.original_quote, sell_entry.mid.original_quote, premium));
+                        result.push((
+                            buy_ex,
+                            sell_ex,
+                            buy_entry.mid.original_quote,
+                            sell_entry.mid.original_quote,
+                            premium,
+                        ));
                     }
                 }
             }
@@ -726,18 +785,44 @@ impl PremiumMatrix {
     }
 
     /// Get all premium pairs with bid/ask prices (using USDlike).
-    pub fn all_premiums_with_bid_ask(&self) -> Vec<(Exchange, Exchange, QuoteCurrency, QuoteCurrency, FixedPoint, FixedPoint, i32)> {
+    pub fn all_premiums_with_bid_ask(
+        &self,
+    ) -> Vec<(
+        Exchange,
+        Exchange,
+        QuoteCurrency,
+        QuoteCurrency,
+        FixedPoint,
+        FixedPoint,
+        i32,
+    )> {
         self.all_premiums_with_depth()
             .into_iter()
-            .map(|(buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, _, _, premium)| {
-                (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, premium)
-            })
+            .map(
+                |(buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, _, _, premium)| {
+                    (
+                        buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, premium,
+                    )
+                },
+            )
             .collect()
     }
 
     /// Get all premium pairs with full depth information.
     /// Now returns USDlike-denominated prices for accurate comparison.
-    pub fn all_premiums_with_depth(&self) -> Vec<(Exchange, Exchange, QuoteCurrency, QuoteCurrency, FixedPoint, FixedPoint, FixedPoint, FixedPoint, i32)> {
+    pub fn all_premiums_with_depth(
+        &self,
+    ) -> Vec<(
+        Exchange,
+        Exchange,
+        QuoteCurrency,
+        QuoteCurrency,
+        FixedPoint,
+        FixedPoint,
+        FixedPoint,
+        FixedPoint,
+        i32,
+    )> {
         let mut result = Vec::new();
 
         for (&buy_ex_id, buy_entry) in &self.prices {
@@ -746,20 +831,23 @@ impl PremiumMatrix {
                     continue;
                 }
 
-                if let (Some(buy_ex), Some(sell_ex)) = (
-                    Exchange::from_id(buy_ex_id),
-                    Exchange::from_id(sell_ex_id),
-                ) {
+                if let (Some(buy_ex), Some(sell_ex)) =
+                    (Exchange::from_id(buy_ex_id), Exchange::from_id(sell_ex_id))
+                {
                     let buy_ask = buy_entry.ask.usdlike.map(|p| p.price);
                     let sell_bid = sell_entry.bid.usdlike.map(|p| p.price);
                     if let (Some(buy_ask), Some(sell_bid)) = (buy_ask, sell_bid) {
                         let premium = FixedPoint::premium_bps(buy_ask, sell_bid);
                         result.push((
-                            buy_ex, sell_ex,
-                            buy_entry.mid.original_quote, sell_entry.mid.original_quote,
-                            buy_ask, sell_bid,
-                            buy_entry.ask_size, sell_entry.bid_size,
-                            premium
+                            buy_ex,
+                            sell_ex,
+                            buy_entry.mid.original_quote,
+                            sell_entry.mid.original_quote,
+                            buy_ask,
+                            sell_bid,
+                            buy_entry.ask_size,
+                            sell_entry.bid_size,
+                            premium,
                         ));
                     }
                 }
@@ -775,14 +863,21 @@ impl PremiumMatrix {
     /// For KRW ↔ overseas opportunities, KRW prices are converted to the overseas market's
     /// quote currency (USDT or USDC) using `to_usdlike()`.
     #[allow(clippy::type_complexity)]
-    pub fn all_premiums_multi_denomination(&self, rates: &ConversionRates) -> Vec<(
-        Exchange, Exchange,
-        QuoteCurrency, QuoteCurrency,
-        FixedPoint, FixedPoint,   // buy_ask (USDlike), sell_bid (USDlike)
-        FixedPoint, FixedPoint,   // bid_size, ask_size
-        i32,                      // usdlike_premium (same as tether/usdc)
-        i32,                      // (unused, kept for compatibility)
-        i32,                      // kimchi_premium
+    pub fn all_premiums_multi_denomination(
+        &self,
+        rates: &ConversionRates,
+    ) -> Vec<(
+        Exchange,
+        Exchange,
+        QuoteCurrency,
+        QuoteCurrency,
+        FixedPoint,
+        FixedPoint, // buy_ask (USDlike), sell_bid (USDlike)
+        FixedPoint,
+        FixedPoint, // bid_size, ask_size
+        i32,        // usdlike_premium (same as tether/usdc)
+        i32,        // (unused, kept for compatibility)
+        i32,        // kimchi_premium
     )> {
         let mut result = Vec::new();
 
@@ -792,10 +887,9 @@ impl PremiumMatrix {
                     continue;
                 }
 
-                if let (Some(buy_ex), Some(sell_ex)) = (
-                    Exchange::from_id(buy_ex_id),
-                    Exchange::from_id(sell_ex_id),
-                ) {
+                if let (Some(buy_ex), Some(sell_ex)) =
+                    (Exchange::from_id(buy_ex_id), Exchange::from_id(sell_ex_id))
+                {
                     // Determine target quote from overseas market (non-KRW side)
                     let target_quote = if buy_entry.ask.original_quote == QuoteCurrency::KRW {
                         // Buy side is KRW, use sell side's quote
@@ -809,22 +903,23 @@ impl PremiumMatrix {
                     };
 
                     // Calculate USDlike premium with proper conversion
-                    let (usdlike_premium, buy_ask_usdlike, sell_bid_usdlike) = if let Some(target) = target_quote {
-                        // Convert KRW prices to target quote if needed
-                        let buy_usdlike = buy_entry.ask.to_usdlike(target, rates, buy_ex);
-                        let sell_usdlike = sell_entry.bid.to_usdlike(target, rates, sell_ex);
+                    let (usdlike_premium, buy_ask_usdlike, sell_bid_usdlike) =
+                        if let Some(target) = target_quote {
+                            // Convert KRW prices to target quote if needed
+                            let buy_usdlike = buy_entry.ask.to_usdlike(target, rates, buy_ex);
+                            let sell_usdlike = sell_entry.bid.to_usdlike(target, rates, sell_ex);
 
-                        match (buy_usdlike, sell_usdlike) {
-                            (Some(buy), Some(sell)) => {
-                                let premium = FixedPoint::premium_bps(buy.price, sell.price);
-                                (premium, buy.price, sell.price)
+                            match (buy_usdlike, sell_usdlike) {
+                                (Some(buy), Some(sell)) => {
+                                    let premium = FixedPoint::premium_bps(buy.price, sell.price);
+                                    (premium, buy.price, sell.price)
+                                }
+                                _ => (0, FixedPoint(0), FixedPoint(0)),
                             }
-                            _ => (0, FixedPoint(0), FixedPoint(0)),
-                        }
-                    } else {
-                        // No valid target quote (shouldn't happen normally)
-                        (0, FixedPoint(0), FixedPoint(0))
-                    };
+                        } else {
+                            // No valid target quote (shouldn't happen normally)
+                            (0, FixedPoint(0), FixedPoint(0))
+                        };
 
                     // Kimchi premium (USD via forex)
                     let kimchi_premium = match (buy_entry.ask.usd, sell_entry.bid.usd) {
@@ -833,10 +928,14 @@ impl PremiumMatrix {
                     };
 
                     result.push((
-                        buy_ex, sell_ex,
-                        buy_entry.mid.original_quote, sell_entry.mid.original_quote,
-                        buy_ask_usdlike, sell_bid_usdlike,
-                        buy_entry.ask_size, sell_entry.bid_size,
+                        buy_ex,
+                        sell_ex,
+                        buy_entry.mid.original_quote,
+                        sell_entry.mid.original_quote,
+                        buy_ask_usdlike,
+                        sell_bid_usdlike,
+                        buy_entry.ask_size,
+                        sell_entry.bid_size,
                         usdlike_premium,
                         usdlike_premium, // Same value for backward compatibility
                         kimchi_premium,

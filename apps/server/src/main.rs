@@ -1664,7 +1664,7 @@ async fn spawn_live_feeds(
 async fn run_market_discovery(
     state: SharedState,
     broadcast_tx: BroadcastSender,
-    symbol_mappings: Arc<SymbolMappings>,
+    _symbol_mappings: Arc<SymbolMappings>,
 ) {
     debug!("Starting market discovery loop");
 

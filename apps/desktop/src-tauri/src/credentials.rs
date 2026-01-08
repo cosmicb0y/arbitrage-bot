@@ -47,6 +47,7 @@ pub struct Credentials {
 
 impl Credentials {
     /// Check if any credentials are configured.
+    #[allow(dead_code)]
     pub fn has_any(&self) -> bool {
         !self.binance.api_key.is_empty()
             || self.coinbase.is_configured()
@@ -57,6 +58,7 @@ impl Credentials {
     }
 
     /// Get configured exchanges.
+    #[allow(dead_code)]
     pub fn configured_exchanges(&self) -> Vec<String> {
         let mut exchanges = Vec::new();
         if !self.binance.api_key.is_empty() {
@@ -170,18 +172,39 @@ pub fn save_credentials(creds: &Credentials) -> Result<(), String> {
 
     // Update with new credentials
     env_vars.insert("BINANCE_API_KEY".to_string(), creds.binance.api_key.clone());
-    env_vars.insert("BINANCE_SECRET_KEY".to_string(), creds.binance.secret_key.clone());
-    env_vars.insert("COINBASE_API_KEY_ID".to_string(), creds.coinbase.api_key_id.clone());
+    env_vars.insert(
+        "BINANCE_SECRET_KEY".to_string(),
+        creds.binance.secret_key.clone(),
+    );
+    env_vars.insert(
+        "COINBASE_API_KEY_ID".to_string(),
+        creds.coinbase.api_key_id.clone(),
+    );
     // Escape newlines for .env file storage
-    env_vars.insert("COINBASE_SECRET_KEY".to_string(), creds.coinbase.secret_key.replace("\n", "\\n"));
+    env_vars.insert(
+        "COINBASE_SECRET_KEY".to_string(),
+        creds.coinbase.secret_key.replace("\n", "\\n"),
+    );
     env_vars.insert("UPBIT_ACCESS_KEY".to_string(), creds.upbit.api_key.clone());
-    env_vars.insert("UPBIT_SECRET_KEY".to_string(), creds.upbit.secret_key.clone());
+    env_vars.insert(
+        "UPBIT_SECRET_KEY".to_string(),
+        creds.upbit.secret_key.clone(),
+    );
     env_vars.insert("BITHUMB_API_KEY".to_string(), creds.bithumb.api_key.clone());
-    env_vars.insert("BITHUMB_SECRET_KEY".to_string(), creds.bithumb.secret_key.clone());
+    env_vars.insert(
+        "BITHUMB_SECRET_KEY".to_string(),
+        creds.bithumb.secret_key.clone(),
+    );
     env_vars.insert("BYBIT_API_KEY".to_string(), creds.bybit.api_key.clone());
-    env_vars.insert("BYBIT_SECRET_KEY".to_string(), creds.bybit.secret_key.clone());
+    env_vars.insert(
+        "BYBIT_SECRET_KEY".to_string(),
+        creds.bybit.secret_key.clone(),
+    );
     env_vars.insert("GATEIO_API_KEY".to_string(), creds.gateio.api_key.clone());
-    env_vars.insert("GATEIO_SECRET_KEY".to_string(), creds.gateio.secret_key.clone());
+    env_vars.insert(
+        "GATEIO_SECRET_KEY".to_string(),
+        creds.gateio.secret_key.clone(),
+    );
 
     // Write to file
     // Note: Coinbase secret key uses double quotes to preserve escaped \n in .env format
@@ -252,7 +275,7 @@ pub fn get_masked_credentials() -> Credentials {
         } else if s.len() <= 8 {
             "*".repeat(s.len())
         } else {
-            format!("{}...{}", &s[..4], &s[s.len()-4..])
+            format!("{}...{}", &s[..4], &s[s.len() - 4..])
         }
     }
 

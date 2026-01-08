@@ -301,6 +301,7 @@ pub struct GateIORestFetcher;
 impl GateIORestFetcher {
     const BASE_URL: &'static str = "https://api.gateio.ws";
     /// Max concurrent individual ticker requests to avoid rate limiting
+    #[allow(dead_code)]
     const MAX_CONCURRENT_DEPTH_FETCHES: usize = 20;
 
     /// Fetch a single ticker with depth info.

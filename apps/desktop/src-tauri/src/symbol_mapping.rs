@@ -34,6 +34,7 @@ pub struct SymbolMappings {
 
 impl SymbolMappings {
     /// Get all mappings for a specific exchange.
+    #[allow(dead_code)]
     pub fn for_exchange(&self, exchange: &str) -> Vec<&SymbolMapping> {
         self.mappings
             .iter()
@@ -42,6 +43,7 @@ impl SymbolMappings {
     }
 
     /// Get mapping for a specific exchange and symbol.
+    #[allow(dead_code)]
     pub fn get(&self, exchange: &str, symbol: &str) -> Option<&SymbolMapping> {
         self.mappings.iter().find(|m| {
             m.exchange.eq_ignore_ascii_case(exchange) && m.symbol.eq_ignore_ascii_case(symbol)
@@ -49,12 +51,14 @@ impl SymbolMappings {
     }
 
     /// Check if a symbol should be excluded from arbitrage for an exchange.
+    #[allow(dead_code)]
     pub fn is_excluded(&self, exchange: &str, symbol: &str) -> bool {
         self.get(exchange, symbol).map_or(false, |m| m.exclude)
     }
 
     /// Get the canonical name for a symbol on an exchange.
     /// Returns the original symbol if no mapping exists.
+    #[allow(dead_code)]
     pub fn canonical_name(&self, exchange: &str, symbol: &str) -> String {
         self.get(exchange, symbol)
             .map(|m| m.canonical_name.clone())
@@ -149,6 +153,7 @@ pub fn save_mappings(mappings: &SymbolMappings) -> Result<(), String> {
 
 /// Build a lookup map for quick canonical name resolution.
 /// Returns: HashMap<(exchange, symbol), canonical_name>
+#[allow(dead_code)]
 pub fn build_lookup_map(mappings: &SymbolMappings) -> HashMap<(String, String), String> {
     mappings
         .mappings
@@ -205,7 +210,10 @@ mod tests {
             notes: None,
         });
         assert_eq!(mappings.mappings.len(), 1);
-        assert_eq!(mappings.get("Binance", "GTC").unwrap().canonical_name, "Gitcoin_v2");
+        assert_eq!(
+            mappings.get("Binance", "GTC").unwrap().canonical_name,
+            "Gitcoin_v2"
+        );
         assert!(mappings.get("Binance", "GTC").unwrap().exclude);
     }
 

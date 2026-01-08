@@ -45,6 +45,7 @@ impl BotStats {
         self.opportunities_detected.fetch_add(1, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)]
     pub fn record_trade(&self, profit_bps: i32) {
         self.trades_executed.fetch_add(1, Ordering::Relaxed);
         if profit_bps > 0 {
@@ -78,6 +79,7 @@ pub struct StatsSummary {
     pub price_updates: u64,
     pub opportunities_detected: u64,
     pub trades_executed: u64,
+    #[allow(dead_code)]
     pub total_profit_bps: u64,
     pub uptime_secs: u64,
 }
@@ -110,6 +112,7 @@ pub struct ExchangeStablecoinPrices {
 
 impl ExchangeStablecoinPrices {
     /// Get effective USDT/USD price (direct or derived from cross pairs).
+    #[allow(dead_code)]
     pub fn get_usdt_usd(&self, fallback_usdc_usd: f64) -> f64 {
         // 1. Direct USDT/USD
         if let Some(price) = self.usdt_usd {
@@ -133,6 +136,7 @@ impl ExchangeStablecoinPrices {
     }
 
     /// Get effective USDC/USD price (direct or derived from cross pairs).
+    #[allow(dead_code)]
     pub fn get_usdc_usd(&self, fallback_usdt_usd: f64) -> f64 {
         // 1. Direct USDC/USD
         if let Some(price) = self.usdc_usd {
@@ -159,12 +163,14 @@ impl ExchangeStablecoinPrices {
 /// Application state shared across components.
 pub struct AppState {
     /// Configuration.
+    #[allow(dead_code)]
     pub config: RwLock<AppConfig>,
     /// Price aggregator.
     pub prices: PriceAggregator,
     /// Opportunity detector.
     pub detector: RwLock<OpportunityDetector>,
     /// Premium matrices per pair.
+    #[allow(dead_code)]
     pub matrices: DashMap<u32, PremiumMatrix>,
     /// Recent opportunities.
     pub opportunities: RwLock<Vec<ArbitrageOpportunity>>,
@@ -320,6 +326,7 @@ impl AppState {
     }
 
     /// Update USDC/USDT price from exchange feed.
+    #[allow(dead_code)]
     pub fn update_usdc_usdt_price(&self, price: FixedPoint) {
         self.usdc_usdt_price.store(price.0, Ordering::Relaxed);
     }
@@ -378,6 +385,7 @@ impl AppState {
     }
 
     /// Get stablecoin prices for an exchange.
+    #[allow(dead_code)]
     pub fn get_exchange_stablecoin_prices(&self, exchange: Exchange) -> ExchangeStablecoinPrices {
         self.stablecoin_prices
             .get(&exchange)
@@ -387,6 +395,7 @@ impl AppState {
 
     /// Get USDT/USD price for a specific exchange.
     /// Falls back to global average if not available.
+    #[allow(dead_code)]
     pub fn get_usdt_usd_for_exchange(&self, exchange: Exchange) -> f64 {
         let prices = self.get_exchange_stablecoin_prices(exchange);
         let global_usdc_usd = self.get_usdc_usd_price().to_f64();
@@ -395,6 +404,7 @@ impl AppState {
 
     /// Get USDC/USD price for a specific exchange.
     /// Falls back to global average if not available.
+    #[allow(dead_code)]
     pub fn get_usdc_usd_for_exchange(&self, exchange: Exchange) -> f64 {
         let prices = self.get_exchange_stablecoin_prices(exchange);
         let global_usdt_usd = self.get_usdt_usd_price().to_f64();
@@ -402,6 +412,7 @@ impl AppState {
     }
 
     /// Get stablecoin/USD price for a specific exchange and quote currency.
+    #[allow(dead_code)]
     pub fn get_stablecoin_usd_for_exchange(&self, exchange: Exchange, quote: QuoteCurrency) -> f64 {
         match quote {
             QuoteCurrency::USDT => self.get_usdt_usd_for_exchange(exchange),
@@ -569,6 +580,7 @@ impl AppState {
     }
 
     /// Get orderbook for an exchange and pair.
+    #[allow(dead_code)]
     pub fn get_orderbook(&self, exchange: Exchange, pair_id: u32) -> Option<OrderbookCache> {
         self.orderbook_cache.get(&(exchange, pair_id)).map(|v| v.clone())
     }
@@ -583,6 +595,7 @@ impl AppState {
 
     /// Get orderbooks for both sides of an arbitrage opportunity.
     /// Returns (buy_orderbook, sell_orderbook) if both are available.
+    #[allow(dead_code)]
     pub fn get_arbitrage_orderbooks(
         &self,
         buy_exchange: Exchange,
@@ -595,11 +608,13 @@ impl AppState {
     }
 
     /// Get fee manager for reading fees.
+    #[allow(dead_code)]
     pub async fn get_fee_manager(&self) -> tokio::sync::RwLockReadGuard<'_, FeeManager> {
         self.fee_manager.read().await
     }
 
     /// Update withdrawal fee for an asset (from exchange API).
+    #[allow(dead_code)]
     pub async fn update_withdrawal_fee(
         &self,
         exchange: Exchange,
@@ -613,6 +628,7 @@ impl AppState {
 
     /// Update price for a symbol (dynamic markets).
     /// Uses mid price as bid/ask when only price is available.
+    #[allow(dead_code)]
     pub async fn update_price_for_symbol(
         &self,
         exchange: Exchange,
@@ -623,6 +639,7 @@ impl AppState {
     }
 
     /// Update price for a symbol with bid/ask from orderbook.
+    #[allow(dead_code)]
     pub async fn update_price_for_symbol_with_bid_ask(
         &self,
         exchange: Exchange,
@@ -826,6 +843,7 @@ impl AppState {
     }
 
     /// Get recent opportunities.
+    #[allow(dead_code)]
     pub async fn recent_opportunities(&self) -> Vec<ArbitrageOpportunity> {
         self.opportunities.read().await.clone()
     }

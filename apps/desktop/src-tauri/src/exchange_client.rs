@@ -679,6 +679,7 @@ struct CoinbaseCurrencyDetails {
     currency_type: Option<String>,
     #[serde(default)]
     min_withdrawal_amount: Option<f64>,
+    #[allow(dead_code)]
     #[serde(default)]
     max_withdrawal_amount: Option<f64>,
 }
@@ -690,6 +691,7 @@ struct CoinbaseNetwork {
     status: String,
     #[serde(default)]
     min_withdrawal_amount: Option<f64>,
+    #[allow(dead_code)]
     #[serde(default)]
     max_withdrawal_amount: Option<f64>,
     #[serde(default)]
@@ -794,8 +796,10 @@ struct CoinbaseAccountsResponse {
 
 #[derive(Debug, Deserialize)]
 struct CoinbaseAccount {
+    #[allow(dead_code)]
     #[serde(default)]
     uuid: String,
+    #[allow(dead_code)]
     #[serde(default)]
     currency: String,
     #[serde(default)]
@@ -808,6 +812,7 @@ struct CoinbaseAccount {
 struct CoinbaseBalance {
     #[serde(default)]
     value: String,
+    #[allow(dead_code)]
     #[serde(default)]
     currency: String,
 }
@@ -1024,6 +1029,7 @@ struct BybitCoinInfoResult {
 struct BybitBalanceResponse {
     #[serde(rename = "retCode")]
     ret_code: i32,
+    #[allow(dead_code)]
     #[serde(rename = "retMsg")]
     ret_msg: String,
     result: BybitBalanceResult,
@@ -1036,6 +1042,7 @@ struct BybitBalanceResult {
 
 #[derive(Debug, Deserialize)]
 struct BybitAccountBalance {
+    #[allow(dead_code)]
     #[serde(rename = "accountType")]
     account_type: String,
     coin: Vec<BybitCoinBalance>,
@@ -1149,6 +1156,7 @@ pub async fn fetch_bybit_wallet_status() -> Result<Vec<AssetWalletStatus>, Strin
 struct BybitFundBalanceResponse {
     #[serde(rename = "retCode")]
     ret_code: i32,
+    #[allow(dead_code)]
     #[serde(rename = "retMsg")]
     ret_msg: String,
     result: BybitFundBalanceResult,
@@ -1165,6 +1173,7 @@ struct BybitFundCoin {
     coin: String,
     #[serde(rename = "walletBalance", default)]
     wallet_balance: String,
+    #[allow(dead_code)]
     #[serde(rename = "transferBalance", default)]
     transfer_balance: String,
 }
@@ -1174,6 +1183,7 @@ struct BybitFundCoin {
 struct BybitEarnResponse {
     #[serde(rename = "retCode")]
     ret_code: i32,
+    #[allow(dead_code)]
     #[serde(rename = "retMsg")]
     ret_msg: String,
     result: BybitEarnResult,
