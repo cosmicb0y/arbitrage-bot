@@ -34,8 +34,7 @@ arbitrage-bot/
 │   ├── feeds/          # WebSocket data collection
 │   ├── engine/         # Arbitrage detection
 │   ├── executor/       # Trade execution
-│   ├── alerts/         # Telegram notifications
-│   └── serialization/  # Binary serialization (unused)
+│   └── alerts/         # Telegram notifications
 ├── apps/
 │   ├── server/         # Headless server (main entry point)
 │   └── desktop/        # Tauri desktop app
@@ -130,7 +129,6 @@ alerts ──────────────┴─────────�
 | **engine**        | Arbitrage detection     | `PriceTick` stream     | `ArbitrageOpportunity` (premium, route)                  |
 | **executor**      | Order execution         | `ArbitrageOpportunity` | Trade execution                                          |
 | **alerts**        | Telegram notifications  | `ArbitrageOpportunity` | Telegram messages                                        |
-| **serialization** | Binary serialization    | core types             | Binary data (currently unused)                           |
 
 ### Module Details
 

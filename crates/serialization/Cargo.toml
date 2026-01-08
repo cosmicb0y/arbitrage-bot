@@ -1,8 +1,0 @@
-[package]
-name = "arbitrage-serialization"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-arbitrage-core = { path = "../core" }
-thiserror = { workspace = true }
