@@ -7,7 +7,16 @@ use arbitrage_feeds::{CommonMarkets, PriceAggregator};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::sync::RwLock; // Still needed for other fields
+
+/// Event sent when a price is updated.
+#[derive(Debug, Clone)]
+pub struct PriceUpdateEvent {
+    pub exchange: Exchange,
+    pub pair_id: u32,
+    pub symbol: String,
+}
 
 /// Statistics for the bot.
 #[derive(Debug, Default)]
@@ -208,14 +217,19 @@ pub struct AppState {
     orderbook_cache: DashMap<(Exchange, u32), OrderbookCache>,
     /// Fee manager for all exchanges.
     fee_manager: RwLock<FeeManager>,
+    /// Channel to notify detector of price updates.
+    price_update_tx: mpsc::Sender<PriceUpdateEvent>,
 }
 
 impl AppState {
     /// Create new application state.
-    pub fn new(config: AppConfig) -> Self {
+    /// Returns the state and a receiver for price update events.
+    pub fn new(config: AppConfig) -> (Self, mpsc::Receiver<PriceUpdateEvent>) {
         let detector_config: DetectorConfig = (&config.detector).into();
+        // Channel for price update notifications (bounded to prevent backpressure)
+        let (price_update_tx, price_update_rx) = mpsc::channel(1024);
 
-        Self {
+        let state = Self {
             config: RwLock::new(config),
             prices: PriceAggregator::new(),
             detector: OpportunityDetector::new(detector_config),
@@ -234,7 +248,9 @@ impl AppState {
             stablecoin_prices: DashMap::new(),
             orderbook_cache: DashMap::new(),
             fee_manager: RwLock::new(FeeManager::new()),
-        }
+            price_update_tx,
+        };
+        (state, price_update_rx)
     }
 
     /// Update USDT/KRW price from Upbit.
@@ -600,6 +616,13 @@ impl AppState {
         self.detector.update_price_with_bid_ask_and_raw(exchange, pair_id, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
 
         self.stats.record_price_update();
+
+        // Notify detector of price update (non-blocking)
+        let _ = self.price_update_tx.try_send(PriceUpdateEvent {
+            exchange,
+            pair_id,
+            symbol: symbol.to_string(),
+        });
     }
 
     /// Get cached orderbook depth for an exchange and symbol.
@@ -921,9 +944,13 @@ impl AppState {
 /// Shared state handle.
 pub type SharedState = Arc<AppState>;
 
-/// Create shared state.
-pub fn create_state(config: AppConfig) -> SharedState {
-    Arc::new(AppState::new(config))
+/// Receiver for price update events.
+pub type PriceUpdateReceiver = mpsc::Receiver<PriceUpdateEvent>;
+
+/// Create shared state and price update receiver.
+pub fn create_state(config: AppConfig) -> (SharedState, PriceUpdateReceiver) {
+    let (state, rx) = AppState::new(config);
+    (Arc::new(state), rx)
 }
 
 #[cfg(test)]
@@ -966,14 +993,14 @@ mod tests {
     #[tokio::test]
     async fn test_app_state_new() {
         let config = AppConfig::default();
-        let state = AppState::new(config);
+        let (state, _rx) = AppState::new(config);
         assert!(!state.is_running());
     }
 
     #[tokio::test]
     async fn test_app_state_start_stop() {
         let config = AppConfig::default();
-        let state = AppState::new(config);
+        let (state, _rx) = AppState::new(config);
 
         state.start();
         assert!(state.is_running());
@@ -985,7 +1012,7 @@ mod tests {
     #[tokio::test]
     async fn test_app_state_update_price() {
         let config = AppConfig::default();
-        let state = AppState::new(config);
+        let (state, _rx) = AppState::new(config);
 
         state
             .update_price(Exchange::Binance, 1, FixedPoint::from_f64(50000.0))
@@ -998,7 +1025,7 @@ mod tests {
     #[tokio::test]
     async fn test_shared_state() {
         let config = AppConfig::default();
-        let state = create_state(config);
+        let (state, _rx) = create_state(config);
 
         state.start();
         assert!(state.is_running());

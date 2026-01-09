@@ -14,7 +14,7 @@ use status_notifier::{StatusEvent, StatusNotifierHandle};
 
 use clap::Parser;
 use config::{AppConfig, ExecutionMode};
-use state::{create_state, SharedState};
+use state::{create_state, PriceUpdateEvent, SharedState};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -114,76 +114,60 @@ fn parse_mode(mode: &str) -> ExecutionMode {
     }
 }
 
-async fn run_detector_loop(
+/// Event-driven opportunity detector.
+///
+/// Reacts immediately to price update events from feed handlers.
+/// Only detects opportunities for the pair that had a price update.
+async fn run_event_driven_detector(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     notifier: Option<Arc<Notifier>>,
+    mut price_rx: mpsc::Receiver<PriceUpdateEvent>,
 ) {
-    debug!("Starting detector loop");
-
-    // Legacy hardcoded pair IDs for backwards compatibility
-    let legacy_pair_ids = vec![1u32, 2, 3]; // BTC, ETH, SOL
+    debug!("Starting event-driven detector");
 
     while state.is_running() {
-        // Get all registered pair_ids (includes dynamic markets from discovery)
-        let mut pair_ids = state.get_registered_pair_ids();
+        match price_rx.recv().await {
+            Some(event) => {
+                // Immediately detect opportunities for this pair
+                let opps = state.detect_opportunities(event.pair_id).await;
 
-        tracing::debug!(
-            pair_ids_count = pair_ids.len(),
-            "detector loop: registered pair_ids"
-        );
-
-        // Add legacy pair_ids if not already present
-        for &legacy_id in &legacy_pair_ids {
-            if !pair_ids.contains(&legacy_id) {
-                pair_ids.push(legacy_id);
-            }
-        }
-
-        // Detect and broadcast opportunities immediately per pair
-        // Collect all opportunities to clear inactive ones after
-        let mut all_opps = Vec::new();
-
-        for &pair_id in &pair_ids {
-            let opps = state.detect_opportunities(pair_id).await;
-
-            // Broadcast each opportunity immediately as it's detected
-            for opp in &opps {
-                tracing::debug!(
-                    "🎯 Opportunity: {} {:?} -> {:?} | Premium: {} bps | Buy: {} | Sell: {}",
-                    opp.asset.symbol,
-                    opp.source_exchange,
-                    opp.target_exchange,
-                    opp.premium_bps,
-                    opp.source_price,
-                    opp.target_price
-                );
-                ws_server::broadcast_opportunity(&broadcast_tx, &state, opp);
-            }
-
-            // Send Telegram alerts (notifier handles its own threshold filtering)
-            if let Some(ref notifier) = notifier {
+                // Broadcast each opportunity
                 for opp in &opps {
-                    if let Err(e) = notifier.process_opportunity(opp).await {
-                        tracing::warn!("Failed to send Telegram alert: {}", e);
+                    tracing::debug!(
+                        "🎯 Opportunity: {} {:?} -> {:?} | Premium: {} bps | Buy: {} | Sell: {}",
+                        opp.asset.symbol,
+                        opp.source_exchange,
+                        opp.target_exchange,
+                        opp.premium_bps,
+                        opp.source_price,
+                        opp.target_price
+                    );
+                    ws_server::broadcast_opportunity(&broadcast_tx, &state, opp);
+                }
+
+                // Send Telegram alerts
+                if let Some(ref notifier) = notifier {
+                    for opp in &opps {
+                        if let Err(e) = notifier.process_opportunity(opp).await {
+                            tracing::warn!("Failed to send Telegram alert: {}", e);
+                        }
+                    }
+
+                    // Clear opportunities that fell below threshold
+                    if let Err(e) = notifier.clear_missing_opportunities(&opps).await {
+                        tracing::warn!("Failed to clear missing opportunities: {}", e);
                     }
                 }
             }
-
-            all_opps.extend(opps);
-        }
-
-        // Clear opportunities that fell below threshold
-        if let Some(ref notifier) = notifier {
-            if let Err(e) = notifier.clear_missing_opportunities(&all_opps).await {
-                tracing::warn!("Failed to clear missing opportunities: {}", e);
+            None => {
+                // Channel closed, exit
+                break;
             }
         }
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    debug!("Detector loop stopped");
+    debug!("Event-driven detector stopped");
 }
 
 async fn run_price_simulator(state: SharedState, broadcast_tx: BroadcastSender) {
@@ -1023,8 +1007,8 @@ async fn main() {
     config.execution.mode = parse_mode(&args.mode);
     config.log_level = args.log_level.clone();
 
-    // Create shared state
-    let state = create_state(config);
+    // Create shared state and price update receiver
+    let (state, price_update_rx) = create_state(config);
     state.start();
 
     // Start WebSocket server for clients (Tauri app) - must start first to get broadcast_tx
@@ -1124,12 +1108,12 @@ async fn main() {
         notifier.try_send(StatusEvent::ServerStarted);
     }
 
-    // Spawn background tasks with broadcast sender
+    // Spawn event-driven detector with price update receiver
     let detector_state = state.clone();
     let detector_broadcast = broadcast_tx.clone();
     let detector_notifier = notifier.clone();
     let detector_handle = tokio::spawn(async move {
-        run_detector_loop(detector_state, detector_broadcast, detector_notifier).await;
+        run_event_driven_detector(detector_state, detector_broadcast, detector_notifier, price_update_rx).await;
     });
 
     let stats_state = state.clone();
@@ -1235,7 +1219,7 @@ mod tests {
     #[tokio::test]
     async fn test_state_integration() {
         let config = AppConfig::default();
-        let state = create_state(config);
+        let (state, _price_rx) = create_state(config);
 
         state.start();
         assert!(state.is_running());
@@ -1249,7 +1233,7 @@ mod tests {
             .await;
 
         // Detect
-        let opps = state.detect_opportunities(1).await;
+        let _opps = state.detect_opportunities(1).await;
         // May or may not have opportunities depending on threshold
 
         state.stop();
