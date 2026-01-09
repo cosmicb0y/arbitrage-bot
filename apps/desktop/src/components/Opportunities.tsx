@@ -531,9 +531,39 @@ function Opportunities() {
                   </td>
                   <td className="p-4 text-right font-mono">
                     {(() => {
+                      // Use server-provided raw price if available, otherwise fallback to conversion
+                      const serverRawPrice = opp.source_raw_price;
+                      const hasServerRaw = serverRawPrice != null && serverRawPrice > 0;
+                      const quote = opp.source_quote;
+
+                      if (hasServerRaw) {
+                        // Use server-provided raw price (no conversion needed)
+                        const isKRW = quote === "KRW";
+                        const isUSDT = quote === "USDT";
+                        const isUSDC = quote === "USDC";
+
+                        return (
+                          <div className="flex flex-col items-end">
+                            <span className={getChangeClass(changes?.source)}>
+                              {isKRW
+                                ? `₩${formatKrwPrice(serverRawPrice)}`
+                                : isUSDT
+                                  ? `${formatPrice(serverRawPrice)} USDT`
+                                  : isUSDC
+                                    ? `${formatPrice(serverRawPrice)} USDC`
+                                    : `$${formatPrice(serverRawPrice)}`
+                              }
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              ${formatPrice(opp.source_price)}
+                            </span>
+                          </div>
+                        );
+                      }
+
+                      // Fallback: use conversion or USD only
                       const rawPrice = convertToRawPrice(opp.source_price, opp.source_exchange, opp.source_quote);
                       if (rawPrice) {
-                        // Show raw price first, then USD conversion
                         const isKRW = rawPrice.symbol === "KRW";
                         return (
                           <div className="flex flex-col items-end">
@@ -549,6 +579,7 @@ function Opportunities() {
                           </div>
                         );
                       }
+
                       // USD quote: show USD only
                       return (
                         <span className={getChangeClass(changes?.source)}>
@@ -559,9 +590,39 @@ function Opportunities() {
                   </td>
                   <td className="p-4 text-right font-mono">
                     {(() => {
+                      // Use server-provided raw price if available, otherwise fallback to conversion
+                      const serverRawPrice = opp.target_raw_price;
+                      const hasServerRaw = serverRawPrice != null && serverRawPrice > 0;
+                      const quote = opp.target_quote;
+
+                      if (hasServerRaw) {
+                        // Use server-provided raw price (no conversion needed)
+                        const isKRW = quote === "KRW";
+                        const isUSDT = quote === "USDT";
+                        const isUSDC = quote === "USDC";
+
+                        return (
+                          <div className="flex flex-col items-end">
+                            <span className={getChangeClass(changes?.target)}>
+                              {isKRW
+                                ? `₩${formatKrwPrice(serverRawPrice)}`
+                                : isUSDT
+                                  ? `${formatPrice(serverRawPrice)} USDT`
+                                  : isUSDC
+                                    ? `${formatPrice(serverRawPrice)} USDC`
+                                    : `$${formatPrice(serverRawPrice)}`
+                              }
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              ${formatPrice(opp.target_price)}
+                            </span>
+                          </div>
+                        );
+                      }
+
+                      // Fallback: use conversion or USD only
                       const rawPrice = convertToRawPrice(opp.target_price, opp.target_exchange, opp.target_quote);
                       if (rawPrice) {
-                        // Show raw price first, then USD conversion
                         const isKRW = rawPrice.symbol === "KRW";
                         return (
                           <div className="flex flex-col items-end">
@@ -577,6 +638,7 @@ function Opportunities() {
                           </div>
                         );
                       }
+
                       // USD quote: show USD only
                       return (
                         <span className={getChangeClass(changes?.target)}>

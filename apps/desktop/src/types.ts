@@ -61,6 +61,10 @@ export interface ArbitrageOpportunity {
   optimal_profit?: number;
   // Reason for optimal_size value: "ok" | "no_orderbook" | "not_profitable"
   optimal_size_reason?: "ok" | "no_orderbook" | "not_profitable";
+  // Raw price from source exchange in original quote currency (e.g., KRW for Korean exchanges)
+  source_raw_price?: number;
+  // Raw price from target exchange in original quote currency
+  target_raw_price?: number;
 }
 
 export interface BotStats {

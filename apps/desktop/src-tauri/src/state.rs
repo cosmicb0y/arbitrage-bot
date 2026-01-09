@@ -110,6 +110,12 @@ pub struct OpportunityData {
     /// Reason for optimal_size value: "ok" | "no_orderbook" | "not_profitable"
     #[serde(default)]
     pub optimal_size_reason: Option<String>,
+    /// Raw price from source exchange in original quote currency (e.g., KRW for Korean exchanges)
+    #[serde(default)]
+    pub source_raw_price: f64,
+    /// Raw price from target exchange in original quote currency
+    #[serde(default)]
+    pub target_raw_price: f64,
 }
 
 /// Execution configuration.
