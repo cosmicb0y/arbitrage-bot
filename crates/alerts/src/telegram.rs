@@ -543,6 +543,30 @@ fn format_timestamp(timestamp_ms: u64) -> String {
     }
 }
 
+/// Format price for display, preferring raw price if available.
+/// Falls back to conversion-based display if raw price is not provided.
+fn format_price_display(
+    raw_price: Option<f64>,
+    usd_price: f64,
+    exchange: &str,
+    quote: &str,
+    rates: &ExchangeRates,
+) -> String {
+    if let Some(raw) = raw_price {
+        // Use the actual raw price from the exchange directly
+        let raw_str = match quote {
+            "KRW" => format_krw_price(raw),
+            "USDT" => format_stablecoin_price(raw, "USDT"),
+            "USDC" => format_stablecoin_price(raw, "USDC"),
+            _ => format_price(raw),
+        };
+        format!("{}\n        ({})", raw_str, format_price(usd_price))
+    } else {
+        // Fallback: convert USD price back to raw quote currency
+        format_price_with_raw(usd_price, exchange, quote, rates)
+    }
+}
+
 /// Format an opportunity as an alert message.
 pub fn format_alert_message(
     symbol: &str,
@@ -552,6 +576,8 @@ pub fn format_alert_message(
     target_quote: &str,
     source_price: f64,
     target_price: f64,
+    source_raw_price: Option<f64>,
+    target_raw_price: Option<f64>,
     premium_bps: i32,
     optimal_size: Option<f64>,
     optimal_profit: Option<f64>,
@@ -568,12 +594,12 @@ pub fn format_alert_message(
     let buy_market = format!("{}/{}", symbol, source_quote);
     let sell_market = format!("{}/{}", symbol, target_quote);
 
-    // Format prices with raw quote currency if rates available
+    // Format prices: use raw prices directly if available, otherwise fallback to conversion
     let default_rates = ExchangeRates::default();
     let rates = rates.unwrap_or(&default_rates);
 
-    let source_price_str = format_price_with_raw(source_price, source_exchange, source_quote, rates);
-    let target_price_str = format_price_with_raw(target_price, target_exchange, target_quote, rates);
+    let source_price_str = format_price_display(source_raw_price, source_price, source_exchange, source_quote, rates);
+    let target_price_str = format_price_display(target_raw_price, target_price, target_exchange, target_quote, rates);
 
     // Format timestamps
     let source_ts_str = source_timestamp_ms

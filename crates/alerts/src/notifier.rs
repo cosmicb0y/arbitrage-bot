@@ -190,7 +190,19 @@ impl Notifier {
             let source_quote = format!("{:?}", opportunity.source_quote);
             let target_quote = format!("{:?}", opportunity.target_quote);
 
-            // Get current exchange rates for raw price display
+            // Get raw prices from original exchanges (without conversion)
+            let source_raw_price = if opportunity.source_raw_price > 0 {
+                Some(FixedPoint(opportunity.source_raw_price).to_f64())
+            } else {
+                None
+            };
+            let target_raw_price = if opportunity.target_raw_price > 0 {
+                Some(FixedPoint(opportunity.target_raw_price).to_f64())
+            } else {
+                None
+            };
+
+            // Get current exchange rates for raw price display (fallback)
             let rates = self.exchange_rates.read().ok().map(|r| r.clone());
 
             // Get price timestamps
@@ -213,6 +225,8 @@ impl Notifier {
                 &target_quote,
                 source_price,
                 target_price,
+                source_raw_price,
+                target_raw_price,
                 premium_bps,
                 optimal_size,
                 optimal_profit,
