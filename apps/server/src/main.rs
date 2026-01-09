@@ -141,6 +141,9 @@ async fn run_detector_loop(
         }
 
         // Detect and broadcast opportunities immediately per pair
+        // Collect all opportunities to clear inactive ones after
+        let mut all_opps = Vec::new();
+
         for &pair_id in &pair_ids {
             let opps = state.detect_opportunities(pair_id).await;
 
@@ -165,6 +168,15 @@ async fn run_detector_loop(
                         tracing::warn!("Failed to send Telegram alert: {}", e);
                     }
                 }
+            }
+
+            all_opps.extend(opps);
+        }
+
+        // Clear opportunities that fell below threshold
+        if let Some(ref notifier) = notifier {
+            if let Err(e) = notifier.clear_missing_opportunities(&all_opps).await {
+                tracing::warn!("Failed to clear missing opportunities: {}", e);
             }
         }
 

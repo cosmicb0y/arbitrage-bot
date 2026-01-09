@@ -264,8 +264,42 @@ impl Notifier {
         Ok(sent_count)
     }
 
-    /// Clean up old history entries and stale active opportunities.
-    pub async fn cleanup(&self) -> Result<(u64, u64), NotifierError> {
+    /// Clear opportunities that are no longer above threshold.
+    ///
+    /// Compares the current detected opportunities with the active list in DB,
+    /// and marks any that are no longer detected as inactive.
+    pub async fn clear_missing_opportunities(
+        &self,
+        current_opportunities: &[ArbitrageOpportunity],
+    ) -> Result<u32, NotifierError> {
+        let active = self.db.get_all_active_opportunities().await?;
+        let mut cleared = 0u32;
+
+        for (symbol, source, target) in active {
+            let still_active = current_opportunities.iter().any(|opp| {
+                opp.asset.symbol == symbol
+                    && format!("{:?}", opp.source_exchange) == source
+                    && format!("{:?}", opp.target_exchange) == target
+            });
+
+            if !still_active {
+                self.db
+                    .mark_opportunity_inactive(&symbol, &source, &target)
+                    .await?;
+                cleared += 1;
+                debug!(
+                    symbol = symbol,
+                    source = source,
+                    target = target,
+                    "Cleared inactive opportunity"
+                );
+            }
+        }
+        Ok(cleared)
+    }
+
+    /// Clean up old history entries.
+    pub async fn cleanup(&self) -> Result<u64, NotifierError> {
         let history_deleted = self
             .db
             .cleanup_old_history(self.config.history_retention_days)
@@ -274,16 +308,7 @@ impl Notifier {
             info!(deleted = history_deleted, "Cleaned up old alert history");
         }
 
-        // Clean up opportunities not seen in last 10 minutes (they likely fell below threshold)
-        let opportunities_deleted = self.db.cleanup_stale_opportunities(10).await?;
-        if opportunities_deleted > 0 {
-            info!(
-                deleted = opportunities_deleted,
-                "Cleaned up stale active opportunities"
-            );
-        }
-
-        Ok((history_deleted, opportunities_deleted))
+        Ok(history_deleted)
     }
 }
 

@@ -291,6 +291,18 @@ impl Database {
         Ok(())
     }
 
+    /// Get all currently active opportunities.
+    pub async fn get_all_active_opportunities(
+        &self,
+    ) -> Result<Vec<(String, String, String)>, DbError> {
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT symbol, source_exchange, target_exchange FROM active_opportunities",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Clean up stale active opportunities (not seen for a while).
     pub async fn cleanup_stale_opportunities(&self, minutes: i64) -> Result<u64, DbError> {
         let result = sqlx::query(
