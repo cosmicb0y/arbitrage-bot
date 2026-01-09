@@ -208,8 +208,8 @@ All prices stored as `u64` with 8 decimal places:
 | Quote Currency | Exchanges              | Conversion          |
 | -------------- | ---------------------- | ------------------- |
 | USD            | Coinbase               | 기준 (1:1)          |
-| USDT           | Binance, Bybit, GateIO | USDT/USD 환율 적용  |
-| USDC           | Binance, Coinbase      | USDC/USD 환율 적용  |
+| USDT           | Binance, Bybit, GateIO, Coinbase | USDT/USD 환율 적용  |
+| USDC           | Binance, Bybit, GateIO, Coinbase | USD와 1:1 (Coinbase), 환율 적용 (기타) |
 | KRW            | Upbit, Bithumb         | USDT/KRW → USD 변환 |
 
 ### Price Storage (DenominatedPrices)

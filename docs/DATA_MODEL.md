@@ -583,10 +583,10 @@ pub struct ExchangeStablecoinPrices {
 
 | 거래소 | 원본 Quote | 변환 방식 |
 |--------|-----------|----------|
-| **Binance** | USDT/USDC | raw × (USDT/USD rate) → usd |
-| **Bybit** | USDT | raw × (USDT/USD rate) → usd |
-| **GateIO** | USDT | raw × (USDT/USD rate) → usd |
-| **Coinbase** | USD/USDC | USD는 그대로, USDC × rate |
+| **Binance** | USDT/USDC | raw × (stablecoin/USD rate) → usd |
+| **Bybit** | USDT/USDC | raw × (stablecoin/USD rate) → usd |
+| **GateIO** | USDT/USDC | raw × (stablecoin/USD rate) → usd |
+| **Coinbase** | USD/USDT/USDC | USD/USDC는 그대로, USDT × rate |
 | **Upbit** | KRW | raw ÷ (USDT/KRW rate) → usdlike → usd |
 | **Bithumb** | KRW | raw ÷ (USDT/KRW rate) → usdlike → usd |
 
