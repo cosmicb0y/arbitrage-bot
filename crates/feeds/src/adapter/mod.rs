@@ -11,7 +11,7 @@ mod gateio;
 mod upbit;
 
 pub use binance::BinanceAdapter;
-pub use bithumb::{BithumbAdapter, BithumbMessage};
+pub use bithumb::{BithumbAdapter, BithumbMessage, OrderbookSnapshot as BithumbOrderbookSnapshot};
 pub use bybit::BybitAdapter;
 pub use coinbase::{CoinbaseAdapter, CoinbaseCredentials, CoinbaseL2Event};
 pub use gateio::GateIOAdapter;

@@ -4,6 +4,10 @@ use serde::Deserialize;
 use super::{ExchangeAdapter, KoreanExchangeAdapter};
 use crate::FeedError;
 
+// ============================================================================
+// Public Types
+// ============================================================================
+
 pub struct BithumbAdapter;
 
 #[derive(Debug, Clone)]
@@ -21,8 +25,47 @@ pub enum BithumbMessage {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct OrderbookSnapshot {
+    pub code: String,
+    pub best_bid: FixedPoint,
+    pub best_ask: FixedPoint,
+    pub best_bid_size: FixedPoint,
+    pub best_ask_size: FixedPoint,
+    pub bids: Vec<(f64, f64)>,
+    pub asks: Vec<(f64, f64)>,
+}
+
+// ============================================================================
+// Internal Deserialization Types
+// ============================================================================
+
 #[derive(Debug, Deserialize)]
-struct BithumbTicker {
+struct RawMessage {
+    #[serde(alias = "ty", alias = "type")]
+    msg_type: String,
+    #[serde(alias = "cd", alias = "code")]
+    code: String,
+    #[serde(alias = "tp", alias = "trade_price", default)]
+    trade_price: f64,
+    #[serde(alias = "obu", alias = "orderbook_units", default)]
+    orderbook_units: Vec<RawOrderbookUnit>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawOrderbookUnit {
+    #[serde(alias = "ap", alias = "ask_price", default)]
+    ask_price: f64,
+    #[serde(alias = "bp", alias = "bid_price", default)]
+    bid_price: f64,
+    #[serde(alias = "as", alias = "ask_size", default)]
+    ask_size: f64,
+    #[serde(alias = "bs", alias = "bid_size", default)]
+    bid_size: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTicker {
     #[serde(alias = "cd", alias = "code")]
     code: String,
     #[serde(alias = "tp", alias = "trade_price")]
@@ -38,6 +81,18 @@ struct BithumbTicker {
     #[serde(alias = "tms", alias = "timestamp", default)]
     _timestamp: u64,
 }
+
+#[derive(Debug, Deserialize)]
+struct RawOrderbook {
+    #[serde(alias = "cd", alias = "code")]
+    code: String,
+    #[serde(alias = "obu", alias = "orderbook_units")]
+    orderbook_units: Vec<RawOrderbookUnit>,
+}
+
+// ============================================================================
+// Trait Implementations
+// ============================================================================
 
 impl ExchangeAdapter for BithumbAdapter {
     fn exchange() -> Exchange {
@@ -73,34 +128,21 @@ impl KoreanExchangeAdapter for BithumbAdapter {
     }
 }
 
+// ============================================================================
+// Internal Parsing Helpers
+// ============================================================================
+
 impl BithumbAdapter {
-    pub fn parse_message(json: &str) -> Result<BithumbMessage, FeedError> {
-        #[derive(Debug, Deserialize)]
-        struct GenericMessage {
-            #[serde(alias = "ty", alias = "type")]
-            msg_type: String,
-            #[serde(alias = "cd", alias = "code")]
-            code: String,
-            #[serde(alias = "tp", alias = "trade_price", default)]
-            trade_price: f64,
-            #[serde(alias = "obu", alias = "orderbook_units", default)]
-            orderbook_units: Vec<OrderbookUnit>,
-        }
+    fn parse_raw_message_json(json: &str) -> Result<RawMessage, FeedError> {
+        serde_json::from_str(json).map_err(Into::into)
+    }
 
-        #[derive(Debug, Deserialize, Default)]
-        struct OrderbookUnit {
-            #[serde(alias = "ap", alias = "ask_price", default)]
-            ask_price: f64,
-            #[serde(alias = "bp", alias = "bid_price", default)]
-            bid_price: f64,
-            #[serde(alias = "as", alias = "ask_size", default)]
-            ask_size: f64,
-            #[serde(alias = "bs", alias = "bid_size", default)]
-            bid_size: f64,
-        }
+    fn parse_raw_message_binary(data: &[u8]) -> Result<RawMessage, FeedError> {
+        rmp_serde::from_slice(data)
+            .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))
+    }
 
-        let msg: GenericMessage = serde_json::from_str(json)?;
-
+    fn raw_to_bithumb_message(msg: RawMessage) -> Result<BithumbMessage, FeedError> {
         match msg.msg_type.as_str() {
             "ticker" => Ok(BithumbMessage::Ticker {
                 code: msg.code,
@@ -126,97 +168,7 @@ impl BithumbAdapter {
         }
     }
 
-    pub fn parse_message_binary(data: &[u8]) -> Result<BithumbMessage, FeedError> {
-        #[derive(Debug, Deserialize)]
-        struct GenericMessage {
-            #[serde(alias = "ty", alias = "type")]
-            msg_type: String,
-            #[serde(alias = "cd", alias = "code")]
-            code: String,
-            #[serde(alias = "tp", alias = "trade_price", default)]
-            trade_price: f64,
-            #[serde(alias = "obu", alias = "orderbook_units", default)]
-            orderbook_units: Vec<OrderbookUnit>,
-        }
-
-        #[derive(Debug, Deserialize, Default)]
-        struct OrderbookUnit {
-            #[serde(alias = "ap", alias = "ask_price", default)]
-            ask_price: f64,
-            #[serde(alias = "bp", alias = "bid_price", default)]
-            bid_price: f64,
-            #[serde(alias = "as", alias = "ask_size", default)]
-            ask_size: f64,
-            #[serde(alias = "bs", alias = "bid_size", default)]
-            bid_size: f64,
-        }
-
-        let msg: GenericMessage = rmp_serde::from_slice(data)
-            .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))?;
-
-        match msg.msg_type.as_str() {
-            "ticker" => Ok(BithumbMessage::Ticker {
-                code: msg.code,
-                price: FixedPoint::from_f64(msg.trade_price),
-            }),
-            "orderbook" => {
-                let best = msg
-                    .orderbook_units
-                    .first()
-                    .ok_or_else(|| FeedError::ParseError("Empty orderbook".to_string()))?;
-                Ok(BithumbMessage::Orderbook {
-                    code: msg.code,
-                    bid: FixedPoint::from_f64(best.bid_price),
-                    ask: FixedPoint::from_f64(best.ask_price),
-                    bid_size: FixedPoint::from_f64(best.bid_size),
-                    ask_size: FixedPoint::from_f64(best.ask_size),
-                })
-            }
-            _ => Err(FeedError::ParseError(format!(
-                "Unknown message type: {}",
-                msg.msg_type
-            ))),
-        }
-    }
-
-    pub fn parse_orderbook_full(
-        json: &str,
-    ) -> Result<
-        (
-            String,
-            FixedPoint,
-            FixedPoint,
-            FixedPoint,
-            FixedPoint,
-            Vec<(f64, f64)>,
-            Vec<(f64, f64)>,
-        ),
-        FeedError,
-    > {
-        #[derive(Debug, Deserialize)]
-        struct OrderbookUnit {
-            #[serde(alias = "ap", alias = "ask_price")]
-            ask_price: f64,
-            #[serde(alias = "bp", alias = "bid_price")]
-            bid_price: f64,
-            #[serde(alias = "as", alias = "ask_size")]
-            ask_size: f64,
-            #[serde(alias = "bs", alias = "bid_size")]
-            bid_size: f64,
-        }
-
-        #[derive(Debug, Deserialize)]
-        struct GenericMessage {
-            #[serde(alias = "ty", alias = "type")]
-            msg_type: String,
-            #[serde(alias = "cd", alias = "code")]
-            code: String,
-            #[serde(alias = "obu", alias = "orderbook_units", default)]
-            orderbook_units: Vec<OrderbookUnit>,
-        }
-
-        let msg: GenericMessage = serde_json::from_str(json)?;
-
+    fn raw_to_orderbook_snapshot(msg: RawMessage) -> Result<OrderbookSnapshot, FeedError> {
         if msg.msg_type != "orderbook" {
             return Err(FeedError::ParseError(format!(
                 "Not an orderbook message: {}",
@@ -240,31 +192,65 @@ impl BithumbAdapter {
             .map(|u| (u.ask_price, u.ask_size))
             .collect();
 
+        Ok(OrderbookSnapshot {
+            code: msg.code,
+            best_bid: FixedPoint::from_f64(best.bid_price),
+            best_ask: FixedPoint::from_f64(best.ask_price),
+            best_bid_size: FixedPoint::from_f64(best.bid_size),
+            best_ask_size: FixedPoint::from_f64(best.ask_size),
+            bids,
+            asks,
+        })
+    }
+
+    fn parse_raw_orderbook_json(json: &str) -> Result<RawOrderbook, FeedError> {
+        serde_json::from_str(json).map_err(Into::into)
+    }
+
+    fn parse_raw_orderbook_binary(data: &[u8]) -> Result<RawOrderbook, FeedError> {
+        rmp_serde::from_slice(data)
+            .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))
+    }
+
+    fn raw_orderbook_to_tuple(
+        orderbook: RawOrderbook,
+    ) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint), FeedError> {
+        if orderbook.orderbook_units.is_empty() {
+            return Err(FeedError::ParseError("Empty orderbook".to_string()));
+        }
+
+        let best = &orderbook.orderbook_units[0];
         Ok((
-            msg.code,
+            orderbook.code,
             FixedPoint::from_f64(best.bid_price),
             FixedPoint::from_f64(best.ask_price),
             FixedPoint::from_f64(best.bid_size),
             FixedPoint::from_f64(best.ask_size),
-            bids,
-            asks,
         ))
     }
+}
 
-    pub fn parse_orderbook_full_binary(
-        data: &[u8],
-    ) -> Result<
-        (
-            String,
-            FixedPoint,
-            FixedPoint,
-            FixedPoint,
-            FixedPoint,
-            Vec<(f64, f64)>,
-            Vec<(f64, f64)>,
-        ),
-        FeedError,
-    > {
+// ============================================================================
+// Public API
+// ============================================================================
+
+impl BithumbAdapter {
+    pub fn parse_message(json: &str) -> Result<BithumbMessage, FeedError> {
+        let msg = Self::parse_raw_message_json(json)?;
+        Self::raw_to_bithumb_message(msg)
+    }
+
+    pub fn parse_message_binary(data: &[u8]) -> Result<BithumbMessage, FeedError> {
+        let msg = Self::parse_raw_message_binary(data)?;
+        Self::raw_to_bithumb_message(msg)
+    }
+
+    pub fn parse_orderbook_full(json: &str) -> Result<OrderbookSnapshot, FeedError> {
+        let msg = Self::parse_raw_message_json(json)?;
+        Self::raw_to_orderbook_snapshot(msg)
+    }
+
+    pub fn parse_orderbook_full_binary(data: &[u8]) -> Result<OrderbookSnapshot, FeedError> {
         let json_str = std::str::from_utf8(data)
             .map_err(|e| FeedError::ParseError(format!("Invalid UTF-8: {}", e)))?;
         Self::parse_orderbook_full(json_str)
@@ -285,8 +271,7 @@ impl BithumbAdapter {
     }
 
     pub fn parse_ticker(json: &str, pair_id: u32) -> Result<PriceTick, FeedError> {
-        let ticker: BithumbTicker = serde_json::from_str(json)?;
-
+        let ticker: RawTicker = serde_json::from_str(json)?;
         let price = FixedPoint::from_f64(ticker.trade_price);
 
         Ok(PriceTick::new(
@@ -299,15 +284,14 @@ impl BithumbAdapter {
     }
 
     pub fn parse_ticker_with_code(json: &str) -> Result<(String, FixedPoint), FeedError> {
-        let ticker: BithumbTicker = serde_json::from_str(json)?;
+        let ticker: RawTicker = serde_json::from_str(json)?;
         let price = FixedPoint::from_f64(ticker.trade_price);
         Ok((ticker.code, price))
     }
 
     pub fn parse_ticker_binary(data: &[u8], pair_id: u32) -> Result<PriceTick, FeedError> {
-        let ticker: BithumbTicker = rmp_serde::from_slice(data)
+        let ticker: RawTicker = rmp_serde::from_slice(data)
             .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))?;
-
         let price = FixedPoint::from_f64(ticker.trade_price);
 
         Ok(PriceTick::new(
@@ -320,7 +304,7 @@ impl BithumbAdapter {
     }
 
     pub fn parse_ticker_binary_with_code(data: &[u8]) -> Result<(String, FixedPoint), FeedError> {
-        let ticker: BithumbTicker = rmp_serde::from_slice(data)
+        let ticker: RawTicker = rmp_serde::from_slice(data)
             .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))?;
         let price = FixedPoint::from_f64(ticker.trade_price);
         Ok((ticker.code, price))
@@ -343,80 +327,15 @@ impl BithumbAdapter {
     pub fn parse_orderbook_with_code(
         json: &str,
     ) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint), FeedError> {
-        #[derive(Debug, Deserialize)]
-        struct BithumbOrderbookSimple {
-            #[serde(alias = "cd", alias = "code")]
-            code: String,
-            #[serde(alias = "obu", alias = "orderbook_units")]
-            orderbook_units: Vec<BithumbOrderbookUnit>,
-        }
-
-        #[derive(Debug, Deserialize)]
-        struct BithumbOrderbookUnit {
-            #[serde(alias = "ap", alias = "ask_price")]
-            ask_price: f64,
-            #[serde(alias = "bp", alias = "bid_price")]
-            bid_price: f64,
-            #[serde(alias = "as", alias = "ask_size", default)]
-            ask_size: f64,
-            #[serde(alias = "bs", alias = "bid_size", default)]
-            bid_size: f64,
-        }
-
-        let orderbook: BithumbOrderbookSimple = serde_json::from_str(json)?;
-
-        if orderbook.orderbook_units.is_empty() {
-            return Err(FeedError::ParseError("Empty orderbook".to_string()));
-        }
-
-        let best = &orderbook.orderbook_units[0];
-        Ok((
-            orderbook.code,
-            FixedPoint::from_f64(best.bid_price),
-            FixedPoint::from_f64(best.ask_price),
-            FixedPoint::from_f64(best.bid_size),
-            FixedPoint::from_f64(best.ask_size),
-        ))
+        let orderbook = Self::parse_raw_orderbook_json(json)?;
+        Self::raw_orderbook_to_tuple(orderbook)
     }
 
     pub fn parse_orderbook_binary_with_code(
         data: &[u8],
     ) -> Result<(String, FixedPoint, FixedPoint, FixedPoint, FixedPoint), FeedError> {
-        #[derive(Debug, Deserialize)]
-        struct BithumbOrderbookSimple {
-            #[serde(alias = "cd", alias = "code")]
-            code: String,
-            #[serde(alias = "obu", alias = "orderbook_units")]
-            orderbook_units: Vec<BithumbOrderbookUnit>,
-        }
-
-        #[derive(Debug, Deserialize)]
-        struct BithumbOrderbookUnit {
-            #[serde(alias = "ap", alias = "ask_price")]
-            ask_price: f64,
-            #[serde(alias = "bp", alias = "bid_price")]
-            bid_price: f64,
-            #[serde(alias = "as", alias = "ask_size", default)]
-            ask_size: f64,
-            #[serde(alias = "bs", alias = "bid_size", default)]
-            bid_size: f64,
-        }
-
-        let orderbook: BithumbOrderbookSimple = rmp_serde::from_slice(data)
-            .map_err(|e| FeedError::ParseError(format!("MessagePack parse error: {}", e)))?;
-
-        if orderbook.orderbook_units.is_empty() {
-            return Err(FeedError::ParseError("Empty orderbook".to_string()));
-        }
-
-        let best = &orderbook.orderbook_units[0];
-        Ok((
-            orderbook.code,
-            FixedPoint::from_f64(best.bid_price),
-            FixedPoint::from_f64(best.ask_price),
-            FixedPoint::from_f64(best.bid_size),
-            FixedPoint::from_f64(best.ask_size),
-        ))
+        let orderbook = Self::parse_raw_orderbook_binary(data)?;
+        Self::raw_orderbook_to_tuple(orderbook)
     }
 
     pub fn to_market_code(symbol: &str) -> String {
