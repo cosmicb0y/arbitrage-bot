@@ -361,12 +361,9 @@ async fn collect_prices(state: &SharedState) -> Vec<WsPriceData> {
     // Get all prices from aggregator
     let all_ticks = state.prices.get_all_prices();
 
-    // Get symbol registry from detector for pair_id -> symbol mapping
-    let detector = state.detector.read().await;
-
     for tick in all_ticks {
-        // Get symbol from registry, or compute from pair_id
-        let symbol = detector.pair_id_to_symbol(tick.pair_id())
+        // Get symbol from registry (lock-free), or compute from pair_id
+        let symbol = state.detector.pair_id_to_symbol(tick.pair_id())
             .unwrap_or_else(|| format!("PAIR_{}", tick.pair_id()));
 
         // Get quote currency from tick

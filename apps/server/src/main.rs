@@ -123,7 +123,12 @@ async fn run_detector_loop(
 
     while state.is_running() {
         // Get all registered pair_ids (includes dynamic markets from discovery)
-        let mut pair_ids = state.get_registered_pair_ids().await;
+        let mut pair_ids = state.get_registered_pair_ids();
+
+        tracing::debug!(
+            pair_ids_count = pair_ids.len(),
+            "detector loop: registered pair_ids"
+        );
 
         // Add legacy pair_ids if not already present
         for &legacy_id in &legacy_pair_ids {
@@ -132,44 +137,28 @@ async fn run_detector_loop(
             }
         }
 
-        // OPTIMIZATION: Collect all opportunities first, then process notifications in parallel
-        let mut all_opps = Vec::new();
+        // Detect and broadcast opportunities immediately per pair
         for &pair_id in &pair_ids {
             let opps = state.detect_opportunities(pair_id).await;
-            all_opps.extend(opps);
-        }
 
-        // Filter and broadcast opportunities
-        let significant_opps: Vec<_> = all_opps
-            .into_iter()
-            .filter(|opp| opp.premium_bps >= 30)
-            .collect();
+            // Broadcast each opportunity immediately as it's detected
+            for opp in &opps {
+                tracing::debug!(
+                    "🎯 Opportunity: {} {:?} -> {:?} | Premium: {} bps | Buy: {} | Sell: {}",
+                    opp.asset.symbol,
+                    opp.source_exchange,
+                    opp.target_exchange,
+                    opp.premium_bps,
+                    opp.source_price,
+                    opp.target_price
+                );
+                ws_server::broadcast_opportunity(&broadcast_tx, &state, opp);
+            }
 
-        for opp in &significant_opps {
-            tracing::debug!(
-                "🎯 Opportunity: {} {:?} -> {:?} | Premium: {} bps | Buy: {} | Sell: {}",
-                opp.asset.symbol,
-                opp.source_exchange,
-                opp.target_exchange,
-                opp.premium_bps,
-                opp.source_price,
-                opp.target_price
-            );
-            // Broadcast opportunity to clients (fast, in-memory)
-            ws_server::broadcast_opportunity(&broadcast_tx, &state, opp);
-        }
-
-        // OPTIMIZATION: Send Telegram alerts in parallel (I/O bound)
-        if let Some(ref notifier) = notifier {
-            if !significant_opps.is_empty() {
-                let notification_futures: Vec<_> = significant_opps
-                    .iter()
-                    .map(|opp| notifier.process_opportunity(opp))
-                    .collect();
-
-                let results = futures_util::future::join_all(notification_futures).await;
-                for result in results {
-                    if let Err(e) = result {
+            // Send Telegram alerts (notifier handles its own threshold filtering)
+            if let Some(ref notifier) = notifier {
+                for opp in &opps {
+                    if let Err(e) = notifier.process_opportunity(opp).await {
                         tracing::warn!("Failed to send Telegram alert: {}", e);
                     }
                 }
@@ -457,7 +446,7 @@ async fn run_upbit_feed(
             WsMessage::Reconnected => {
                 info!("Upbit: Reconnected - clearing all cached data");
                 orderbook_cache.clear();
-                state.clear_exchange_caches(Exchange::Upbit).await;
+                state.clear_exchange_caches(Exchange::Upbit);
                 if let Some(ref notifier) = status_notifier {
                     notifier.try_send(StatusEvent::Reconnected(Exchange::Upbit));
                 }
@@ -541,7 +530,7 @@ async fn run_binance_feed(
             }
             WsMessage::Reconnected => {
                 info!("Binance: Reconnected - clearing all cached data");
-                state.clear_exchange_caches(Exchange::Binance).await;
+                state.clear_exchange_caches(Exchange::Binance);
                 if let Some(ref notifier) = status_notifier {
                     notifier.try_send(StatusEvent::Reconnected(Exchange::Binance));
                 }
@@ -714,7 +703,7 @@ async fn run_coinbase_feed(
             WsMessage::Reconnected => {
                 info!("Coinbase: Reconnected - clearing all cached data");
                 orderbook_cache.clear();
-                state.clear_exchange_caches(Exchange::Coinbase).await;
+                state.clear_exchange_caches(Exchange::Coinbase);
                 if let Some(ref notifier) = status_notifier {
                     notifier.try_send(StatusEvent::Reconnected(Exchange::Coinbase));
                 }
@@ -942,7 +931,7 @@ async fn run_bithumb_feed(
             WsMessage::Reconnected => {
                 info!("Bithumb: Reconnected - clearing all cached data");
                 orderbook_cache.clear();
-                state.clear_exchange_caches(Exchange::Bithumb).await;
+                state.clear_exchange_caches(Exchange::Bithumb);
                 if let Some(ref notifier) = status_notifier {
                     notifier.try_send(StatusEvent::Reconnected(Exchange::Bithumb));
                 }
@@ -987,40 +976,64 @@ async fn run_bybit_feed(
             WsMessage::Text(text) => {
                 // Process orderbook only (accurate bid/ask with depth)
                 if BybitAdapter::is_orderbook_message(&text) {
-                    if let Ok((tick, symbol, quote, bids, asks)) = BybitAdapter::parse_orderbook_full(&text) {
-                        // Update stablecoin prices for this exchange
-                        if symbol == "USDT" || symbol == "USDC" {
-                            state.update_exchange_stablecoin_price(
-                                Exchange::Bybit,
-                                &symbol,
-                                &quote,
-                                tick.price().to_f64(),
-                            );
-                        }
-
-                        // Use BTC as reference crypto for deriving stablecoin rates
-                        // Bybit has BTCUSD, BTCUSDT, BTCUSDC - use these to calculate USDT/USD and USDC/USD
-                        if symbol == "BTC" && (quote == "USD" || quote == "USDT" || quote == "USDC") {
-                            state.update_exchange_ref_crypto_price(
-                                Exchange::Bybit,
-                                &quote,
-                                tick.price().to_f64(),
-                            );
-                        }
-
+                    if let Ok((_tick, symbol, quote, bids, asks, is_snapshot)) = BybitAdapter::parse_orderbook_full(&text) {
                         // Use canonical name if mapping exists
                         let display_symbol = symbol_mappings.canonical_name("Bybit", &symbol);
                         let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
                         let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
-                        // Store full orderbook for depth walking calculation
-                        if !bids.is_empty() && !asks.is_empty() {
-                            state.update_orderbook_snapshot(Exchange::Bybit, pair_id, &bids, &asks);
+                        // Handle snapshot vs delta
+                        if is_snapshot {
+                            // Full orderbook replacement
+                            if !bids.is_empty() && !asks.is_empty() {
+                                state.update_orderbook_snapshot(Exchange::Bybit, pair_id, &bids, &asks);
+                            }
+                        } else {
+                            // Delta update - apply changes to existing orderbook
+                            state.apply_orderbook_delta(Exchange::Bybit, pair_id, &bids, &asks);
                         }
 
-                        // Update state with orderbook bid/ask (use symbol variant to ensure depth cache is updated)
-                        state.update_price_with_bid_ask_and_symbol(Exchange::Bybit, pair_id, &display_symbol, tick.price(), tick.bid(), tick.ask(), tick.bid_size(), tick.ask_size(), quote_currency).await;
-                        ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Bybit, pair_id, &display_symbol, Some(&quote), &tick);
+                        // Get best bid/ask from orderbook cache (always accurate after delta applied)
+                        if let Some((best_bid, best_ask, bid_size, ask_size)) = state.get_best_bid_ask(Exchange::Bybit, pair_id) {
+                            let mid = (best_bid + best_ask) / 2.0;
+                            let mid_fp = FixedPoint::from_f64(mid);
+                            let bid_fp = FixedPoint::from_f64(best_bid);
+                            let ask_fp = FixedPoint::from_f64(best_ask);
+                            let bid_size_fp = FixedPoint::from_f64(bid_size);
+                            let ask_size_fp = FixedPoint::from_f64(ask_size);
+
+                            // Update stablecoin prices for this exchange
+                            if symbol == "USDT" || symbol == "USDC" {
+                                state.update_exchange_stablecoin_price(
+                                    Exchange::Bybit,
+                                    &symbol,
+                                    &quote,
+                                    mid,
+                                );
+                            }
+
+                            // Use BTC as reference crypto for deriving stablecoin rates
+                            if symbol == "BTC" && (quote == "USD" || quote == "USDT" || quote == "USDC") {
+                                state.update_exchange_ref_crypto_price(
+                                    Exchange::Bybit,
+                                    &quote,
+                                    mid,
+                                );
+                            }
+
+                            // Update state with orderbook bid/ask
+                            state.update_price_with_bid_ask_and_symbol(
+                                Exchange::Bybit, pair_id, &display_symbol,
+                                mid_fp, bid_fp, ask_fp, bid_size_fp, ask_size_fp, quote_currency
+                            ).await;
+
+                            // Broadcast to clients
+                            let tick = PriceTick::with_depth(
+                                Exchange::Bybit, pair_id, mid_fp, bid_fp, ask_fp,
+                                bid_size_fp, ask_size_fp, quote_currency
+                            );
+                            ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Bybit, pair_id, &display_symbol, Some(&quote), &tick);
+                        }
                     }
                 }
             }
@@ -1035,7 +1048,7 @@ async fn run_bybit_feed(
             }
             WsMessage::Reconnected => {
                 info!("Bybit: Reconnected - clearing all cached data");
-                state.clear_exchange_caches(Exchange::Bybit).await;
+                state.clear_exchange_caches(Exchange::Bybit);
                 if let Some(ref notifier) = status_notifier {
                     notifier.try_send(StatusEvent::Reconnected(Exchange::Bybit));
                 }
@@ -1138,7 +1151,7 @@ async fn run_gateio_feed(
             }
             WsMessage::Reconnected => {
                 info!("Gate.io: Reconnected - clearing all cached data");
-                state.clear_exchange_caches(Exchange::GateIO).await;
+                state.clear_exchange_caches(Exchange::GateIO);
                 if let Some(ref notifier) = status_notifier {
                     notifier.try_send(StatusEvent::Reconnected(Exchange::GateIO));
                 }
@@ -1553,7 +1566,7 @@ async fn spawn_live_feeds(
     );
 
     // Register all symbols for opportunity detection
-    state.register_common_markets(&common).await;
+    state.register_common_markets(&common);
 
     // Fetch initial orderbooks via REST API before WebSocket feeds start
     // Only batch-capable exchanges: Binance, Bybit, GateIO, Upbit
@@ -1840,7 +1853,7 @@ async fn run_market_discovery(
             );
 
             // Register all common markets for opportunity detection
-            state.register_common_markets(&common).await;
+            state.register_common_markets(&common);
 
             // Store in state for initial sync
             state.update_common_markets(common.clone()).await;
@@ -2041,7 +2054,7 @@ async fn main() {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            let expired = cleanup_state.expire_stale_prices().await;
+            let expired = cleanup_state.expire_stale_prices();
             if expired > 0 {
                 tracing::debug!("Expired {} stale price entries", expired);
             }
