@@ -8,9 +8,11 @@
 
 ### 주요 기능
 
-- **실시간 가격 피드**: WebSocket을 통한 거래소 연결 (Binance, Coinbase, Kraken, OKX)
-- **차익거래 탐지**: 거래소 간 프리미엄 계산 및 기회 탐지
+- **실시간 가격 피드**: WebSocket을 통한 6개 거래소 연결 (Binance, Coinbase, Bybit, GateIO, Upbit, Bithumb)
+- **차익거래 탐지**: 거래소 간 프리미엄 계산 및 기회 탐지 (김치 프리미엄 포함)
+- **가격 정규화**: USDT/USDC 디페깅 대응, 다중 호가통화 USD 변환
 - **데스크톱 GUI**: Tauri + React 기반 모니터링 대시보드
+- **텔레그램 알림**: 실시간 차익거래 기회 알림
 - **CLI 서버**: 헤드리스 모드 지원
 
 ## 프로젝트 구조
@@ -18,16 +20,17 @@
 ```
 arbitrage-bot/
 ├── crates/
-│   ├── core/           # 핵심 데이터 타입 (Exchange, Chain, FixedPoint 등)
-│   ├── serialization/  # 바이너리 직렬화
-│   ├── feeds/          # WebSocket 가격 피드 수집
-│   ├── engine/         # 차익거래 탐지 엔진
-│   └── executor/       # 거래 실행 (CEX/DEX)
+│   ├── core/           # 핵심 데이터 타입 (Exchange, Chain, FixedPoint, QuoteCurrency 등)
+│   ├── feeds/          # WebSocket 가격 피드 수집 (6개 거래소 어댑터)
+│   ├── engine/         # 차익거래 탐지 엔진 (프리미엄 계산, 깊이 분석)
+│   ├── executor/       # 거래 실행 (CEX/DEX) - 개발 중
+│   └── alerts/         # 텔레그램 알림 시스템
 ├── apps/
-│   ├── server/         # CLI 헤드리스 서버
+│   ├── server/         # CLI 헤드리스 서버 (WebSocket 피드 + REST API)
 │   └── desktop/        # Tauri 데스크톱 앱
 │       ├── src-tauri/  # Rust 백엔드
-│       └── src/        # React 프론트엔드
+│       └── src/        # React + TypeScript 프론트엔드
+├── docs/               # 문서 (ARCHITECTURE.md, DATA_MODEL.md)
 └── Cargo.toml          # 워크스페이스 설정
 ```
 
@@ -110,20 +113,18 @@ let value = price.to_f64();                  // 50000.0
 // 프리미엄 = (50500 - 50000) / 50000 * 10000 = 100 bps
 ```
 
-### 거래소 타입
+### 지원 거래소
 
-```rust
-pub enum Exchange {
-    Binance,    // CEX
-    Coinbase,   // CEX
-    Kraken,     // CEX
-    Okx,        // CEX
-    Bybit,      // CEX
-    UniswapV2,  // DEX
-    UniswapV3,  // DEX
-    // ...
-}
-```
+| 거래소 | 호가 통화 | 상태 |
+|--------|----------|------|
+| Binance | USDT, USDC | ✅ Active |
+| Coinbase | USD, USDC | ✅ Active |
+| Bybit | USDT | ✅ Active |
+| GateIO | USDT | ✅ Active |
+| Upbit | KRW | ✅ Active |
+| Bithumb | KRW | ✅ Active |
+| Kraken | USD | 🚧 Planned |
+| OKX | USDT | 🚧 Planned |
 
 ## 테스트
 
@@ -181,14 +182,18 @@ cargo test --workspace -- --nocapture
 
 거래소 WebSocket 연결:
 - `WsClient`: WebSocket 클라이언트 (자동 재연결)
-- `BinanceAdapter`, `CoinbaseAdapter`: 거래소별 메시지 파서
+- `BinanceAdapter`, `CoinbaseAdapter`, `BybitAdapter`, `GateIOAdapter`, `UpbitAdapter`, `BithumbAdapter`: 거래소별 메시지 파서
+- `KoreanExchangeAdapter`: 한국 거래소 공통 트레이트 (USDT/USDC 마켓 감지)
 - `FeedConfig`: 연결 설정
+- `SymbolMapping`: 거래소 간 심볼 정규화
 
 ### arbitrage-engine
 
 차익거래 탐지 로직:
-- `OpportunityDetector`: 기회 탐지기
+- `OpportunityDetector`: 기회 탐지기 (DashMap 기반 lock-free)
 - `PremiumMatrix`: 거래소 간 프리미엄 계산
+- `DepthAnalyzer`: 호가창 깊이 분석
+- `FeeCalculator`: 거래 수수료 계산
 - `RouteFinder`: 최적 경로 탐색
 
 ### arbitrage-executor
@@ -198,13 +203,22 @@ cargo test --workspace -- --nocapture
 - `DexExecutor`: DEX 스왑 실행
 - `Order`, `OrderStatus`: 주문 관리
 
+### arbitrage-alerts
+
+텔레그램 알림 시스템:
+- `TelegramBot`: 봇 명령어 핸들러
+- `Notifier`: 알림 발송 및 중복 제거
+- `Database`: SQLite 기반 설정 저장
+- `AlertConfig`: 사용자별 알림 설정
+
 ## 개발 가이드
 
 ### 새 거래소 추가
 
-1. `crates/core/src/exchange.rs`에 거래소 추가
-2. `crates/feeds/src/adapter.rs`에 어댑터 구현
-3. `crates/feeds/src/feed.rs`에 피드 설정 추가
+1. `crates/core/src/exchange.rs`에 거래소 enum 추가
+2. `crates/feeds/src/adapter/`에 새 어댑터 파일 생성
+3. `crates/feeds/src/adapter/mod.rs`에서 export
+4. `apps/server/src/main.rs`에 WebSocket 피드 핸들러 추가
 
 ### 코드 스타일
 

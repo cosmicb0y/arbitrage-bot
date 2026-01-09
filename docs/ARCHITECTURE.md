@@ -9,21 +9,21 @@ Multi-chain cryptocurrency arbitrage detection and execution system with real-ti
 - **Language**: Rust
 - **GUI**: Tauri v2 + React + TypeScript
 - **Database**: SQLite (alerts configuration)
-- **Data Feed**: WebSocket direct connections to 8 exchanges
+- **Data Feed**: WebSocket direct connections to 6 exchanges
 - **Alerts**: Telegram Bot API
 
 ## Supported Exchanges
 
-| Exchange | Type | Quote Currency | Data Source |
-|----------|------|----------------|-------------|
-| Binance | CEX | USDT, USDC | WebSocket + REST |
-| Coinbase | CEX | USD, USDC | WebSocket (L2) |
-| Bybit | CEX | USDT | WebSocket |
-| Gate.io | CEX | USDT | WebSocket |
-| Upbit | CEX | KRW | WebSocket |
-| Bithumb | CEX | KRW | WebSocket |
-| Kraken | CEX | USD | - |
-| OKX | CEX | USDT | - |
+| Exchange | Type | Quote Currency | Data Source | Status |
+|----------|------|----------------|-------------|--------|
+| Binance | CEX | USDT, USDC | WebSocket + REST | ✅ Active |
+| Coinbase | CEX | USD, USDC | WebSocket (L2) | ✅ Active |
+| Bybit | CEX | USDT | WebSocket | ✅ Active |
+| Gate.io | CEX | USDT | WebSocket | ✅ Active |
+| Upbit | CEX | KRW | WebSocket | ✅ Active |
+| Bithumb | CEX | KRW | WebSocket | ✅ Active |
+| Kraken | CEX | USD | - | 🚧 Planned |
+| OKX | CEX | USDT | - | 🚧 Planned |
 
 ## Project Structure
 
@@ -148,6 +148,9 @@ alerts ──────────────┴─────────�
 |--------|-------------|
 | `detector` | Opportunity detection with multi-quote support |
 | `premium` | Premium matrix calculation |
+| `depth` | Orderbook depth analysis |
+| `fee` | Trading fee calculation |
+| `orderbook` | Orderbook management |
 | `route` | Route optimization (placeholder) |
 
 #### arbitrage-alerts
@@ -192,6 +195,41 @@ All prices stored as `u64` with 8 decimal places:
 
 - `1.0` = `100_000_000`
 - `50000.50` = `5_000_050_000_000`
+
+## Price Normalization
+
+### Multi-Currency Support
+
+각 거래소는 서로 다른 호가 통화(Quote Currency)를 사용합니다:
+
+| Quote Currency | Exchanges | Conversion |
+|----------------|-----------|------------|
+| USD | Coinbase | 기준 (1:1) |
+| USDT | Binance, Bybit, GateIO | USDT/USD 환율 적용 |
+| USDC | Binance, Coinbase | USDC/USD 환율 적용 |
+| KRW | Upbit, Bithumb | USDT/KRW → USD 변환 |
+
+### Price Storage (DenominatedPrices)
+
+모든 가격은 세 가지 형태로 저장됩니다:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `raw` | 원본 거래소 가격 | 34,800 USDT (Binance) |
+| `usd` | USD 정규화 가격 | 34,730.40 USD (USDT=0.998) |
+| `usdlike` | USDT/USDC 환산 가격 | 34,800 USDT |
+
+### Stablecoin Conversion
+
+해외 거래소의 USDT/USDC 가격은 각 거래소의 스테이블코인 환율로 USD 변환됩니다:
+
+```
+USD Price = Raw Price × (Stablecoin/USD Rate)
+```
+
+디페깅 발생 시 (예: USDT/USD = 0.998):
+- Binance BTC/USDT 34,800 → USD 34,730.40
+- 정확한 거래소 간 프리미엄 계산 가능
 
 ## Premium Types
 

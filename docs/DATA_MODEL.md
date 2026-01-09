@@ -301,7 +301,7 @@ erDiagram
 | **Engine** | `PremiumMatrix`, `ArbitrageOpportunity`, `RouteStep`, `OpportunityDetector` | 프리미엄 계산 & 차익거래 기회 탐지 |
 | **Executor** | `Order`, `OrderFill`, `ExecutionState`, `ExecutionResult` | 주문 실행 & 상태 추적 |
 | **Alerts** | `AlertConfig`, `AlertHistory`, `TelegramBot`, `Notifier` | 텔레그램 알림 & 사용자 설정 |
-| **Serialization** | `PriceTickData`, `OpportunityData` | 바이너리 직렬화 (unused) |
+| **Server** | `SharedState`, `DenominatedPrices`, `ExchangeStablecoinPrices` | 상태 관리 & 가격 정규화 |
 
 ## 핵심 데이터 흐름
 
@@ -546,13 +546,58 @@ pub enum CoinbaseL2Event {
 
 ---
 
+## Price Normalization
+
+### DenominatedPrices (가격 정규화 구조체)
+
+모든 가격은 세 가지 형태로 저장됩니다:
+
+```rust
+pub struct DenominatedPrices {
+    pub raw: FixedPoint,      // 원본 가격 (거래소 호가 통화)
+    pub usd: FixedPoint,      // USD 정규화 가격
+    pub usdlike: FixedPoint,  // USDT/USDC 환산 가격
+}
+```
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `raw` | 원본 거래소 가격 | Binance: 34,800 USDT |
+| `usd` | USD 정규화 가격 | 34,730.40 USD (USDT=0.998) |
+| `usdlike` | USDT/USDC 환산 가격 | 34,800 USDT |
+
+### ExchangeStablecoinPrices (거래소별 스테이블코인 환율)
+
+각 거래소의 USDT/USD, USDC/USD 환율을 추적합니다:
+
+```rust
+pub struct ExchangeStablecoinPrices {
+    pub exchange: Exchange,
+    pub usdt_usd: f64,   // e.g., 0.998
+    pub usdc_usd: f64,   // e.g., 1.001
+    pub timestamp: u64,
+}
+```
+
+### 가격 변환 흐름
+
+| 거래소 | 원본 Quote | 변환 방식 |
+|--------|-----------|----------|
+| **Binance** | USDT/USDC | raw × (USDT/USD rate) → usd |
+| **Bybit** | USDT | raw × (USDT/USD rate) → usd |
+| **GateIO** | USDT | raw × (USDT/USD rate) → usd |
+| **Coinbase** | USD/USDC | USD는 그대로, USDC × rate |
+| **Upbit** | KRW | raw ÷ (USDT/KRW rate) → usdlike → usd |
+| **Bithumb** | KRW | raw ÷ (USDT/KRW rate) → usdlike → usd |
+
 ## 타입 안전성
 
 - 모든 가격은 `FixedPoint` (u64, 8 decimals) 사용 → 부동소수점 오차 방지
 - Exchange/Chain/Bridge/QuoteCurrency ID는 compact repr (u8/u16) enum → 효율적 직렬화
 - `PriceTick`은 71 bytes packed struct → 메모리 최적화
 - `PriceAggregator`는 `DashMap` 사용 → 스레드 안전한 동시 업데이트
-- 모든 가격은 USD로 정규화하여 저장 (KRW는 USDT/KRW로 변환)
+- 모든 가격은 `DenominatedPrices`로 저장 (raw, usd, usdlike 세 가지 형태)
+- 스테이블코인 디페깅 시에도 정확한 USD 변환 보장
 
 ---
 
