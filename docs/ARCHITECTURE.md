@@ -14,16 +14,16 @@ Multi-chain cryptocurrency arbitrage detection and execution system with real-ti
 
 ## Supported Exchanges
 
-| Exchange | Type | Quote Currency | Data Source | Status |
-|----------|------|----------------|-------------|--------|
-| Binance | CEX | USDT, USDC | WebSocket + REST | ✅ Active |
-| Coinbase | CEX | USD, USDC | WebSocket (L2) | ✅ Active |
-| Bybit | CEX | USDT | WebSocket | ✅ Active |
-| Gate.io | CEX | USDT | WebSocket | ✅ Active |
-| Upbit | CEX | KRW | WebSocket | ✅ Active |
-| Bithumb | CEX | KRW | WebSocket | ✅ Active |
-| Kraken | CEX | USD | - | 🚧 Planned |
-| OKX | CEX | USDT | - | 🚧 Planned |
+| Exchange | Type | Quote Currency | Data Source      | Status     |
+| -------- | ---- | -------------- | ---------------- | ---------- |
+| Binance  | CEX  | USDT, USDC     | WebSocket + REST | ✅ Active  |
+| Coinbase | CEX  | USDT, USDC     | WebSocket (L2)   | ✅ Active  |
+| Bybit    | CEX  | USDT, USDC     | WebSocket        | ✅ Active  |
+| Gate.io  | CEX  | USDT, USDC     | WebSocket        | ✅ Active  |
+| Upbit    | CEX  | KRW            | WebSocket        | ✅ Active  |
+| Bithumb  | CEX  | KRW            | WebSocket        | ✅ Active  |
+| Kraken   | CEX  | USD            | -                | 🚧 Planned |
+| OKX      | CEX  | USDT           | -                | 🚧 Planned |
 
 ## Project Structure
 
@@ -122,55 +122,58 @@ alerts ──────────────┴─────────�
 
 ### Crate Responsibilities
 
-| Crate             | Role                    | Input                  | Output                                                   |
-| ----------------- | ----------------------- | ---------------------- | -------------------------------------------------------- |
-| **core**          | Common type definitions | -                      | `PriceTick`, `Exchange`, `Asset`, `ArbitrageOpportunity` |
-| **feeds**         | Price data collection   | Exchange WebSocket     | `PriceTick` (price, bid/ask, depth)                      |
-| **engine**        | Arbitrage detection     | `PriceTick` stream     | `ArbitrageOpportunity` (premium, route)                  |
-| **executor**      | Order execution         | `ArbitrageOpportunity` | Trade execution                                          |
-| **alerts**        | Telegram notifications  | `ArbitrageOpportunity` | Telegram messages                                        |
+| Crate        | Role                    | Input                  | Output                                                   |
+| ------------ | ----------------------- | ---------------------- | -------------------------------------------------------- |
+| **core**     | Common type definitions | -                      | `PriceTick`, `Exchange`, `Asset`, `ArbitrageOpportunity` |
+| **feeds**    | Price data collection   | Exchange WebSocket     | `PriceTick` (price, bid/ask, depth)                      |
+| **engine**   | Arbitrage detection     | `PriceTick` stream     | `ArbitrageOpportunity` (premium, route)                  |
+| **executor** | Order execution         | `ArbitrageOpportunity` | Trade execution                                          |
+| **alerts**   | Telegram notifications  | `ArbitrageOpportunity` | Telegram messages                                        |
 
 ### Module Details
 
 #### arbitrage-feeds
-| Module | Description |
-|--------|-------------|
-| `websocket` | WebSocket connection management |
-| `adapter` | Exchange-specific message parsing (Binance, Coinbase, Bybit, GateIO, Upbit, Bithumb) |
-| `aggregator` | Price aggregation across exchanges |
-| `discovery` | Common market discovery |
-| `rest` | REST API fallback for orderbook depth |
-| `symbol_mapping` | Symbol normalization across exchanges |
-| `manager` | Connection state and config |
+
+| Module           | Description                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `websocket`      | WebSocket connection management                                                      |
+| `adapter`        | Exchange-specific message parsing (Binance, Coinbase, Bybit, GateIO, Upbit, Bithumb) |
+| `aggregator`     | Price aggregation across exchanges                                                   |
+| `discovery`      | Common market discovery                                                              |
+| `rest`           | REST API fallback for orderbook depth                                                |
+| `symbol_mapping` | Symbol normalization across exchanges                                                |
+| `manager`        | Connection state and config                                                          |
 
 #### arbitrage-engine
-| Module | Description |
-|--------|-------------|
-| `detector` | Opportunity detection with multi-quote support |
-| `premium` | Premium matrix calculation |
-| `depth` | Orderbook depth analysis |
-| `fee` | Trading fee calculation |
-| `orderbook` | Orderbook management |
-| `route` | Route optimization (placeholder) |
+
+| Module      | Description                                    |
+| ----------- | ---------------------------------------------- |
+| `detector`  | Opportunity detection with multi-quote support |
+| `premium`   | Premium matrix calculation                     |
+| `depth`     | Orderbook depth analysis                       |
+| `fee`       | Trading fee calculation                        |
+| `orderbook` | Orderbook management                           |
+| `route`     | Route optimization (placeholder)               |
 
 #### arbitrage-alerts
-| Module | Description |
-|--------|-------------|
-| `telegram` | Telegram bot command handler |
+
+| Module     | Description                       |
+| ---------- | --------------------------------- |
+| `telegram` | Telegram bot command handler      |
 | `notifier` | Alert dispatch with deduplication |
-| `db` | SQLite configuration storage |
-| `config` | User alert configuration |
+| `db`       | SQLite configuration storage      |
+| `config`   | User alert configuration          |
 
 ## Core Data Types
 
 ### Enums
 
-| Type           | Size | Description                                            |
-| -------------- | ---- | ------------------------------------------------------ |
-| `Chain`        | u8   | Blockchain identifier (Ethereum=1, Solana=10, etc.)    |
-| `ExchangeType` | u8   | CEX, CPMM DEX, CLMM DEX, PerpDex, Orderbook            |
-| `Exchange`     | u16  | Exchange identifier (Binance=100, GateIO=107, etc.)    |
-| `QuoteCurrency`| u8   | Quote currency (USD=1, USDT=2, USDC=3, KRW=10)         |
+| Type            | Size | Description                                         |
+| --------------- | ---- | --------------------------------------------------- |
+| `Chain`         | u8   | Blockchain identifier (Ethereum=1, Solana=10, etc.) |
+| `ExchangeType`  | u8   | CEX, CPMM DEX, CLMM DEX, PerpDex, Orderbook         |
+| `Exchange`      | u16  | Exchange identifier (Binance=100, GateIO=107, etc.) |
+| `QuoteCurrency` | u8   | Quote currency (USD=1, USDT=2, USDC=3, KRW=10)      |
 
 ### Price Data
 
@@ -182,12 +185,12 @@ alerts ──────────────┴─────────�
 
 ### Arbitrage
 
-| Type                   | Description                              |
-| ---------------------- | ---------------------------------------- |
-| `PremiumMatrix`        | All exchange-pair premiums               |
-| `ArbitrageOpportunity` | Detected opportunity with depth + route  |
-| `RouteStep`            | Trade/Bridge/Withdraw/Deposit step       |
-| `ExchangePairPremium`  | Premium between two exchanges            |
+| Type                   | Description                             |
+| ---------------------- | --------------------------------------- |
+| `PremiumMatrix`        | All exchange-pair premiums              |
+| `ArbitrageOpportunity` | Detected opportunity with depth + route |
+| `RouteStep`            | Trade/Bridge/Withdraw/Deposit step      |
+| `ExchangePairPremium`  | Premium between two exchanges           |
 
 ## Fixed-Point Arithmetic
 
@@ -202,22 +205,22 @@ All prices stored as `u64` with 8 decimal places:
 
 각 거래소는 서로 다른 호가 통화(Quote Currency)를 사용합니다:
 
-| Quote Currency | Exchanges | Conversion |
-|----------------|-----------|------------|
-| USD | Coinbase | 기준 (1:1) |
-| USDT | Binance, Bybit, GateIO | USDT/USD 환율 적용 |
-| USDC | Binance, Coinbase | USDC/USD 환율 적용 |
-| KRW | Upbit, Bithumb | USDT/KRW → USD 변환 |
+| Quote Currency | Exchanges              | Conversion          |
+| -------------- | ---------------------- | ------------------- |
+| USD            | Coinbase               | 기준 (1:1)          |
+| USDT           | Binance, Bybit, GateIO | USDT/USD 환율 적용  |
+| USDC           | Binance, Coinbase      | USDC/USD 환율 적용  |
+| KRW            | Upbit, Bithumb         | USDT/KRW → USD 변환 |
 
 ### Price Storage (DenominatedPrices)
 
 모든 가격은 세 가지 형태로 저장됩니다:
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `raw` | 원본 거래소 가격 | 34,800 USDT (Binance) |
-| `usd` | USD 정규화 가격 | 34,730.40 USD (USDT=0.998) |
-| `usdlike` | USDT/USDC 환산 가격 | 34,800 USDT |
+| Field     | Description         | Example                    |
+| --------- | ------------------- | -------------------------- |
+| `raw`     | 원본 거래소 가격    | 34,800 USDT (Binance)      |
+| `usd`     | USD 정규화 가격     | 34,730.40 USD (USDT=0.998) |
+| `usdlike` | USDT/USDC 환산 가격 | 34,800 USDT                |
 
 ### Stablecoin Conversion
 
@@ -228,16 +231,17 @@ USD Price = Raw Price × (Stablecoin/USD Rate)
 ```
 
 디페깅 발생 시 (예: USDT/USD = 0.998):
+
 - Binance BTC/USDT 34,800 → USD 34,730.40
 - 정확한 거래소 간 프리미엄 계산 가능
 
 ## Premium Types
 
-| Premium | Description |
-|---------|-------------|
-| Raw Premium | Direct price comparison (target - source) / source |
-| Kimchi Premium | KRW price via official USD/KRW rate vs overseas |
-| Tether Premium | KRW price via USDT/KRW rate vs overseas |
+| Premium        | Description                                        |
+| -------------- | -------------------------------------------------- |
+| Raw Premium    | Direct price comparison (target - source) / source |
+| Kimchi Premium | KRW price via official USD/KRW rate vs overseas    |
+| Tether Premium | KRW price via USDT/KRW rate vs overseas            |
 
 ## Development Methodology
 

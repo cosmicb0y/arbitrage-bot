@@ -118,9 +118,9 @@ let value = price.to_f64();                  // 50000.0
 | 거래소 | 호가 통화 | 상태 |
 |--------|----------|------|
 | Binance | USDT, USDC | ✅ Active |
-| Coinbase | USD, USDC | ✅ Active |
-| Bybit | USDT | ✅ Active |
-| GateIO | USDT | ✅ Active |
+| Coinbase | USD, USDT, USDC | ✅ Active |
+| Bybit | USDT, USDC | ✅ Active |
+| GateIO | USDT, USDC | ✅ Active |
 | Upbit | KRW | ✅ Active |
 | Bithumb | KRW | ✅ Active |
 | Kraken | USD | 🚧 Planned |
