@@ -269,8 +269,10 @@ impl WsClient {
                             }
                             Message::Text(text) => {
                                 // Forward orderbook updates to the channel (non-blocking)
-                                // Gate.io uses partial snapshots, so dropping is OK during subscription phase
-                                if text.contains("\"channel\":\"spot.order_book\"") && text.contains("\"event\":\"update\"") {
+                                // Gate.io spot.obu sends full orderbook snapshots with full=true
+                                if text.contains("\"channel\":\"spot.obu\"")
+                                    && (text.contains("\"full\":true") || text.contains("\"full\": true"))
+                                {
                                     let _ = self.tx.try_send(WsMessage::Text(text.clone()));
                                 }
                             }
@@ -321,7 +323,9 @@ impl WsClient {
             match tokio::time::timeout(Duration::from_millis(100), read.next()).await {
                 Ok(Some(Ok(Message::Text(text)))) => {
                     final_drain += 1;
-                    if text.contains("\"channel\":\"spot.order_book\"") && text.contains("\"event\":\"update\"") {
+                    if text.contains("\"channel\":\"spot.obu\"")
+                        && (text.contains("\"full\":true") || text.contains("\"full\": true"))
+                    {
                         let _ = self.tx.try_send(WsMessage::Text(text));
                     }
                 }

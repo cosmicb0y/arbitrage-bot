@@ -65,9 +65,11 @@ impl ExchangeAdapter for GateIOAdapter {
 
         let mut messages = Vec::new();
 
+        // Subscribe to spot.obu channel for full orderbook updates
+        // Format: "ob.{symbol}.{depth}" e.g., "ob.BTC_USDT.50"
         for symbol in symbols {
             messages.push(format!(
-                r#"{{"time": {}, "channel": "spot.order_book", "event": "subscribe", "payload": ["{}", "20", "100ms"]}}"#,
+                r#"{{"time": {}, "channel": "spot.obu", "event": "subscribe", "payload": ["ob.{}.50"]}}"#,
                 timestamp,
                 symbol.to_uppercase()
             ));
@@ -190,7 +192,17 @@ impl GateIOAdapter {
     }
 
     pub fn is_orderbook_message(json: &str) -> bool {
-        json.contains("\"channel\":\"spot.order_book\"")
+        // spot.obu channel with full=true for full orderbook snapshots
+        // Check both with and without spaces since JSON formatting may vary
+        json.contains("\"channel\":\"spot.obu\"")
+            && (json.contains("\"full\":true") || json.contains("\"full\": true"))
+    }
+
+    pub fn is_orderbook_delta(json: &str) -> bool {
+        // spot.obu channel without full=true for incremental updates
+        json.contains("\"channel\":\"spot.obu\"")
+            && !json.contains("\"full\":true")
+            && !json.contains("\"full\": true")
     }
 
     pub fn parse_orderbook_with_symbol(
@@ -205,6 +217,7 @@ impl GateIOAdapter {
 
         #[derive(Debug, Deserialize)]
         struct GateIOOrderbookMessage {
+            #[serde(rename = "channel")]
             _channel: String,
             event: String,
             result: GateIOOrderbookResult,
@@ -245,6 +258,8 @@ impl GateIOAdapter {
         ))
     }
 
+    /// Parse full orderbook snapshot from spot.obu channel
+    /// Format: {"channel":"spot.obu","result":{"t":123,"full":true,"s":"ob.BTC_USDT.50","b":[...],"a":[...]},"event":"update"}
     pub fn parse_orderbook_full(
         json: &str,
     ) -> Result<
@@ -260,29 +275,37 @@ impl GateIOAdapter {
         FeedError,
     > {
         #[derive(Debug, Deserialize)]
-        struct GateIOOrderbookResult {
-            s: String,
-            bids: Vec<[String; 2]>,
-            asks: Vec<[String; 2]>,
+        struct GateIOObuResult {
+            s: String,                    // "ob.BTC_USDT.50"
+            b: Vec<[String; 2]>,          // bids
+            a: Vec<[String; 2]>,          // asks
         }
 
         #[derive(Debug, Deserialize)]
-        struct GateIOOrderbookMessage {
+        struct GateIOObuMessage {
+            #[serde(rename = "channel")]
             #[allow(dead_code)]
             _channel: String,
             event: String,
-            result: GateIOOrderbookResult,
+            result: GateIOObuResult,
         }
 
-        let msg: GateIOOrderbookMessage = serde_json::from_str(json)?;
+        let msg: GateIOObuMessage = serde_json::from_str(json)?;
 
         if msg.event != "update" {
             return Err(FeedError::ParseError("Not an update message".to_string()));
         }
 
+        // Extract currency_pair from s field: "ob.BTC_USDT.50" -> "BTC_USDT"
+        let currency_pair = msg.result.s
+            .strip_prefix("ob.")
+            .and_then(|s| s.rsplit_once('.'))
+            .map(|(pair, _depth)| pair.to_string())
+            .ok_or_else(|| FeedError::ParseError(format!("Invalid s field: {}", msg.result.s)))?;
+
         let bids: Vec<(f64, f64)> = msg
             .result
-            .bids
+            .b
             .iter()
             .filter_map(|level| {
                 let price = level[0].parse::<f64>().ok()?;
@@ -293,7 +316,7 @@ impl GateIOAdapter {
 
         let asks: Vec<(f64, f64)> = msg
             .result
-            .asks
+            .a
             .iter()
             .filter_map(|level| {
                 let price = level[0].parse::<f64>().ok()?;
@@ -310,7 +333,7 @@ impl GateIOAdapter {
         }
 
         Ok((
-            msg.result.s,
+            currency_pair,
             FixedPoint::from_f64(bid),
             FixedPoint::from_f64(ask),
             FixedPoint::from_f64(bid_size),
