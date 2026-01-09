@@ -65,6 +65,8 @@ export interface ArbitrageOpportunity {
   source_raw_price?: number;
   // Raw price from target exchange in original quote currency
   target_raw_price?: number;
+  // Client-side calculated age in milliseconds (time since last update)
+  age_ms?: number;
 }
 
 export interface BotStats {

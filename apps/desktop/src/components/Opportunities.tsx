@@ -403,12 +403,13 @@ function Opportunities() {
         <table className="w-full table-fixed">
           <colgroup>
             <col className="w-20" />
-            <col className="w-72" />
+            <col className="w-64" />
             <col className="w-24" />
             <col className="w-28" />
             <col className="w-28" />
-            <col className="w-40" />
+            <col className="w-36" />
             <col className="w-24" />
+            <col className="w-16" />
             <col className="w-24" />
           </colgroup>
           <thead className="bg-dark-700">
@@ -420,6 +421,7 @@ function Opportunities() {
               <th className="text-right text-gray-400 text-sm p-4">Sell Price</th>
               <th className="text-right text-gray-400 text-sm p-4">Optimal Size</th>
               <th className="text-right text-gray-400 text-sm p-4">Spread</th>
+              <th className="text-right text-gray-400 text-sm p-4">Age</th>
               <th className="text-center text-gray-400 text-sm p-4">Action</th>
             </tr>
           </thead>
@@ -723,6 +725,28 @@ function Opportunities() {
                       );
                     })()}
                   </td>
+                  <td className="p-4 text-right">
+                    {(() => {
+                      const ageMs = opp.age_ms ?? 0;
+                      const ageSec = Math.floor(ageMs / 1000);
+                      const isStale = ageSec >= 10;
+                      const isVeryStale = ageSec >= 30;
+                      return (
+                        <span
+                          className={`text-xs font-mono ${
+                            isVeryStale
+                              ? "text-danger-400"
+                              : isStale
+                                ? "text-yellow-500"
+                                : "text-gray-500"
+                          }`}
+                          title={`Last updated ${ageSec}s ago`}
+                        >
+                          {ageSec}s
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td className="p-4 text-center">
                     <button
                       onClick={() => handleExecute(opp.id)}
@@ -741,7 +765,7 @@ function Opportunities() {
               })
             ) : (
               <tr>
-                <td colSpan={8} className="p-8 text-center text-gray-400">
+                <td colSpan={9} className="p-8 text-center text-gray-400">
                   No opportunities detected. The bot is monitoring price differences
                   across exchanges.
                 </td>

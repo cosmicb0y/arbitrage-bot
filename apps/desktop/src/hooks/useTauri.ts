@@ -212,24 +212,89 @@ export function usePrices() {
   return prices;
 }
 
+// Global opportunity cache - persists across component mounts/unmounts
+const getOppKey = (opp: ArbitrageOpportunity) =>
+  `${opp.symbol}-${opp.source_exchange}-${opp.target_exchange}`;
+
+class OpportunityCache {
+  private opportunities: Map<string, ArbitrageOpportunity> = new Map();
+  private listeners: Set<() => void> = new Set();
+  private initialized = false;
+
+  get(key: string): ArbitrageOpportunity | undefined {
+    return this.opportunities.get(key);
+  }
+
+  set(key: string, opp: ArbitrageOpportunity): void {
+    this.opportunities.set(key, opp);
+    this.notifyListeners();
+  }
+
+  delete(key: string): boolean {
+    const result = this.opportunities.delete(key);
+    if (result) this.notifyListeners();
+    return result;
+  }
+
+  clear(): void {
+    this.opportunities.clear();
+    this.notifyListeners();
+  }
+
+  values(): IterableIterator<ArbitrageOpportunity> {
+    return this.opportunities.values();
+  }
+
+  entries(): IterableIterator<[string, ArbitrageOpportunity]> {
+    return this.opportunities.entries();
+  }
+
+  get size(): number {
+    return this.opportunities.size;
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
+  setInitialized(): void {
+    this.initialized = true;
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notifyListeners(): void {
+    this.listeners.forEach(l => l());
+  }
+}
+
+const opportunityCache = new OpportunityCache();
+
 export function useOpportunities() {
   const [opportunities, setOpportunities] = useState<ArbitrageOpportunity[]>(
     []
   );
-  // Use Map for O(1) lookups and batch updates
-  const oppMapRef = useRef<Map<string, ArbitrageOpportunity>>(new Map());
   const pendingUpdateRef = useRef<boolean>(false);
 
   useEffect(() => {
-    const getOppKey = (opp: ArbitrageOpportunity) =>
-      `${opp.symbol}-${opp.source_exchange}-${opp.target_exchange}`;
+    // Remove opportunities not updated in 60 seconds
+    const REMOVE_THRESHOLD_MS = 60_000;
+    // Minimum spread threshold: 30 bps (0.3%)
+    const MIN_SPREAD_BPS = 30;
 
     // Flush pending updates at 10 FPS (every 100ms)
+    // Also calculate age_ms for each opportunity
     const flushUpdates = () => {
       if (pendingUpdateRef.current) {
         pendingUpdateRef.current = false;
-        // Sort by premium_bps descending, limit to 50
-        const sorted = Array.from(oppMapRef.current.values())
+        const now = Date.now();
+        // Filter by min spread, sort by premium_bps descending, limit to 50, add age_ms
+        const sorted = Array.from(opportunityCache.values())
+          .filter(opp => opp.premium_bps >= MIN_SPREAD_BPS)
+          .map(opp => ({ ...opp, age_ms: now - opp.timestamp }))
           .sort((a, b) => b.premium_bps - a.premium_bps)
           .slice(0, 50);
         setOpportunities(sorted);
@@ -237,18 +302,46 @@ export function useOpportunities() {
     };
     const flushInterval = setInterval(flushUpdates, 100);
 
+    // Update age_ms every second (even without new data)
+    const ageUpdateInterval = setInterval(() => {
+      if (opportunityCache.size > 0) {
+        pendingUpdateRef.current = true;
+      }
+    }, 1000);
+
+    // Cleanup very old opportunities every 10 seconds
+    const cleanupStale = () => {
+      const now = Date.now();
+      let removed = false;
+      for (const [key, opp] of opportunityCache.entries()) {
+        if (now - opp.timestamp > REMOVE_THRESHOLD_MS) {
+          opportunityCache.delete(key);
+          removed = true;
+        }
+      }
+      if (removed) {
+        pendingUpdateRef.current = true;
+      }
+    };
+    const cleanupInterval = setInterval(cleanupStale, 10000);
+
+    // Initialize from cache immediately on mount
+    if (opportunityCache.size > 0) {
+      pendingUpdateRef.current = true;
+    }
+
     // Browser fallback
     if (!isTauri()) {
       const unsubscribe = wsManager.subscribe((msg) => {
         if (msg.type === "opportunity") {
           const opp = msg.data as ArbitrageOpportunity;
-          oppMapRef.current.set(getOppKey(opp), opp);
+          opportunityCache.set(getOppKey(opp), opp);
           pendingUpdateRef.current = true;
         } else if (msg.type === "opportunities") {
           const opps = msg.data as ArbitrageOpportunity[];
-          oppMapRef.current.clear();
+          opportunityCache.clear();
           for (const opp of opps) {
-            oppMapRef.current.set(getOppKey(opp), opp);
+            opportunityCache.set(getOppKey(opp), opp);
           }
           pendingUpdateRef.current = true;
         }
@@ -256,6 +349,8 @@ export function useOpportunities() {
 
       return () => {
         clearInterval(flushInterval);
+        clearInterval(ageUpdateInterval);
+        clearInterval(cleanupInterval);
         unsubscribe();
       };
     }
@@ -270,7 +365,7 @@ export function useOpportunities() {
         "new_opportunity",
         (event) => {
           const opp = event.payload;
-          oppMapRef.current.set(getOppKey(opp), opp);
+          opportunityCache.set(getOppKey(opp), opp);
           pendingUpdateRef.current = true;
         }
       );
@@ -279,22 +374,26 @@ export function useOpportunities() {
       unlistenBatch = await listen<ArbitrageOpportunity[]>(
         "opportunities",
         (event) => {
-          oppMapRef.current.clear();
+          opportunityCache.clear();
           for (const opp of event.payload) {
-            oppMapRef.current.set(getOppKey(opp), opp);
+            opportunityCache.set(getOppKey(opp), opp);
           }
           pendingUpdateRef.current = true;
         }
       );
 
-      try {
-        const data = await invoke<ArbitrageOpportunity[]>("get_opportunities");
-        for (const opp of data) {
-          oppMapRef.current.set(getOppKey(opp), opp);
+      // Only fetch initial data if cache is empty (first mount ever)
+      if (!opportunityCache.isInitialized()) {
+        try {
+          const data = await invoke<ArbitrageOpportunity[]>("get_opportunities");
+          for (const opp of data) {
+            opportunityCache.set(getOppKey(opp), opp);
+          }
+          opportunityCache.setInitialized();
+          pendingUpdateRef.current = true;
+        } catch (e) {
+          console.error("Failed to fetch initial opportunities:", e);
         }
-        pendingUpdateRef.current = true;
-      } catch (e) {
-        console.error("Failed to fetch initial opportunities:", e);
       }
     };
 
@@ -302,6 +401,8 @@ export function useOpportunities() {
 
     return () => {
       clearInterval(flushInterval);
+      clearInterval(ageUpdateInterval);
+      clearInterval(cleanupInterval);
       if (unlistenNew) unlistenNew();
       if (unlistenBatch) unlistenBatch();
     };
