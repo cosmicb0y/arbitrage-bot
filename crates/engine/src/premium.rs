@@ -358,10 +358,10 @@ pub struct PremiumConfig {
 impl Default for PremiumConfig {
     fn default() -> Self {
         Self {
-            min_premium_bps: 30,    // 0.3%
-            max_staleness_ms: 5000, // 5 seconds
-            trading_fee_bps: 10,    // 0.1% per trade
-            gas_cost_bps: 5,        // 0.05%
+            min_premium_bps: 30,     // 0.3%
+            max_staleness_ms: 30000, // 30 seconds
+            trading_fee_bps: 10,     // 0.1% per trade
+            gas_cost_bps: 5,         // 0.05%
         }
     }
 }
@@ -391,8 +391,22 @@ struct PriceEntry {
     bid_size: FixedPoint,
     /// Best ask size (quantity available at best ask)
     ask_size: FixedPoint,
-    #[allow(dead_code)]
+    /// Timestamp when this price was recorded (ms since epoch)
     timestamp_ms: u64,
+}
+
+impl PriceEntry {
+    /// Check if this price entry is stale (older than max_staleness_ms).
+    fn is_stale(&self, max_staleness_ms: u64) -> bool {
+        if max_staleness_ms == 0 {
+            return false; // Staleness check disabled
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        now.saturating_sub(self.timestamp_ms) > max_staleness_ms
+    }
 }
 
 /// Premium matrix for calculating arbitrage between exchanges.
@@ -402,6 +416,8 @@ pub struct PremiumMatrix {
     pair_id: u32,
     /// Key: exchange_id (one entry per exchange with all denominations)
     prices: HashMap<u16, PriceEntry>,
+    /// Maximum staleness in milliseconds (0 = disabled)
+    max_staleness_ms: u64,
 }
 
 impl PremiumMatrix {
@@ -410,7 +426,43 @@ impl PremiumMatrix {
         Self {
             pair_id,
             prices: HashMap::new(),
+            max_staleness_ms: 30000, // Default 30 seconds
         }
+    }
+
+    /// Create a new premium matrix with custom staleness threshold.
+    pub fn with_staleness(pair_id: u32, max_staleness_ms: u64) -> Self {
+        Self {
+            pair_id,
+            prices: HashMap::new(),
+            max_staleness_ms,
+        }
+    }
+
+    /// Set the maximum staleness threshold.
+    pub fn set_max_staleness_ms(&mut self, max_staleness_ms: u64) {
+        self.max_staleness_ms = max_staleness_ms;
+    }
+
+    /// Remove stale price entries. Returns the number of entries removed.
+    pub fn expire_stale_prices(&mut self) -> usize {
+        if self.max_staleness_ms == 0 {
+            return 0;
+        }
+        let before = self.prices.len();
+        self.prices.retain(|_, entry| !entry.is_stale(self.max_staleness_ms));
+        before - self.prices.len()
+    }
+
+    /// Clear all prices for a specific exchange.
+    /// Call this on reconnection to avoid using stale cached data.
+    pub fn clear_exchange(&mut self, exchange: Exchange) {
+        self.prices.remove(&(exchange as u16));
+    }
+
+    /// Clear all prices. Call this when major state reset is needed.
+    pub fn clear_all(&mut self) {
+        self.prices.clear();
     }
 
     /// Get the pair ID.
@@ -799,7 +851,7 @@ impl PremiumMatrix {
         self.all_premiums_with_depth()
             .into_iter()
             .map(
-                |(buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, _, _, premium)| {
+                |(buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, _, _, premium, _, _)| {
                     (
                         buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, premium,
                     )
@@ -810,6 +862,9 @@ impl PremiumMatrix {
 
     /// Get all premium pairs with full depth information.
     /// Now returns USDlike-denominated prices for accurate comparison.
+    /// Automatically filters out stale prices.
+    /// Returns: (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_size, sell_size, premium, buy_timestamp_ms, sell_timestamp_ms)
+    #[allow(clippy::type_complexity)]
     pub fn all_premiums_with_depth(
         &self,
     ) -> Vec<(
@@ -822,12 +877,24 @@ impl PremiumMatrix {
         FixedPoint,
         FixedPoint,
         i32,
+        u64, // buy_timestamp_ms
+        u64, // sell_timestamp_ms
     )> {
         let mut result = Vec::new();
 
         for (&buy_ex_id, buy_entry) in &self.prices {
+            // Skip stale buy entries
+            if buy_entry.is_stale(self.max_staleness_ms) {
+                continue;
+            }
+
             for (&sell_ex_id, sell_entry) in &self.prices {
                 if buy_ex_id == sell_ex_id {
+                    continue;
+                }
+
+                // Skip stale sell entries
+                if sell_entry.is_stale(self.max_staleness_ms) {
                     continue;
                 }
 
@@ -848,6 +915,8 @@ impl PremiumMatrix {
                             buy_entry.ask_size,
                             sell_entry.bid_size,
                             premium,
+                            buy_entry.timestamp_ms,
+                            sell_entry.timestamp_ms,
                         ));
                     }
                 }
@@ -858,7 +927,7 @@ impl PremiumMatrix {
     }
 
     /// Get all premium pairs with USDlike and Kimchi premiums.
-    /// Returns (buy_ex, sell_ex, quotes, prices, depth, usdlike_premium, usdlike_quote, kimchi_premium).
+    /// Returns (buy_ex, sell_ex, quotes, prices, depth, usdlike_premium, usdlike_quote, kimchi_premium, timestamps).
     ///
     /// For KRW ↔ overseas opportunities, KRW prices are converted to the overseas market's
     /// quote currency (USDT or USDC) using `to_usdlike()`.
@@ -878,12 +947,24 @@ impl PremiumMatrix {
         i32,        // usdlike_premium (same as tether/usdc)
         i32,        // (unused, kept for compatibility)
         i32,        // kimchi_premium
+        u64,        // buy_timestamp_ms
+        u64,        // sell_timestamp_ms
     )> {
         let mut result = Vec::new();
 
         for (&buy_ex_id, buy_entry) in &self.prices {
+            // Skip stale buy entries
+            if buy_entry.is_stale(self.max_staleness_ms) {
+                continue;
+            }
+
             for (&sell_ex_id, sell_entry) in &self.prices {
                 if buy_ex_id == sell_ex_id {
+                    continue;
+                }
+
+                // Skip stale sell entries
+                if sell_entry.is_stale(self.max_staleness_ms) {
                     continue;
                 }
 
@@ -939,6 +1020,8 @@ impl PremiumMatrix {
                         usdlike_premium,
                         usdlike_premium, // Same value for backward compatibility
                         kimchi_premium,
+                        buy_entry.timestamp_ms,
+                        sell_entry.timestamp_ms,
                     ));
                 }
             }
@@ -951,17 +1034,6 @@ impl PremiumMatrix {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arbitrage_core::PriceTick;
-
-    fn create_tick(exchange: Exchange, price: f64) -> PriceTick {
-        PriceTick::new(
-            exchange,
-            1, // pair_id
-            FixedPoint::from_f64(price),
-            FixedPoint::from_f64(price - 1.0),
-            FixedPoint::from_f64(price + 1.0),
-        )
-    }
 
     #[test]
     fn test_premium_matrix_new() {

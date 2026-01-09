@@ -530,6 +530,19 @@ fn format_price_with_raw(
     }
 }
 
+/// Format timestamp as human-readable string.
+fn format_timestamp(timestamp_ms: u64) -> String {
+    if timestamp_ms == 0 {
+        return "unknown".to_string();
+    }
+    let secs = (timestamp_ms / 1000) as i64;
+    let nanos = ((timestamp_ms % 1000) * 1_000_000) as u32;
+    match chrono::DateTime::from_timestamp(secs, nanos) {
+        Some(dt) => dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        None => "invalid".to_string(),
+    }
+}
+
 /// Format an opportunity as an alert message.
 pub fn format_alert_message(
     symbol: &str,
@@ -543,6 +556,8 @@ pub fn format_alert_message(
     optimal_size: Option<f64>,
     optimal_profit: Option<f64>,
     rates: Option<&ExchangeRates>,
+    source_timestamp_ms: Option<u64>,
+    target_timestamp_ms: Option<u64>,
 ) -> String {
     let premium_pct = premium_bps as f64 / 100.0;
 
@@ -560,16 +575,40 @@ pub fn format_alert_message(
     let source_price_str = format_price_with_raw(source_price, source_exchange, source_quote, rates);
     let target_price_str = format_price_with_raw(target_price, target_exchange, target_quote, rates);
 
+    // Format timestamps
+    let source_ts_str = source_timestamp_ms
+        .filter(|&ts| ts > 0)
+        .map(format_timestamp)
+        .unwrap_or_default();
+    let target_ts_str = target_timestamp_ms
+        .filter(|&ts| ts > 0)
+        .map(format_timestamp)
+        .unwrap_or_default();
+
+    // Build price lines with optional timestamps
+    let source_ts_line = if source_ts_str.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", source_ts_str)
+    };
+    let target_ts_line = if target_ts_str.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", target_ts_str)
+    };
+
     let mut msg = format!(
         "🚨 <b>Arbitrage Alert!</b>\n\n\
-         📈 <b>Buy:</b> {} @ {}\n        ({})\n\
-         📉 <b>Sell:</b> {} @ {}\n        ({})\n\n\
+         📈 <b>Buy:</b> {} @ {}{}\n        ({})\n\
+         📉 <b>Sell:</b> {} @ {}{}\n        ({})\n\n\
          <b>Premium:</b> {:.2}%",
         buy_market,
         source_price_str,
+        source_ts_line,
         source_link,
         sell_market,
         target_price_str,
+        target_ts_line,
         target_link,
         premium_pct
     );

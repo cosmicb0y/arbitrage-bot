@@ -239,6 +239,14 @@ pub struct ArbitrageOpportunity {
     /// Reason for optimal_size value (ok, no_orderbook, not_profitable).
     #[serde(default)]
     pub optimal_size_reason: OptimalSizeReason,
+
+    // Price timestamps
+    /// Timestamp when source price was recorded (ms since epoch)
+    #[serde(default)]
+    pub source_price_timestamp_ms: u64,
+    /// Timestamp when target price was recorded (ms since epoch)
+    #[serde(default)]
+    pub target_price_timestamp_ms: u64,
 }
 
 impl ArbitrageOpportunity {
@@ -378,6 +386,8 @@ impl ArbitrageOpportunity {
             optimal_size: 0,
             optimal_profit: 0,
             optimal_size_reason: OptimalSizeReason::default(),
+            source_price_timestamp_ms: 0,
+            target_price_timestamp_ms: 0,
         }
     }
 
@@ -392,6 +402,17 @@ impl ArbitrageOpportunity {
     pub fn with_depth(mut self, source_depth: FixedPoint, target_depth: FixedPoint) -> Self {
         self.source_depth = source_depth.0;
         self.target_depth = target_depth.0;
+        self
+    }
+
+    /// Set price timestamps (builder pattern).
+    pub fn with_price_timestamps(
+        mut self,
+        source_timestamp_ms: u64,
+        target_timestamp_ms: u64,
+    ) -> Self {
+        self.source_price_timestamp_ms = source_timestamp_ms;
+        self.target_price_timestamp_ms = target_timestamp_ms;
         self
     }
 

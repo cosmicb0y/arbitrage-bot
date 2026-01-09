@@ -206,7 +206,7 @@ impl OpportunityDetector {
         // Use all_premiums_multi_denomination to get USDlike and Kimchi premiums
         let premiums = matrix.all_premiums_multi_denomination(rates);
 
-        for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_size, sell_bid_size, usdlike_premium_bps, _unused, kimchi_premium) in premiums {
+        for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_size, sell_bid_size, usdlike_premium_bps, _unused, kimchi_premium, buy_timestamp_ms, sell_timestamp_ms) in premiums {
             // Skip opportunities without orderbook depth data
             // If both sides have zero depth, we can't verify the opportunity is real
             if buy_ask_size.0 == 0 && sell_bid_size.0 == 0 {
@@ -241,7 +241,9 @@ impl OpportunityDetector {
                     usd_krw_rate,
                     usdt_krw_rate,
                     usdc_krw_rate,
-                ).with_depth(buy_ask_size, sell_bid_size);
+                )
+                .with_depth(buy_ask_size, sell_bid_size)
+                .with_price_timestamps(buy_timestamp_ms, sell_timestamp_ms);
 
                 // Override premiums with matrix-calculated values
                 opp.usdlike_premium = usdlike_premium;
@@ -303,9 +305,32 @@ impl OpportunityDetector {
         self.detected.clear();
     }
 
+    /// Clear all prices for a specific exchange.
+    /// Call this on reconnection to avoid using stale cached prices.
+    pub fn clear_exchange_prices(&mut self, exchange: Exchange) {
+        for matrix in self.matrices.values_mut() {
+            matrix.clear_exchange(exchange);
+        }
+    }
+
+    /// Expire stale prices from all matrices.
+    /// Returns total number of entries removed.
+    pub fn expire_stale_prices(&mut self) -> usize {
+        let mut total = 0;
+        for matrix in self.matrices.values_mut() {
+            total += matrix.expire_stale_prices();
+        }
+        total
+    }
+
     /// Get the premium matrix for a pair.
     pub fn matrix(&self, pair_id: u32) -> Option<&PremiumMatrix> {
         self.matrices.get(&pair_id)
+    }
+
+    /// Get a mutable premium matrix for a pair.
+    pub fn matrix_mut(&mut self, pair_id: u32) -> Option<&mut PremiumMatrix> {
+        self.matrices.get_mut(&pair_id)
     }
 }
 

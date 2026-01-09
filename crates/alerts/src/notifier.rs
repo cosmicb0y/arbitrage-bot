@@ -193,6 +193,18 @@ impl Notifier {
             // Get current exchange rates for raw price display
             let rates = self.exchange_rates.read().ok().map(|r| r.clone());
 
+            // Get price timestamps
+            let source_timestamp_ms = if opportunity.source_price_timestamp_ms > 0 {
+                Some(opportunity.source_price_timestamp_ms)
+            } else {
+                None
+            };
+            let target_timestamp_ms = if opportunity.target_price_timestamp_ms > 0 {
+                Some(opportunity.target_price_timestamp_ms)
+            } else {
+                None
+            };
+
             let message = format_alert_message(
                 symbol,
                 &source_exchange,
@@ -205,6 +217,8 @@ impl Notifier {
                 optimal_size,
                 optimal_profit,
                 rates.as_ref(),
+                source_timestamp_ms,
+                target_timestamp_ms,
             );
 
             match self.bot.send_alert(&config.telegram_chat_id, &message).await {
