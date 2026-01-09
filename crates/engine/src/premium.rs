@@ -927,7 +927,7 @@ impl PremiumMatrix {
     }
 
     /// Get all premium pairs with USDlike and Kimchi premiums.
-    /// Returns (buy_ex, sell_ex, quotes, prices, depth, usdlike_premium, usdlike_quote, kimchi_premium, timestamps).
+    /// Returns (buy_ex, sell_ex, quotes, prices, raw_prices, depth, usdlike_premium, usdlike_quote, kimchi_premium, timestamps).
     ///
     /// For KRW ↔ overseas opportunities, KRW prices are converted to the overseas market's
     /// quote currency (USDT or USDC) using `to_usdlike()`.
@@ -942,6 +942,8 @@ impl PremiumMatrix {
         QuoteCurrency,
         FixedPoint,
         FixedPoint, // buy_ask (USDlike), sell_bid (USDlike)
+        FixedPoint,
+        FixedPoint, // buy_ask_raw, sell_bid_raw (original exchange prices)
         FixedPoint,
         FixedPoint, // bid_size, ask_size
         i32,        // usdlike_premium (same as tether/usdc)
@@ -1015,6 +1017,8 @@ impl PremiumMatrix {
                         sell_entry.mid.original_quote,
                         buy_ask_usdlike,
                         sell_bid_usdlike,
+                        buy_entry.ask.raw,  // Original exchange price for buy (ask)
+                        sell_entry.bid.raw, // Original exchange price for sell (bid)
                         buy_entry.ask_size,
                         sell_entry.bid_size,
                         usdlike_premium,

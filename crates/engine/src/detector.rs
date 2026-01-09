@@ -206,7 +206,7 @@ impl OpportunityDetector {
         // Use all_premiums_multi_denomination to get USDlike and Kimchi premiums
         let premiums = matrix.all_premiums_multi_denomination(rates);
 
-        for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_size, sell_bid_size, usdlike_premium_bps, _unused, kimchi_premium, buy_timestamp_ms, sell_timestamp_ms) in premiums {
+        for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_raw, sell_bid_raw, buy_ask_size, sell_bid_size, usdlike_premium_bps, _unused, kimchi_premium, buy_timestamp_ms, sell_timestamp_ms) in premiums {
             // Skip opportunities without orderbook depth data
             // If both sides have zero depth, we can't verify the opportunity is real
             if buy_ask_size.0 == 0 && sell_bid_size.0 == 0 {
@@ -243,7 +243,8 @@ impl OpportunityDetector {
                     usdc_krw_rate,
                 )
                 .with_depth(buy_ask_size, sell_bid_size)
-                .with_price_timestamps(buy_timestamp_ms, sell_timestamp_ms);
+                .with_price_timestamps(buy_timestamp_ms, sell_timestamp_ms)
+                .with_raw_prices(buy_ask_raw, sell_bid_raw);
 
                 // Override premiums with matrix-calculated values
                 opp.usdlike_premium = usdlike_premium;
