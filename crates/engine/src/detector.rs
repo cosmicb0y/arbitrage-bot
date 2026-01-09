@@ -1,10 +1,11 @@
 //! Arbitrage opportunity detector.
 //!
 //! Monitors price feeds and detects profitable arbitrage opportunities.
+//! Uses lock-free data structures (DashMap) for real-time performance.
 
 use arbitrage_core::{ArbitrageOpportunity, Asset, Chain, Exchange, FixedPoint, QuoteCurrency, UsdlikePremium, UsdlikeQuote};
 use crate::{ConversionRates, PremiumMatrix};
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static OPPORTUNITY_ID: AtomicU64 = AtomicU64::new(1);
@@ -36,11 +37,10 @@ impl Default for DetectorConfig {
     }
 }
 
-/// Get asset for a pair_id using the symbol registry.
-fn asset_for_pair_id(pair_id: u32, symbol_registry: &HashMap<u32, String>) -> Asset {
-    // First check the dynamic symbol registry
+/// Get asset for a pair_id using the symbol registry (DashMap version).
+fn asset_for_pair_id_dashmap(pair_id: u32, symbol_registry: &DashMap<u32, String>) -> Asset {
     if let Some(symbol) = symbol_registry.get(&pair_id) {
-        return Asset::from_symbol(symbol);
+        return Asset::from_symbol(&symbol);
     }
 
     // Fallback to legacy hardcoded pair_ids for backwards compatibility
@@ -53,13 +53,23 @@ fn asset_for_pair_id(pair_id: u32, symbol_registry: &HashMap<u32, String>) -> As
 }
 
 /// Opportunity detector that monitors prices and detects arbitrage.
-#[derive(Debug)]
+/// Uses lock-free DashMap for concurrent price updates without blocking.
 pub struct OpportunityDetector {
     config: DetectorConfig,
-    matrices: HashMap<u32, PremiumMatrix>,
-    detected: Vec<ArbitrageOpportunity>,
-    /// Maps pair_id -> symbol for dynamic markets
-    symbol_registry: HashMap<u32, String>,
+    /// Per-pair price matrices (lock-free concurrent access)
+    matrices: DashMap<u32, PremiumMatrix>,
+    /// Maps pair_id -> symbol for dynamic markets (lock-free)
+    symbol_registry: DashMap<u32, String>,
+}
+
+impl std::fmt::Debug for OpportunityDetector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpportunityDetector")
+            .field("config", &self.config)
+            .field("matrices_count", &self.matrices.len())
+            .field("symbol_registry_count", &self.symbol_registry.len())
+            .finish()
+    }
 }
 
 impl OpportunityDetector {
@@ -67,34 +77,38 @@ impl OpportunityDetector {
     pub fn new(config: DetectorConfig) -> Self {
         Self {
             config,
-            matrices: HashMap::new(),
-            detected: Vec::new(),
-            symbol_registry: HashMap::new(),
+            matrices: DashMap::new(),
+            symbol_registry: DashMap::new(),
         }
     }
 
-    /// Register a symbol with its pair_id.
+    /// Register a symbol with its pair_id (lock-free).
     /// This enables opportunity detection for dynamic markets.
-    pub fn register_symbol(&mut self, symbol: &str) -> u32 {
+    pub fn register_symbol(&self, symbol: &str) -> u32 {
         let pair_id = arbitrage_core::symbol_to_pair_id(symbol);
         self.symbol_registry.insert(pair_id, symbol.to_string());
         pair_id
     }
 
-    /// Get the pair_id for a symbol, registering it if needed.
-    pub fn get_or_register_pair_id(&mut self, symbol: &str) -> u32 {
+    /// Get the pair_id for a symbol, registering it if needed (lock-free).
+    pub fn get_or_register_pair_id(&self, symbol: &str) -> u32 {
         let pair_id = arbitrage_core::symbol_to_pair_id(symbol);
-        if !self.symbol_registry.contains_key(&pair_id) {
-            self.symbol_registry.insert(pair_id, symbol.to_string());
-        }
+        self.symbol_registry.entry(pair_id).or_insert_with(|| symbol.to_string());
         pair_id
     }
 
     /// Get all registered pair_ids (from both symbol registry and matrices).
+    /// Uses DashMap iter which holds read locks briefly per shard.
     pub fn registered_pair_ids(&self) -> Vec<u32> {
-        let mut pair_ids: Vec<u32> = self.symbol_registry.keys().copied().collect();
-        // Also include matrices pair_ids that might not be in symbol_registry
-        for &pair_id in self.matrices.keys() {
+        // Collect symbol registry keys first (quick iteration)
+        let registry_ids: Vec<u32> = self.symbol_registry.iter().map(|r| *r.key()).collect();
+
+        // Collect matrix keys separately (quick iteration)
+        let matrix_ids: Vec<u32> = self.matrices.iter().map(|r| *r.key()).collect();
+
+        // Merge without holding any locks
+        let mut pair_ids = registry_ids;
+        for pair_id in matrix_ids {
             if !pair_ids.contains(&pair_id) {
                 pair_ids.push(pair_id);
             }
@@ -104,29 +118,24 @@ impl OpportunityDetector {
 
     /// Get symbol for a pair_id from the registry.
     pub fn pair_id_to_symbol(&self, pair_id: u32) -> Option<String> {
-        self.symbol_registry.get(&pair_id).cloned()
-    }
-
-    /// Get detected opportunities.
-    pub fn opportunities(&self) -> &[ArbitrageOpportunity] {
-        &self.detected
+        self.symbol_registry.get(&pair_id).map(|r| r.value().clone())
     }
 
     /// Update price for an exchange/pair with default quote (USD).
-    pub fn update_price(&mut self, exchange: Exchange, pair_id: u32, price: FixedPoint) {
+    /// Lock-free: uses DashMap entry API for concurrent access.
+    pub fn update_price(&self, exchange: Exchange, pair_id: u32, price: FixedPoint) {
         self.update_price_with_quote(exchange, pair_id, price, QuoteCurrency::USD);
     }
 
-    /// Update price for an exchange/pair with specified quote currency.
-    /// Uses mid price as bid/ask when only price is available.
-    pub fn update_price_with_quote(&mut self, exchange: Exchange, pair_id: u32, price: FixedPoint, quote: QuoteCurrency) {
+    /// Update price for an exchange/pair with specified quote currency (lock-free).
+    pub fn update_price_with_quote(&self, exchange: Exchange, pair_id: u32, price: FixedPoint, quote: QuoteCurrency) {
         self.update_price_with_bid_ask(exchange, pair_id, price, price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0), quote);
     }
 
-    /// Update price for an exchange/pair with bid/ask from orderbook.
+    /// Update price for an exchange/pair with bid/ask from orderbook (lock-free).
     /// This enables accurate premium calculation using best bid/ask prices.
     pub fn update_price_with_bid_ask(
-        &mut self,
+        &self,
         exchange: Exchange,
         pair_id: u32,
         price: FixedPoint,
@@ -136,16 +145,30 @@ impl OpportunityDetector {
         ask_size: FixedPoint,
         quote: QuoteCurrency,
     ) {
-        let matrix = self.matrices
-            .entry(pair_id)
-            .or_insert_with(|| PremiumMatrix::new(pair_id));
-        matrix.update_price_with_bid_ask(exchange, price, bid, ask, bid_size, ask_size, quote);
+        // DashMap: use get_mut for existing entries, insert only if needed
+        // This minimizes lock contention vs entry() API
+        if let Some(mut matrix) = self.matrices.get_mut(&pair_id) {
+            matrix.update_price_with_bid_ask(exchange, price, bid, ask, bid_size, ask_size, quote);
+        } else {
+            // Insert new matrix
+            let mut matrix = PremiumMatrix::new(pair_id);
+            matrix.update_price_with_bid_ask(exchange, price, bid, ask, bid_size, ask_size, quote);
+            self.matrices.insert(pair_id, matrix);
+        }
+        tracing::trace!(
+            pair_id = pair_id,
+            exchange = ?exchange,
+            price = price.to_f64(),
+            bid = bid.to_f64(),
+            ask = ask.to_f64(),
+            "detector: price updated"
+        );
     }
 
-    /// Update price for an exchange/pair with bid/ask and separate raw prices.
+    /// Update price for an exchange/pair with bid/ask and separate raw prices (lock-free).
     /// Use this for KRW exchanges where raw prices differ from USD-normalized prices.
     pub fn update_price_with_bid_ask_and_raw(
-        &mut self,
+        &self,
         exchange: Exchange,
         pair_id: u32,
         price: FixedPoint,
@@ -157,48 +180,53 @@ impl OpportunityDetector {
         ask_size: FixedPoint,
         quote: QuoteCurrency,
     ) {
-        let matrix = self.matrices
-            .entry(pair_id)
-            .or_insert_with(|| PremiumMatrix::new(pair_id));
-        matrix.update_price_with_bid_ask_and_raw(exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
+        // DashMap: use get_mut for existing entries, insert only if needed
+        // This minimizes lock contention vs entry() API
+        if let Some(mut matrix) = self.matrices.get_mut(&pair_id) {
+            matrix.update_price_with_bid_ask_and_raw(exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
+        } else {
+            // Insert new matrix
+            let mut matrix = PremiumMatrix::new(pair_id);
+            matrix.update_price_with_bid_ask_and_raw(exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
+            self.matrices.insert(pair_id, matrix);
+        }
+        tracing::trace!(
+            pair_id = pair_id,
+            exchange = ?exchange,
+            price = price.to_f64(),
+            raw_bid = raw_bid.to_f64(),
+            raw_ask = raw_ask.to_f64(),
+            "detector: price with raw updated"
+        );
     }
 
     /// Detect opportunities for a specific pair.
-    pub fn detect(&mut self, pair_id: u32) -> Vec<ArbitrageOpportunity> {
+    pub fn detect(&self, pair_id: u32) -> Vec<ArbitrageOpportunity> {
         self.detect_with_rates(pair_id, None, None)
     }
 
     /// Detect opportunities for a specific pair with exchange rates for kimchi/tether premium.
-    /// - `usd_krw_rate`: USD/KRW exchange rate (e.g., 1450.0)
-    /// - `usdt_krw_rate`: USDT/KRW rate from Korean exchange (e.g., 1455.0)
     pub fn detect_with_rates(
-        &mut self,
+        &self,
         pair_id: u32,
         usd_krw_rate: Option<f64>,
         usdt_krw_rate: Option<f64>,
     ) -> Vec<ArbitrageOpportunity> {
-        // Use USDT rate as fallback for USDC
         self.detect_with_all_rates(pair_id, usd_krw_rate, usdt_krw_rate, usdt_krw_rate)
     }
 
     /// Detect opportunities for a specific pair with all exchange rates.
-    /// - `usd_krw_rate`: USD/KRW exchange rate from 하나은행 (e.g., 1450.0)
-    /// - `usdt_krw_rate`: USDT/KRW rate from Korean exchange (e.g., 1455.0)
-    /// - `usdc_krw_rate`: USDC/KRW rate from Korean exchange (e.g., 1453.0)
     pub fn detect_with_all_rates(
-        &mut self,
+        &self,
         pair_id: u32,
         usd_krw_rate: Option<f64>,
         usdt_krw_rate: Option<f64>,
         usdc_krw_rate: Option<f64>,
     ) -> Vec<ArbitrageOpportunity> {
-        // Build ConversionRates for premium calculation
         let rates = ConversionRates {
-            usdt_usd: 1.0,  // Assume 1:1 for stablecoin
+            usdt_usd: 1.0,
             usdc_usd: 1.0,
             usd_krw: usd_krw_rate.unwrap_or(0.0),
-            // For now, use the same rate for both Upbit and Bithumb
-            // TODO: Support per-exchange rates when available
             upbit_usdt_krw: usdt_krw_rate.unwrap_or(0.0),
             upbit_usdc_krw: usdc_krw_rate.unwrap_or(0.0),
             bithumb_usdt_krw: usdt_krw_rate.unwrap_or(0.0),
@@ -210,7 +238,7 @@ impl OpportunityDetector {
 
     /// Detect opportunities using full ConversionRates (supports per-exchange rates).
     pub fn detect_with_conversion_rates(
-        &mut self,
+        &self,
         pair_id: u32,
         rates: &ConversionRates,
         usd_krw_rate: Option<f64>,
@@ -218,38 +246,39 @@ impl OpportunityDetector {
         usdc_krw_rate: Option<f64>,
     ) -> Vec<ArbitrageOpportunity> {
         let Some(matrix) = self.matrices.get(&pair_id) else {
+            tracing::debug!(pair_id = pair_id, "detect: no matrix found for pair_id");
             return Vec::new();
         };
 
-        let mut opportunities = Vec::new();
-        let asset = asset_for_pair_id(pair_id, &self.symbol_registry);
+        tracing::debug!(
+            pair_id = pair_id,
+            matrices_count = self.matrices.len(),
+            "detect: found matrix"
+        );
 
-        // Use all_premiums_multi_denomination to get USDlike and Kimchi premiums
+        let mut opportunities = Vec::new();
+        let asset = asset_for_pair_id_dashmap(pair_id, &self.symbol_registry);
+
         let premiums = matrix.all_premiums_multi_denomination(rates);
 
         for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_raw, sell_bid_raw, buy_ask_size, sell_bid_size, usdlike_premium_bps, _unused, kimchi_premium, buy_timestamp_ms, sell_timestamp_ms) in premiums {
-            // Skip opportunities without orderbook depth data
-            // If both sides have zero depth, we can't verify the opportunity is real
             if buy_ask_size.0 == 0 && sell_bid_size.0 == 0 {
                 continue;
             }
 
-            // Use usdlike_premium as the primary premium for filtering
-            if usdlike_premium_bps >= self.config.min_premium_bps {
-                // Determine USDlike quote from the overseas market (non-KRW side)
+            // Broadcast all opportunities - let client decide what to display
+            {
                 let usdlike_quote = if buy_quote == QuoteCurrency::KRW {
                     UsdlikeQuote::from_quote_currency(sell_quote)
                 } else {
                     UsdlikeQuote::from_quote_currency(buy_quote)
                 };
 
-                // Create UsdlikePremium if we have a valid quote
                 let usdlike_premium = usdlike_quote.map(|quote| UsdlikePremium {
                     bps: usdlike_premium_bps,
                     quote,
                 });
 
-                // Create opportunity with all premium types
                 let mut opp = ArbitrageOpportunity::with_all_rates(
                     OPPORTUNITY_ID.fetch_add(1, Ordering::SeqCst),
                     buy_ex,
@@ -257,8 +286,8 @@ impl OpportunityDetector {
                     buy_quote,
                     sell_quote,
                     asset.clone(),
-                    buy_ask,   // source_price: the ask price we pay to buy
-                    sell_bid,  // target_price: the bid price we receive when selling
+                    buy_ask,
+                    sell_bid,
                     usd_krw_rate,
                     usdt_krw_rate,
                     usdc_krw_rate,
@@ -267,38 +296,31 @@ impl OpportunityDetector {
                 .with_price_timestamps(buy_timestamp_ms, sell_timestamp_ms)
                 .with_raw_prices(buy_ask_raw, sell_bid_raw);
 
-                // Override premiums with matrix-calculated values
                 opp.usdlike_premium = usdlike_premium;
                 opp.kimchi_premium_bps = kimchi_premium;
-                opp.premium_bps = usdlike_premium_bps; // Use USDlike as the primary
+                opp.premium_bps = usdlike_premium_bps;
 
                 opportunities.push(opp);
             }
         }
 
-        // Sort by USDlike premium descending (primary metric)
         opportunities.sort_by(|a, b| {
             let a_bps = a.usdlike_premium.map(|p| p.bps).unwrap_or(a.premium_bps);
             let b_bps = b.usdlike_premium.map(|p| p.bps).unwrap_or(b.premium_bps);
             b_bps.cmp(&a_bps)
         });
 
-        // Store the best opportunity
-        if let Some(best) = opportunities.first().cloned() {
-            self.detected.push(best);
-        }
-
         opportunities
     }
 
     /// Detect opportunities for all tracked pairs.
-    pub fn detect_all(&mut self) -> Vec<ArbitrageOpportunity> {
+    pub fn detect_all(&self) -> Vec<ArbitrageOpportunity> {
         self.detect_all_with_rates(None, None)
     }
 
     /// Detect opportunities for all tracked pairs with exchange rates.
     pub fn detect_all_with_rates(
-        &mut self,
+        &self,
         usd_krw_rate: Option<f64>,
         usdt_krw_rate: Option<f64>,
     ) -> Vec<ArbitrageOpportunity> {
@@ -307,12 +329,12 @@ impl OpportunityDetector {
 
     /// Detect opportunities for all tracked pairs with all exchange rates.
     pub fn detect_all_with_all_rates(
-        &mut self,
+        &self,
         usd_krw_rate: Option<f64>,
         usdt_krw_rate: Option<f64>,
         usdc_krw_rate: Option<f64>,
     ) -> Vec<ArbitrageOpportunity> {
-        let pair_ids: Vec<u32> = self.matrices.keys().copied().collect();
+        let pair_ids: Vec<u32> = self.matrices.iter().map(|r| *r.key()).collect();
         let mut all_opportunities = Vec::new();
 
         for pair_id in pair_ids {
@@ -322,37 +344,27 @@ impl OpportunityDetector {
         all_opportunities
     }
 
-    /// Clear detected opportunities.
-    pub fn clear(&mut self) {
-        self.detected.clear();
-    }
-
     /// Clear all prices for a specific exchange.
     /// Call this on reconnection to avoid using stale cached prices.
-    pub fn clear_exchange_prices(&mut self, exchange: Exchange) {
-        for matrix in self.matrices.values_mut() {
-            matrix.clear_exchange(exchange);
+    pub fn clear_exchange_prices(&self, exchange: Exchange) {
+        for mut entry in self.matrices.iter_mut() {
+            entry.value_mut().clear_exchange(exchange);
         }
     }
 
     /// Expire stale prices from all matrices.
     /// Returns total number of entries removed.
-    pub fn expire_stale_prices(&mut self) -> usize {
+    pub fn expire_stale_prices(&self) -> usize {
         let mut total = 0;
-        for matrix in self.matrices.values_mut() {
-            total += matrix.expire_stale_prices();
+        for mut entry in self.matrices.iter_mut() {
+            total += entry.value_mut().expire_stale_prices();
         }
         total
     }
 
-    /// Get the premium matrix for a pair.
-    pub fn matrix(&self, pair_id: u32) -> Option<&PremiumMatrix> {
-        self.matrices.get(&pair_id)
-    }
-
-    /// Get a mutable premium matrix for a pair.
-    pub fn matrix_mut(&mut self, pair_id: u32) -> Option<&mut PremiumMatrix> {
-        self.matrices.get_mut(&pair_id)
+    /// Check if a matrix exists for a pair.
+    pub fn has_matrix(&self, pair_id: u32) -> bool {
+        self.matrices.contains_key(&pair_id)
     }
 }
 
@@ -373,7 +385,8 @@ mod tests {
     fn test_detector_new() {
         let config = DetectorConfig::default();
         let detector = OpportunityDetector::new(config);
-        assert!(detector.opportunities().is_empty());
+        // Detector starts with no matrices
+        assert!(!detector.has_matrix(1));
     }
 
     #[test]
