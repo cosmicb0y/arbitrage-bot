@@ -192,17 +192,8 @@ impl GateIOAdapter {
     }
 
     pub fn is_orderbook_message(json: &str) -> bool {
-        // spot.obu channel with full=true for full orderbook snapshots
-        // Check both with and without spaces since JSON formatting may vary
+        // spot.obu channel for both full snapshots and delta updates
         json.contains("\"channel\":\"spot.obu\"")
-            && (json.contains("\"full\":true") || json.contains("\"full\": true"))
-    }
-
-    pub fn is_orderbook_delta(json: &str) -> bool {
-        // spot.obu channel without full=true for incremental updates
-        json.contains("\"channel\":\"spot.obu\"")
-            && !json.contains("\"full\":true")
-            && !json.contains("\"full\": true")
     }
 
     pub fn parse_orderbook_with_symbol(
@@ -258,8 +249,9 @@ impl GateIOAdapter {
         ))
     }
 
-    /// Parse full orderbook snapshot from spot.obu channel
+    /// Parse orderbook message from spot.obu channel (both snapshot and delta)
     /// Format: {"channel":"spot.obu","result":{"t":123,"full":true,"s":"ob.BTC_USDT.50","b":[...],"a":[...]},"event":"update"}
+    /// Returns: (currency_pair, bid, ask, bid_size, ask_size, bids, asks, is_snapshot)
     pub fn parse_orderbook_full(
         json: &str,
     ) -> Result<
@@ -271,12 +263,15 @@ impl GateIOAdapter {
             FixedPoint,
             Vec<(f64, f64)>,
             Vec<(f64, f64)>,
+            bool, // is_snapshot: true if full snapshot, false if delta
         ),
         FeedError,
     > {
         #[derive(Debug, Deserialize)]
         struct GateIOObuResult {
             s: String,                    // "ob.BTC_USDT.50"
+            #[serde(default)]
+            full: bool,                   // true for snapshot, absent/false for delta
             b: Vec<[String; 2]>,          // bids
             a: Vec<[String; 2]>,          // asks
         }
@@ -295,6 +290,8 @@ impl GateIOAdapter {
         if msg.event != "update" {
             return Err(FeedError::ParseError("Not an update message".to_string()));
         }
+
+        let is_snapshot = msg.result.full;
 
         // Extract currency_pair from s field: "ob.BTC_USDT.50" -> "BTC_USDT"
         let currency_pair = msg.result.s
@@ -328,8 +325,10 @@ impl GateIOAdapter {
         let (bid, bid_size) = bids.first().copied().unwrap_or((0.0, 0.0));
         let (ask, ask_size) = asks.first().copied().unwrap_or((0.0, 0.0));
 
-        if bid == 0.0 || ask == 0.0 {
-            return Err(FeedError::ParseError("Empty bids or asks".to_string()));
+        // For delta updates, empty bids/asks is valid (no changes on that side)
+        // For snapshots, we need at least some data
+        if is_snapshot && (bid == 0.0 || ask == 0.0) {
+            return Err(FeedError::ParseError("Empty bids or asks in snapshot".to_string()));
         }
 
         Ok((
@@ -340,6 +339,7 @@ impl GateIOAdapter {
             FixedPoint::from_f64(ask_size),
             bids,
             asks,
+            is_snapshot,
         ))
     }
 

@@ -1,13 +1,15 @@
 //! Gate.io exchange feed handler.
 //!
 //! Processes WebSocket messages from Gate.io, including:
-//! - Orderbook messages with full depth
+//! - Orderbook snapshots (full replacement)
+//! - Orderbook deltas (incremental updates)
 //! - Stablecoin price tracking
 
-use super::process_overseas_price_update;
+use crate::feeds::common::convert_stablecoin_to_usd_for_exchange;
 use crate::feeds::connection::{handle_connection_event, ConnectionAction};
 use crate::feeds::FeedContext;
-use arbitrage_core::Exchange;
+use crate::ws_server;
+use arbitrage_core::{Exchange, FixedPoint, PriceTick, QuoteCurrency};
 use arbitrage_feeds::{ExchangeAdapter, GateIOAdapter, WsMessage};
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -44,47 +46,110 @@ pub async fn run_gateio_feed(ctx: FeedContext, mut rx: mpsc::Receiver<WsMessage>
 
 /// Process a text (JSON) message from Gate.io.
 async fn process_text_message(text: &str, ctx: &FeedContext) {
-    // Process orderbook message only (depth with bid/ask sizes)
+    // Process orderbook messages (both snapshots and deltas)
     if GateIOAdapter::is_orderbook_message(text) {
         match GateIOAdapter::parse_orderbook_full(text) {
-            Ok((currency_pair, bid, ask, bid_size, ask_size, bids, asks)) => {
+            Ok((currency_pair, _bid, _ask, _bid_size, _ask_size, bids, asks, is_snapshot)) => {
                 // Extract base symbol and quote from currency_pair (e.g., BTC_USDT -> BTC, USDT)
                 if let Some((symbol, quote)) = GateIOAdapter::extract_base_quote(&currency_pair) {
-                    // Calculate mid price from bid/ask
-                    let mid_price = arbitrage_core::FixedPoint::from_f64(
-                        (bid.to_f64() + ask.to_f64()) / 2.0,
-                    );
-
                     // Use canonical name if mapping exists
                     let display_symbol = ctx.symbol_mappings.canonical_name("GateIO", &symbol);
                     let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
+                    let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
-                    // Store full orderbook for depth walking calculation
-                    if !bids.is_empty() && !asks.is_empty() {
-                        ctx.state
-                            .update_orderbook_snapshot(Exchange::GateIO, pair_id, &bids, &asks);
-                        tracing::debug!(
-                            "GateIO orderbook stored: {} pair_id={} bids={} asks={}",
-                            display_symbol,
-                            pair_id,
-                            bids.len(),
-                            asks.len()
-                        );
+                    // Handle snapshot vs delta
+                    if is_snapshot {
+                        // Full orderbook replacement
+                        if !bids.is_empty() && !asks.is_empty() {
+                            ctx.state
+                                .update_orderbook_snapshot(Exchange::GateIO, pair_id, &bids, &asks);
+                        }
                     } else {
-                        tracing::warn!(
-                            "GateIO empty orderbook: {} bids={} asks={}",
-                            currency_pair,
-                            bids.len(),
-                            asks.len()
-                        );
+                        // Delta update - apply changes to existing orderbook
+                        ctx.state
+                            .apply_orderbook_delta(Exchange::GateIO, pair_id, &bids, &asks);
                     }
 
-                    // Process price update with stablecoin conversion
-                    process_overseas_price_update(
-                        &symbol, &quote, mid_price, bid, ask, bid_size, ask_size,
-                        Exchange::GateIO, ctx,
-                    )
-                    .await;
+                    // Get best bid/ask from orderbook cache (always accurate after delta applied)
+                    if let Some((best_bid, best_ask, bid_size, ask_size)) =
+                        ctx.state.get_best_bid_ask(Exchange::GateIO, pair_id)
+                    {
+                        let mid = (best_bid + best_ask) / 2.0;
+                        let mid_fp = FixedPoint::from_f64(mid);
+                        let bid_fp = FixedPoint::from_f64(best_bid);
+                        let ask_fp = FixedPoint::from_f64(best_ask);
+                        let bid_size_fp = FixedPoint::from_f64(bid_size);
+                        let ask_size_fp = FixedPoint::from_f64(ask_size);
+
+                        // Update stablecoin prices for this exchange
+                        if symbol == "USDT" || symbol == "USDC" {
+                            ctx.state
+                                .update_exchange_stablecoin_price(Exchange::GateIO, &symbol, &quote, mid);
+                        }
+
+                        // Use BTC as reference crypto for deriving stablecoin rates
+                        if symbol == "BTC" && (quote == "USD" || quote == "USDT" || quote == "USDC") {
+                            ctx.state
+                                .update_exchange_ref_crypto_price(Exchange::GateIO, &quote, mid);
+                        }
+
+                        // Convert stablecoin prices to USD
+                        let mid_usd = convert_stablecoin_to_usd_for_exchange(
+                            mid_fp,
+                            quote_currency,
+                            Exchange::GateIO,
+                            &ctx.state,
+                        );
+                        let bid_usd = convert_stablecoin_to_usd_for_exchange(
+                            bid_fp,
+                            quote_currency,
+                            Exchange::GateIO,
+                            &ctx.state,
+                        );
+                        let ask_usd = convert_stablecoin_to_usd_for_exchange(
+                            ask_fp,
+                            quote_currency,
+                            Exchange::GateIO,
+                            &ctx.state,
+                        );
+
+                        // Update state with both USD-converted and raw prices
+                        ctx.state
+                            .update_price_with_bid_ask_and_raw(
+                                Exchange::GateIO,
+                                pair_id,
+                                &display_symbol,
+                                mid_usd,
+                                bid_usd,
+                                ask_usd, // USD-normalized
+                                bid_fp,
+                                ask_fp, // Original USDT/USDC
+                                bid_size_fp,
+                                ask_size_fp,
+                                quote_currency,
+                            )
+                            .await;
+
+                        // Broadcast to clients
+                        let tick = PriceTick::with_depth(
+                            Exchange::GateIO,
+                            pair_id,
+                            mid_fp,
+                            bid_fp,
+                            ask_fp,
+                            bid_size_fp,
+                            ask_size_fp,
+                            quote_currency,
+                        );
+                        ws_server::broadcast_price_with_quote(
+                            &ctx.broadcast_tx,
+                            Exchange::GateIO,
+                            pair_id,
+                            &display_symbol,
+                            Some(&quote),
+                            &tick,
+                        );
+                    }
                 }
             }
             Err(e) => {
