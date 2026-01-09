@@ -44,7 +44,7 @@ struct BybitOrderbookMessage {
     #[serde(rename = "topic")]
     _topic: String,
     #[serde(rename = "type")]
-    _msg_type: String,
+    msg_type: String,
     data: BybitOrderbookData,
     #[serde(rename = "ts")]
     _ts: u64,
@@ -203,10 +203,16 @@ impl BybitAdapter {
         ))
     }
 
+    /// Parse orderbook message with snapshot/delta indicator.
+    /// Returns (tick, base, quote, bids, asks, is_snapshot).
+    /// - is_snapshot=true: Full orderbook replacement
+    /// - is_snapshot=false: Delta update (apply changes to existing orderbook)
     pub fn parse_orderbook_full(
         json: &str,
-    ) -> Result<(PriceTick, String, String, Vec<(f64, f64)>, Vec<(f64, f64)>), FeedError> {
+    ) -> Result<(PriceTick, String, String, Vec<(f64, f64)>, Vec<(f64, f64)>, bool), FeedError> {
         let msg: BybitOrderbookMessage = serde_json::from_str(json)?;
+
+        let is_snapshot = msg.msg_type == "snapshot";
 
         let (base, quote) = Self::extract_base_quote(&msg.data.s)
             .ok_or_else(|| FeedError::ParseError(format!("Unknown symbol: {}", msg.data.s)))?;
@@ -258,6 +264,7 @@ impl BybitAdapter {
             quote,
             bids,
             asks,
+            is_snapshot,
         ))
     }
 
