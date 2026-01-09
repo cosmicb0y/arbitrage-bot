@@ -142,6 +142,27 @@ impl OpportunityDetector {
         matrix.update_price_with_bid_ask(exchange, price, bid, ask, bid_size, ask_size, quote);
     }
 
+    /// Update price for an exchange/pair with bid/ask and separate raw prices.
+    /// Use this for KRW exchanges where raw prices differ from USD-normalized prices.
+    pub fn update_price_with_bid_ask_and_raw(
+        &mut self,
+        exchange: Exchange,
+        pair_id: u32,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        raw_bid: FixedPoint,
+        raw_ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
+        let matrix = self.matrices
+            .entry(pair_id)
+            .or_insert_with(|| PremiumMatrix::new(pair_id));
+        matrix.update_price_with_bid_ask_and_raw(exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
+    }
+
     /// Detect opportunities for a specific pair.
     pub fn detect(&mut self, pair_id: u32) -> Vec<ArbitrageOpportunity> {
         self.detect_with_rates(pair_id, None, None)

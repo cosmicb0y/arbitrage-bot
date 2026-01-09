@@ -571,6 +571,59 @@ impl PremiumMatrix {
         );
     }
 
+    /// Update price for an exchange with bid/ask and separate raw prices.
+    /// Use this for KRW exchanges where the raw price (original KRW) differs from
+    /// the USD-normalized price used for comparison.
+    ///
+    /// - `price`, `bid`, `ask`: USD-normalized prices for premium calculation
+    /// - `raw_bid`, `raw_ask`: Original exchange prices (e.g., KRW for Korean exchanges)
+    pub fn update_price_with_bid_ask_and_raw(
+        &mut self,
+        exchange: Exchange,
+        price: FixedPoint,
+        bid: FixedPoint,
+        ask: FixedPoint,
+        raw_bid: FixedPoint,
+        raw_ask: FixedPoint,
+        bid_size: FixedPoint,
+        ask_size: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
+        // For USD and KRW quotes, treat as USDT equivalent for USDlike comparison
+        let usdlike_quote = UsdlikeQuote::from_quote_currency(quote).or_else(|| {
+            if quote == QuoteCurrency::USD || quote == QuoteCurrency::KRW {
+                Some(UsdlikeQuote::USDT)
+            } else {
+                None
+            }
+        });
+
+        // Calculate raw mid price from original bid/ask
+        let raw_mid = FixedPoint((raw_bid.0 + raw_ask.0) / 2);
+
+        let mid_denom = DenominatedPrices {
+            usdlike: usdlike_quote.map(|q| UsdlikePrice::new(price, q)),
+            usd: Some(price),
+            raw: raw_mid,
+            original_quote: quote,
+        };
+        let bid_denom = DenominatedPrices {
+            usdlike: usdlike_quote.map(|q| UsdlikePrice::new(bid, q)),
+            usd: Some(bid),
+            raw: raw_bid,
+            original_quote: quote,
+        };
+        let ask_denom = DenominatedPrices {
+            usdlike: usdlike_quote.map(|q| UsdlikePrice::new(ask, q)),
+            usd: Some(ask),
+            raw: raw_ask,
+            original_quote: quote,
+        };
+        self.update_price_with_denominations(
+            exchange, mid_denom, bid_denom, ask_denom, bid_size, ask_size,
+        );
+    }
+
     /// Update price for an exchange with full multi-denomination support.
     /// This is the primary method for the new denomination system.
     pub fn update_price_with_denominations(
