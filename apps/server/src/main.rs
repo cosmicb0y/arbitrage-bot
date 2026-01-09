@@ -149,28 +149,45 @@ async fn run_detector_loop(
             }
         }
 
+        // OPTIMIZATION: Collect all opportunities first, then process notifications in parallel
+        let mut all_opps = Vec::new();
         for &pair_id in &pair_ids {
             let opps = state.detect_opportunities(pair_id).await;
+            all_opps.extend(opps);
+        }
 
-            for opp in opps {
-                if opp.premium_bps >= 30 {
-                    tracing::debug!(
-                        "🎯 Opportunity: {} {:?} -> {:?} | Premium: {} bps | Buy: {} | Sell: {}",
-                        opp.asset.symbol,
-                        opp.source_exchange,
-                        opp.target_exchange,
-                        opp.premium_bps,
-                        opp.source_price,
-                        opp.target_price
-                    );
-                    // Broadcast opportunity to clients
-                    ws_server::broadcast_opportunity(&broadcast_tx, &state, &opp);
+        // Filter and broadcast opportunities
+        let significant_opps: Vec<_> = all_opps
+            .into_iter()
+            .filter(|opp| opp.premium_bps >= 30)
+            .collect();
 
-                    // Send Telegram alert if notifier is configured
-                    if let Some(ref notifier) = notifier {
-                        if let Err(e) = notifier.process_opportunity(&opp).await {
-                            tracing::warn!("Failed to send Telegram alert: {}", e);
-                        }
+        for opp in &significant_opps {
+            tracing::debug!(
+                "🎯 Opportunity: {} {:?} -> {:?} | Premium: {} bps | Buy: {} | Sell: {}",
+                opp.asset.symbol,
+                opp.source_exchange,
+                opp.target_exchange,
+                opp.premium_bps,
+                opp.source_price,
+                opp.target_price
+            );
+            // Broadcast opportunity to clients (fast, in-memory)
+            ws_server::broadcast_opportunity(&broadcast_tx, &state, opp);
+        }
+
+        // OPTIMIZATION: Send Telegram alerts in parallel (I/O bound)
+        if let Some(ref notifier) = notifier {
+            if !significant_opps.is_empty() {
+                let notification_futures: Vec<_> = significant_opps
+                    .iter()
+                    .map(|opp| notifier.process_opportunity(opp))
+                    .collect();
+
+                let results = futures_util::future::join_all(notification_futures).await;
+                for result in results {
+                    if let Err(e) = result {
+                        tracing::warn!("Failed to send Telegram alert: {}", e);
                     }
                 }
             }
@@ -348,10 +365,16 @@ fn process_upbit_ticker(
             let tick_usd = PriceTick::new(Exchange::Upbit, pair_id, price_usd, bid_usd, ask_usd)
                 .with_sizes(bid_size, ask_size);
 
-            // Update state asynchronously with KRW quote and bid/ask
+            // Update state asynchronously with KRW quote, bid/ask, and original KRW prices
             let state_clone = state.clone();
+            let display_symbol_clone = display_symbol.clone();
             tokio::spawn(async move {
-                state_clone.update_price_with_bid_ask(Exchange::Upbit, pair_id, price_usd, bid_usd, ask_usd, bid_size, ask_size, QuoteCurrency::KRW).await;
+                state_clone.update_price_with_bid_ask_and_raw(
+                    Exchange::Upbit, pair_id, &display_symbol_clone,
+                    price_usd, bid_usd, ask_usd,  // USD-normalized
+                    bid_krw, ask_krw,              // Original KRW
+                    bid_size, ask_size, QuoteCurrency::KRW
+                ).await;
             });
 
             ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Upbit, pair_id, &display_symbol, Some("KRW"), &tick_usd);
@@ -517,9 +540,9 @@ async fn run_binance_feed(
                         let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
                         // Store full orderbook for depth walking calculation
-                        if bids.len() > 0 && asks.len() > 0 {
+                        if !bids.is_empty() && !asks.is_empty() {
+                            state.update_orderbook_snapshot(Exchange::Binance, pair_id, &bids, &asks);
                         }
-                        state.update_orderbook_snapshot(Exchange::Binance, pair_id, &bids, &asks);
 
                         // Update state with orderbook bid/ask (use symbol variant to ensure depth cache is updated)
                         state.update_price_with_bid_ask_and_symbol(Exchange::Binance, pair_id, &display_symbol, tick.price(), tick.bid(), tick.ask(), tick.bid_size(), tick.ask_size(), quote_currency).await;
@@ -828,10 +851,16 @@ fn process_bithumb_ticker(
             let tick_usd = PriceTick::new(Exchange::Bithumb, pair_id, price_usd, bid_usd, ask_usd)
                 .with_sizes(bid_size, ask_size);
 
-            // Update state asynchronously with KRW quote and bid/ask
+            // Update state asynchronously with KRW quote, bid/ask, and original KRW prices
             let state_clone = state.clone();
+            let display_symbol_clone = display_symbol.clone();
             tokio::spawn(async move {
-                state_clone.update_price_with_bid_ask(Exchange::Bithumb, pair_id, price_usd, bid_usd, ask_usd, bid_size, ask_size, QuoteCurrency::KRW).await;
+                state_clone.update_price_with_bid_ask_and_raw(
+                    Exchange::Bithumb, pair_id, &display_symbol_clone,
+                    price_usd, bid_usd, ask_usd,  // USD-normalized
+                    bid_krw, ask_krw,              // Original KRW
+                    bid_size, ask_size, QuoteCurrency::KRW
+                ).await;
             });
 
             ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Bithumb, pair_id, &display_symbol, Some("KRW"), &tick_usd);
@@ -1002,9 +1031,9 @@ async fn run_bybit_feed(
                         let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
                         // Store full orderbook for depth walking calculation
-                        if bids.len() > 0 && asks.len() > 0 {
+                        if !bids.is_empty() && !asks.is_empty() {
+                            state.update_orderbook_snapshot(Exchange::Bybit, pair_id, &bids, &asks);
                         }
-                        state.update_orderbook_snapshot(Exchange::Bybit, pair_id, &bids, &asks);
 
                         // Update state with orderbook bid/ask (use symbol variant to ensure depth cache is updated)
                         state.update_price_with_bid_ask_and_symbol(Exchange::Bybit, pair_id, &display_symbol, tick.price(), tick.bid(), tick.ask(), tick.bid_size(), tick.ask_size(), quote_currency).await;
@@ -1090,9 +1119,12 @@ async fn run_gateio_feed(
                             let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
                             // Store full orderbook for depth walking calculation
-                            if bids.len() > 0 && asks.len() > 0 {
+                            if !bids.is_empty() && !asks.is_empty() {
+                                state.update_orderbook_snapshot(Exchange::GateIO, pair_id, &bids, &asks);
+                                tracing::debug!("GateIO orderbook stored: {} pair_id={} bids={} asks={}", display_symbol, pair_id, bids.len(), asks.len());
+                            } else {
+                                tracing::warn!("GateIO empty orderbook: {} bids={} asks={}", currency_pair, bids.len(), asks.len());
                             }
-                            state.update_orderbook_snapshot(Exchange::GateIO, pair_id, &bids, &asks);
 
                             let tick = PriceTick::new(Exchange::GateIO, pair_id, mid_price, bid, ask)
                                 .with_sizes(bid_size, ask_size);
@@ -1102,9 +1134,12 @@ async fn run_gateio_feed(
                             ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::GateIO, pair_id, &display_symbol, Some(&quote), &tick);
                         }
                         }
-                        Err(_) => {
-                            // Orderbook parse failed - likely empty bids/asks
-                            // This is normal for some updates
+                        Err(e) => {
+                            // Orderbook parse failed - log first few failures for debugging
+                            static LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                            if LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 5 {
+                                tracing::warn!("GateIO parse error: {}", e);
+                            }
                         }
                     }
                 }
@@ -1309,9 +1344,11 @@ async fn fetch_initial_orderbooks(
                 let bid_fp = FixedPoint::from_f64(bid_usd);
                 let ask_fp = FixedPoint::from_f64(ask_usd);
 
-                state.update_price_with_bid_ask_and_symbol(
+                // Pass both USD-normalized and original KRW prices
+                state.update_price_with_bid_ask_and_raw(
                     Exchange::Upbit, pair_id, &display_symbol,
-                    mid_price_fp, bid_fp, ask_fp,
+                    mid_price_fp, bid_fp, ask_fp,  // USD-normalized
+                    *bid, *ask,                     // Original KRW
                     *bid_size, *ask_size, QuoteCurrency::KRW
                 ).await;
 
@@ -1322,8 +1359,12 @@ async fn fetch_initial_orderbooks(
                 // No exchange rate available yet, store raw KRW prices
                 // They will be updated when WebSocket provides the rate
                 let mid_price = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
-                state.update_price_with_bid_ask_and_symbol(
-                    Exchange::Upbit, pair_id, &display_symbol, mid_price, *bid, *ask, *bid_size, *ask_size, QuoteCurrency::KRW
+                // When no exchange rate, raw = normalized (both KRW)
+                state.update_price_with_bid_ask_and_raw(
+                    Exchange::Upbit, pair_id, &display_symbol,
+                    mid_price, *bid, *ask,  // KRW (no conversion)
+                    *bid, *ask,              // Original KRW
+                    *bid_size, *ask_size, QuoteCurrency::KRW
                 ).await;
 
                 // Broadcast to connected clients
@@ -1372,9 +1413,11 @@ async fn fetch_initial_orderbooks(
             let bid_fp = FixedPoint::from_f64(bid_usd);
             let ask_fp = FixedPoint::from_f64(ask_usd);
 
-            state.update_price_with_bid_ask_and_symbol(
+            // Pass both USD-normalized and original KRW prices
+            state.update_price_with_bid_ask_and_raw(
                 Exchange::Bithumb, pair_id, &display_symbol,
-                mid_price_fp, bid_fp, ask_fp,
+                mid_price_fp, bid_fp, ask_fp,  // USD-normalized
+                *bid, *ask,                     // Original KRW
                 *bid_size, *ask_size, QuoteCurrency::KRW
             ).await;
 

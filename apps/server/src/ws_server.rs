@@ -110,6 +110,12 @@ pub struct WsOpportunityData {
     /// Reason for optimal_size value: "ok" | "no_orderbook" | "not_profitable"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optimal_size_reason: Option<String>,
+    /// Raw price from source exchange in original quote currency (e.g., KRW for Korean exchanges, USDT for Binance)
+    #[serde(default)]
+    pub source_raw_price: f64,
+    /// Raw price from target exchange in original quote currency
+    #[serde(default)]
+    pub target_raw_price: f64,
 }
 
 /// Exchange rate data for WebSocket broadcast.
@@ -527,6 +533,8 @@ async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
                 arbitrage_core::OptimalSizeReason::NotProfitable => "not_profitable".to_string(),
                 arbitrage_core::OptimalSizeReason::NoConversionRate => "no_conversion_rate".to_string(),
             }),
+            source_raw_price: FixedPoint(opp.source_raw_price).to_f64(),
+            target_raw_price: FixedPoint(opp.target_raw_price).to_f64(),
         }
     }).collect();
 
@@ -661,6 +669,8 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
             arbitrage_core::OptimalSizeReason::NotProfitable => "not_profitable".to_string(),
             arbitrage_core::OptimalSizeReason::NoConversionRate => "no_conversion_rate".to_string(),
         }),
+        source_raw_price: FixedPoint(opp.source_raw_price).to_f64(),
+        target_raw_price: FixedPoint(opp.target_raw_price).to_f64(),
     };
 
     let _ = tx.send(WsServerMessage::Opportunity(ws_opp));
