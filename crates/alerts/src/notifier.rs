@@ -3,7 +3,6 @@
 use crate::config::AlertHistory;
 use crate::db::Database;
 use crate::telegram::{format_alert_message, TelegramBot};
-pub use crate::telegram::ExchangeRates;
 use arbitrage_core::{ArbitrageOpportunity, FixedPoint};
 use std::sync::Arc;
 use thiserror::Error;
@@ -57,7 +56,6 @@ pub struct Notifier {
     bot: Arc<TelegramBot>,
     config: NotifierConfig,
     transfer_path_checker: Option<TransferPathChecker>,
-    exchange_rates: std::sync::RwLock<ExchangeRates>,
 }
 
 impl Notifier {
@@ -68,7 +66,6 @@ impl Notifier {
             bot,
             config,
             transfer_path_checker: None,
-            exchange_rates: std::sync::RwLock::new(ExchangeRates::default()),
         }
     }
 
@@ -76,13 +73,6 @@ impl Notifier {
     pub fn with_transfer_path_checker(mut self, checker: TransferPathChecker) -> Self {
         self.transfer_path_checker = Some(checker);
         self
-    }
-
-    /// Update exchange rates for raw price display.
-    pub fn update_exchange_rates(&self, rates: ExchangeRates) {
-        if let Ok(mut lock) = self.exchange_rates.write() {
-            *lock = rates;
-        }
     }
 
     /// Process an arbitrage opportunity and send alerts if needed.
@@ -202,9 +192,6 @@ impl Notifier {
                 None
             };
 
-            // Get current exchange rates for raw price display (fallback)
-            let rates = self.exchange_rates.read().ok().map(|r| r.clone());
-
             // Get price timestamps
             let source_timestamp_ms = if opportunity.source_price_timestamp_ms > 0 {
                 Some(opportunity.source_price_timestamp_ms)
@@ -230,7 +217,6 @@ impl Notifier {
                 premium_bps,
                 optimal_size,
                 optimal_profit,
-                rates.as_ref(),
                 source_timestamp_ms,
                 target_timestamp_ms,
             );

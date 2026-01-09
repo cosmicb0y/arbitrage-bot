@@ -12,5 +12,5 @@ pub mod telegram;
 
 pub use config::AlertConfig;
 pub use db::Database;
-pub use notifier::{ExchangeRates, Notifier, NotifierConfig, TransferPathChecker};
+pub use notifier::{Notifier, NotifierConfig, TransferPathChecker};
 pub use telegram::TelegramBot;

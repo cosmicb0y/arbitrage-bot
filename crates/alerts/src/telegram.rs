@@ -452,84 +452,6 @@ fn format_exchange_with_link(exchange: &str, symbol: &str) -> String {
     }
 }
 
-/// Exchange rate information for price conversion.
-#[derive(Debug, Clone, Default)]
-pub struct ExchangeRates {
-    /// USDT/KRW rate from Upbit
-    pub upbit_usdt_krw: f64,
-    /// USDT/KRW rate from Bithumb
-    pub bithumb_usdt_krw: f64,
-    /// USDT/USD rate
-    pub usdt_usd: f64,
-    /// USDC/USD rate
-    pub usdc_usd: f64,
-}
-
-/// Convert USD price back to raw quote currency price.
-fn convert_usd_to_raw(
-    usd_price: f64,
-    exchange: &str,
-    quote: &str,
-    rates: &ExchangeRates,
-) -> Option<f64> {
-    match quote {
-        "KRW" => {
-            // USD -> KRW via USDT/KRW
-            let usdt_krw = if exchange == "Upbit" {
-                rates.upbit_usdt_krw
-            } else if exchange == "Bithumb" {
-                rates.bithumb_usdt_krw
-            } else {
-                0.0
-            };
-            if usdt_krw > 0.0 && rates.usdt_usd > 0.0 {
-                // usd_price was: krw_price / usdt_krw * usdt_usd
-                // So: krw_price = usd_price / usdt_usd * usdt_krw
-                Some((usd_price / rates.usdt_usd) * usdt_krw)
-            } else {
-                None
-            }
-        }
-        "USDT" => {
-            // USD -> USDT
-            if rates.usdt_usd > 0.0 {
-                Some(usd_price / rates.usdt_usd)
-            } else {
-                None
-            }
-        }
-        "USDC" => {
-            // USD -> USDC
-            if rates.usdc_usd > 0.0 {
-                Some(usd_price / rates.usdc_usd)
-            } else {
-                None
-            }
-        }
-        _ => None, // USD - no conversion needed
-    }
-}
-
-/// Format price with raw quote and USD conversion.
-fn format_price_with_raw(
-    usd_price: f64,
-    exchange: &str,
-    quote: &str,
-    rates: &ExchangeRates,
-) -> String {
-    if let Some(raw_price) = convert_usd_to_raw(usd_price, exchange, quote, rates) {
-        let raw_str = match quote {
-            "KRW" => format_krw_price(raw_price),
-            "USDT" => format_stablecoin_price(raw_price, "USDT"),
-            "USDC" => format_stablecoin_price(raw_price, "USDC"),
-            _ => format_price(usd_price),
-        };
-        format!("{}\n        ({})", raw_str, format_price(usd_price))
-    } else {
-        format_price(usd_price)
-    }
-}
-
 /// Format timestamp as human-readable string.
 fn format_timestamp(timestamp_ms: u64) -> String {
     if timestamp_ms == 0 {
@@ -543,17 +465,13 @@ fn format_timestamp(timestamp_ms: u64) -> String {
     }
 }
 
-/// Format price for display, preferring raw price if available.
-/// Falls back to conversion-based display if raw price is not provided.
+/// Format price for display with raw price and USD equivalent.
 fn format_price_display(
     raw_price: Option<f64>,
     usd_price: f64,
-    exchange: &str,
     quote: &str,
-    rates: &ExchangeRates,
 ) -> String {
     if let Some(raw) = raw_price {
-        // Use the actual raw price from the exchange directly
         let raw_str = match quote {
             "KRW" => format_krw_price(raw),
             "USDT" => format_stablecoin_price(raw, "USDT"),
@@ -562,8 +480,8 @@ fn format_price_display(
         };
         format!("{}\n        ({})", raw_str, format_price(usd_price))
     } else {
-        // Fallback: convert USD price back to raw quote currency
-        format_price_with_raw(usd_price, exchange, quote, rates)
+        // No raw price available, just show USD
+        format_price(usd_price)
     }
 }
 
@@ -581,7 +499,6 @@ pub fn format_alert_message(
     premium_bps: i32,
     optimal_size: Option<f64>,
     optimal_profit: Option<f64>,
-    rates: Option<&ExchangeRates>,
     source_timestamp_ms: Option<u64>,
     target_timestamp_ms: Option<u64>,
 ) -> String {
@@ -594,12 +511,9 @@ pub fn format_alert_message(
     let buy_market = format!("{}/{}", symbol, source_quote);
     let sell_market = format!("{}/{}", symbol, target_quote);
 
-    // Format prices: use raw prices directly if available, otherwise fallback to conversion
-    let default_rates = ExchangeRates::default();
-    let rates = rates.unwrap_or(&default_rates);
-
-    let source_price_str = format_price_display(source_raw_price, source_price, source_exchange, source_quote, rates);
-    let target_price_str = format_price_display(target_raw_price, target_price, target_exchange, target_quote, rates);
+    // Format prices using raw prices directly
+    let source_price_str = format_price_display(source_raw_price, source_price, source_quote);
+    let target_price_str = format_price_display(target_raw_price, target_price, target_quote);
 
     // Format timestamps
     let source_ts_str = source_timestamp_ms

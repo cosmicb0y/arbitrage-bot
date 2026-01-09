@@ -122,23 +122,6 @@ async fn run_detector_loop(
     let legacy_pair_ids = vec![1u32, 2, 3]; // BTC, ETH, SOL
 
     while state.is_running() {
-        // Update exchange rates in notifier if configured
-        if let Some(ref notifier) = notifier {
-            let rates = arbitrage_alerts::ExchangeRates {
-                upbit_usdt_krw: state
-                    .get_upbit_usdt_krw()
-                    .map(|p| p.to_f64())
-                    .unwrap_or(0.0),
-                bithumb_usdt_krw: state
-                    .get_bithumb_usdt_krw()
-                    .map(|p| p.to_f64())
-                    .unwrap_or(0.0),
-                usdt_usd: state.get_usdt_usd_price().to_f64(),
-                usdc_usd: state.get_usdc_usd_price().to_f64(),
-            };
-            notifier.update_exchange_rates(rates);
-        }
-
         // Get all registered pair_ids (includes dynamic markets from discovery)
         let mut pair_ids = state.get_registered_pair_ids().await;
 
