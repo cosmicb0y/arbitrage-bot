@@ -289,6 +289,41 @@ fn convert_krw_to_usd_for_exchange(
     Some(FixedPoint::from_f64(price_usd))
 }
 
+/// Convert stablecoin (USDT/USDC) price to USD using exchange-specific rates.
+/// Returns the original price if quote is USD or rate is unavailable.
+fn convert_stablecoin_to_usd_for_exchange(
+    price: FixedPoint,
+    quote: QuoteCurrency,
+    exchange: Exchange,
+    state: &SharedState,
+) -> FixedPoint {
+    let rate = match quote {
+        QuoteCurrency::USDT => state.get_usdt_usd_for_exchange(exchange),
+        QuoteCurrency::USDC => state.get_usdc_usd_for_exchange(exchange),
+        QuoteCurrency::USD => return price, // Already USD
+        _ => return price, // KRW or other - handled separately
+    };
+
+    // Validate rate is reasonable (0.90 - 1.10 for stablecoins)
+    if rate < 0.90 || rate > 1.10 {
+        tracing::warn!(
+            "{:?}: Unusual {:?}/USD rate {:.4} - using 1:1 fallback",
+            exchange, quote, rate
+        );
+        return price;
+    }
+
+    // Log significant depegging events
+    if rate < 0.98 || rate > 1.02 {
+        tracing::info!(
+            "{:?}: Stablecoin deviation {:?}/USD = {:.4}",
+            exchange, quote, rate
+        );
+    }
+
+    FixedPoint::from_f64(price.to_f64() * rate)
+}
+
 /// Cache for orderbook bid/ask and sizes (code -> (bid, ask, bid_size, ask_size) in KRW)
 type OrderbookCache = std::sync::Arc<dashmap::DashMap<String, (FixedPoint, FixedPoint, FixedPoint, FixedPoint)>>;
 
@@ -549,8 +584,18 @@ async fn run_binance_feed(
                             state.update_orderbook_snapshot(Exchange::Binance, pair_id, &bids, &asks);
                         }
 
-                        // Update state with orderbook bid/ask (use symbol variant to ensure depth cache is updated)
-                        state.update_price_with_bid_ask_and_symbol(Exchange::Binance, pair_id, &display_symbol, tick.price(), tick.bid(), tick.ask(), tick.bid_size(), tick.ask_size(), quote_currency).await;
+                        // Convert stablecoin prices to USD
+                        let price_usd = convert_stablecoin_to_usd_for_exchange(tick.price(), quote_currency, Exchange::Binance, &state);
+                        let bid_usd = convert_stablecoin_to_usd_for_exchange(tick.bid(), quote_currency, Exchange::Binance, &state);
+                        let ask_usd = convert_stablecoin_to_usd_for_exchange(tick.ask(), quote_currency, Exchange::Binance, &state);
+
+                        // Update state with both USD-converted and raw prices
+                        state.update_price_with_bid_ask_and_raw(
+                            Exchange::Binance, pair_id, &display_symbol,
+                            price_usd, bid_usd, ask_usd,              // USD-normalized
+                            tick.bid(), tick.ask(),                   // Original USDT/USDC
+                            tick.bid_size(), tick.ask_size(), quote_currency
+                        ).await;
                         ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::Binance, pair_id, &display_symbol, Some(&quote), &tick);
                     }
                 }
@@ -802,11 +847,21 @@ async fn process_coinbase_orderbook(
         };
         let quote_currency = QuoteCurrency::from_str(&normalized_quote).unwrap_or(QuoteCurrency::USDC);
 
+        // Convert stablecoin prices to USD (USDC quote needs conversion)
+        let mid_usd = convert_stablecoin_to_usd_for_exchange(mid_price, quote_currency, Exchange::Coinbase, state);
+        let bid_usd = convert_stablecoin_to_usd_for_exchange(bid, quote_currency, Exchange::Coinbase, state);
+        let ask_usd = convert_stablecoin_to_usd_for_exchange(ask, quote_currency, Exchange::Coinbase, state);
+
         let tick = PriceTick::new(Exchange::Coinbase, pair_id, mid_price, bid, ask)
             .with_sizes(bid_size, ask_size);
 
-        // Update state with orderbook data
-        state.update_price_with_bid_ask_and_symbol(Exchange::Coinbase, pair_id, &display_symbol, mid_price, bid, ask, bid_size, ask_size, quote_currency).await;
+        // Update state with both USD-converted and raw prices
+        state.update_price_with_bid_ask_and_raw(
+            Exchange::Coinbase, pair_id, &display_symbol,
+            mid_usd, bid_usd, ask_usd,    // USD-normalized
+            bid, ask,                      // Original USD/USDC
+            bid_size, ask_size, quote_currency
+        ).await;
         ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Coinbase, pair_id, &display_symbol, Some(&normalized_quote), &tick);
     }
 }
@@ -1087,10 +1142,17 @@ async fn run_bybit_feed(
                                 );
                             }
 
-                            // Update state with orderbook bid/ask
-                            state.update_price_with_bid_ask_and_symbol(
+                            // Convert stablecoin prices to USD
+                            let mid_usd = convert_stablecoin_to_usd_for_exchange(mid_fp, quote_currency, Exchange::Bybit, &state);
+                            let bid_usd = convert_stablecoin_to_usd_for_exchange(bid_fp, quote_currency, Exchange::Bybit, &state);
+                            let ask_usd = convert_stablecoin_to_usd_for_exchange(ask_fp, quote_currency, Exchange::Bybit, &state);
+
+                            // Update state with both USD-converted and raw prices
+                            state.update_price_with_bid_ask_and_raw(
                                 Exchange::Bybit, pair_id, &display_symbol,
-                                mid_fp, bid_fp, ask_fp, bid_size_fp, ask_size_fp, quote_currency
+                                mid_usd, bid_usd, ask_usd,         // USD-normalized
+                                bid_fp, ask_fp,                    // Original USDT/USDC
+                                bid_size_fp, ask_size_fp, quote_currency
                             ).await;
 
                             // Broadcast to clients
@@ -1188,11 +1250,21 @@ async fn run_gateio_feed(
                                 tracing::warn!("GateIO empty orderbook: {} bids={} asks={}", currency_pair, bids.len(), asks.len());
                             }
 
+                            // Convert stablecoin prices to USD
+                            let mid_usd = convert_stablecoin_to_usd_for_exchange(mid_price, quote_currency, Exchange::GateIO, &state);
+                            let bid_usd = convert_stablecoin_to_usd_for_exchange(bid, quote_currency, Exchange::GateIO, &state);
+                            let ask_usd = convert_stablecoin_to_usd_for_exchange(ask, quote_currency, Exchange::GateIO, &state);
+
                             let tick = PriceTick::new(Exchange::GateIO, pair_id, mid_price, bid, ask)
                                 .with_sizes(bid_size, ask_size);
 
-                            // Update state with orderbook data
-                            state.update_price_with_bid_ask_and_symbol(Exchange::GateIO, pair_id, &display_symbol, mid_price, bid, ask, bid_size, ask_size, quote_currency).await;
+                            // Update state with both USD-converted and raw prices
+                            state.update_price_with_bid_ask_and_raw(
+                                Exchange::GateIO, pair_id, &display_symbol,
+                                mid_usd, bid_usd, ask_usd,     // USD-normalized
+                                bid, ask,                      // Original USDT/USDC
+                                bid_size, ask_size, quote_currency
+                            ).await;
                             ws_server::broadcast_price_with_quote(&broadcast_tx, Exchange::GateIO, pair_id, &display_symbol, Some(&quote), &tick);
                         }
                         }
@@ -1294,8 +1366,16 @@ async fn fetch_initial_orderbooks(
             let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
             let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
-            state.update_price_with_bid_ask_and_symbol(
-                Exchange::Binance, pair_id, &display_symbol, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency
+            // Convert stablecoin prices to USD
+            let mid_usd = convert_stablecoin_to_usd_for_exchange(mid_price, quote_currency, Exchange::Binance, state);
+            let bid_usd = convert_stablecoin_to_usd_for_exchange(*bid, quote_currency, Exchange::Binance, state);
+            let ask_usd = convert_stablecoin_to_usd_for_exchange(*ask, quote_currency, Exchange::Binance, state);
+
+            state.update_price_with_bid_ask_and_raw(
+                Exchange::Binance, pair_id, &display_symbol,
+                mid_usd, bid_usd, ask_usd,    // USD-normalized
+                *bid, *ask,                    // Original USDT/USDC
+                *bid_size, *ask_size, quote_currency
             ).await;
 
             // Broadcast to connected clients
@@ -1326,8 +1406,16 @@ async fn fetch_initial_orderbooks(
             let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
             let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
-            state.update_price_with_bid_ask_and_symbol(
-                Exchange::Bybit, pair_id, &display_symbol, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency
+            // Convert stablecoin prices to USD
+            let mid_usd = convert_stablecoin_to_usd_for_exchange(mid_price, quote_currency, Exchange::Bybit, state);
+            let bid_usd = convert_stablecoin_to_usd_for_exchange(*bid, quote_currency, Exchange::Bybit, state);
+            let ask_usd = convert_stablecoin_to_usd_for_exchange(*ask, quote_currency, Exchange::Bybit, state);
+
+            state.update_price_with_bid_ask_and_raw(
+                Exchange::Bybit, pair_id, &display_symbol,
+                mid_usd, bid_usd, ask_usd,    // USD-normalized
+                *bid, *ask,                    // Original USDT/USDC
+                *bid_size, *ask_size, quote_currency
             ).await;
 
             // Broadcast to connected clients
@@ -1352,8 +1440,16 @@ async fn fetch_initial_orderbooks(
             let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
             let quote_currency = QuoteCurrency::from_str(&quote).unwrap_or(QuoteCurrency::USD);
 
-            state.update_price_with_bid_ask_and_symbol(
-                Exchange::GateIO, pair_id, &display_symbol, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency
+            // Convert stablecoin prices to USD
+            let mid_usd = convert_stablecoin_to_usd_for_exchange(mid_price, quote_currency, Exchange::GateIO, state);
+            let bid_usd = convert_stablecoin_to_usd_for_exchange(*bid, quote_currency, Exchange::GateIO, state);
+            let ask_usd = convert_stablecoin_to_usd_for_exchange(*ask, quote_currency, Exchange::GateIO, state);
+
+            state.update_price_with_bid_ask_and_raw(
+                Exchange::GateIO, pair_id, &display_symbol,
+                mid_usd, bid_usd, ask_usd,    // USD-normalized
+                *bid, *ask,                    // Original USDT/USDC
+                *bid_size, *ask_size, quote_currency
             ).await;
 
             // Broadcast to connected clients
@@ -1505,8 +1601,16 @@ async fn fetch_initial_orderbooks(
             let pair_id = arbitrage_core::symbol_to_pair_id(base);
             let quote_currency = QuoteCurrency::from_str(quote).unwrap_or(QuoteCurrency::USD);
 
-            state.update_price_with_bid_ask_and_symbol(
-                Exchange::Coinbase, pair_id, base, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency
+            // Convert stablecoin prices to USD
+            let mid_usd = convert_stablecoin_to_usd_for_exchange(mid_price, quote_currency, Exchange::Coinbase, state);
+            let bid_usd = convert_stablecoin_to_usd_for_exchange(*bid, quote_currency, Exchange::Coinbase, state);
+            let ask_usd = convert_stablecoin_to_usd_for_exchange(*ask, quote_currency, Exchange::Coinbase, state);
+
+            state.update_price_with_bid_ask_and_raw(
+                Exchange::Coinbase, pair_id, base,
+                mid_usd, bid_usd, ask_usd,    // USD-normalized
+                *bid, *ask,                    // Original USD/USDC
+                *bid_size, *ask_size, quote_currency
             ).await;
 
             // Broadcast to connected clients
