@@ -38,8 +38,11 @@ axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["cors"] }
 futures-util = "0.3"
 
-# HTTP client for exchange rate API
+# HTTP client for exchange rate API and Telegram notifications
 reqwest = { version = "0.12", features = ["json"] }
+
+# Timestamps for notifications
+chrono = "0.4"
 
 # Cryptography for API signing
 hmac = "0.12"

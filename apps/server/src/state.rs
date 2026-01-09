@@ -593,6 +593,25 @@ impl AppState {
         tracing::info!("{:?}: Orderbook cache cleared (No OB until snapshot)", exchange);
     }
 
+    /// Clear all cached data for a specific exchange (orderbooks, depth, and detector prices).
+    /// Call this on WebSocket reconnection to avoid using stale data.
+    pub async fn clear_exchange_caches(&self, exchange: Exchange) {
+        // Clear orderbook and depth cache (sync)
+        self.clear_orderbooks_for_exchange(exchange);
+
+        // Clear detector prices (async)
+        let mut detector = self.detector.write().await;
+        detector.clear_exchange_prices(exchange);
+        tracing::info!("{:?}: Detector prices cleared", exchange);
+    }
+
+    /// Expire stale prices from all detector matrices.
+    /// Call this periodically to clean up old data.
+    pub async fn expire_stale_prices(&self) -> usize {
+        let mut detector = self.detector.write().await;
+        detector.expire_stale_prices()
+    }
+
     /// Get orderbooks for both sides of an arbitrage opportunity.
     /// Returns (buy_orderbook, sell_orderbook) if both are available.
     #[allow(dead_code)]

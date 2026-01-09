@@ -5,8 +5,11 @@
 mod config;
 mod exchange_rate;
 mod state;
+mod status_notifier;
 mod wallet_status;
 mod ws_server;
+
+use status_notifier::{StatusEvent, StatusNotifierHandle};
 
 use clap::Parser;
 use config::{AppConfig, ExecutionMode};
@@ -266,13 +269,33 @@ fn convert_krw_to_usd_for_exchange(
 ) -> Option<FixedPoint> {
     // Get exchange-specific USDT/KRW rate
     let usdt_krw = state.get_usdt_krw_for_exchange(exchange)?;
+    let usdt_krw_f64 = usdt_krw.to_f64();
+
+    // Validate USDT/KRW rate is reasonable (should be around 1300-1600)
+    if usdt_krw_f64 < 1000.0 || usdt_krw_f64 > 2000.0 {
+        tracing::warn!(
+            "{:?}: Invalid USDT/KRW rate {:.2} - skipping price conversion",
+            exchange, usdt_krw_f64
+        );
+        return None;
+    }
+
     let usdt_usd = state.get_usdt_usd_price();
 
     // KRW -> USDT -> USD
     // price_usdt = krw_price / usdt_krw
     // price_usd = price_usdt * usdt_usd
-    let price_usdt = krw_price.to_f64() / usdt_krw.to_f64();
+    let price_usdt = krw_price.to_f64() / usdt_krw_f64;
     let price_usd = price_usdt * usdt_usd.to_f64();
+
+    // Sanity check: converted price should be positive and reasonable
+    if price_usd <= 0.0 || !price_usd.is_finite() {
+        tracing::warn!(
+            "{:?}: Invalid converted price {:.8} from KRW {:.2}",
+            exchange, price_usd, krw_price.to_f64()
+        );
+        return None;
+    }
 
     Some(FixedPoint::from_f64(price_usd))
 }
@@ -359,6 +382,7 @@ async fn run_upbit_feed(
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
     symbol_mappings: Arc<SymbolMappings>,
+    status_notifier: Option<StatusNotifierHandle>,
 ) {
     debug!("Starting Upbit live feed processor");
     let orderbook_cache: OrderbookCache = std::sync::Arc::new(dashmap::DashMap::new());
@@ -420,20 +444,32 @@ async fn run_upbit_feed(
             }
             WsMessage::Connected => {
                 debug!("Upbit: Connected to WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Connected(Exchange::Upbit));
+                }
             }
             WsMessage::Reconnected => {
-                info!("Upbit: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                info!("Upbit: Reconnected - clearing all cached data");
                 orderbook_cache.clear();
-                state.clear_orderbooks_for_exchange(Exchange::Upbit);
+                state.clear_exchange_caches(Exchange::Upbit).await;
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Reconnected(Exchange::Upbit));
+                }
             }
             WsMessage::Disconnected => {
                 warn!("Upbit: Disconnected from WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Disconnected(Exchange::Upbit));
+                }
             }
             WsMessage::Error(e) => {
                 warn!("Upbit: Error - {}", e);
             }
             WsMessage::CircuitBreakerOpen(wait_time) => {
                 warn!("Upbit: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::CircuitBreakerOpen(Exchange::Upbit, wait_time));
+                }
             }
         }
     }
@@ -447,6 +483,7 @@ async fn run_binance_feed(
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
     symbol_mappings: Arc<SymbolMappings>,
+    status_notifier: Option<StatusNotifierHandle>,
 ) {
     debug!("Starting Binance live feed processor");
 
@@ -492,16 +529,31 @@ async fn run_binance_feed(
             }
             WsMessage::Connected => {
                 debug!("Binance: Connected to WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Connected(Exchange::Binance));
+                }
             }
             WsMessage::Reconnected => {
-                info!("Binance: Reconnected - clearing orderbook cache (No OB until snapshot)");
-                state.clear_orderbooks_for_exchange(Exchange::Binance);
+                info!("Binance: Reconnected - clearing all cached data");
+                state.clear_exchange_caches(Exchange::Binance).await;
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Reconnected(Exchange::Binance));
+                }
             }
             WsMessage::Disconnected => {
                 warn!("Binance: Disconnected from WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Disconnected(Exchange::Binance));
+                }
             }
             WsMessage::Error(e) => {
                 warn!("Binance: Error - {}", e);
+            }
+            WsMessage::CircuitBreakerOpen(wait_time) => {
+                warn!("Binance: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::CircuitBreakerOpen(Exchange::Binance, wait_time));
+                }
             }
             _ => {}
         }
@@ -516,6 +568,7 @@ async fn run_coinbase_feed(
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
     symbol_mappings: Arc<SymbolMappings>,
+    status_notifier: Option<StatusNotifierHandle>,
 ) {
     debug!("Starting Coinbase live feed processor");
 
@@ -648,17 +701,32 @@ async fn run_coinbase_feed(
             }
             WsMessage::Connected => {
                 debug!("Coinbase: Connected to WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Connected(Exchange::Coinbase));
+                }
             }
             WsMessage::Reconnected => {
-                info!("Coinbase: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                info!("Coinbase: Reconnected - clearing all cached data");
                 orderbook_cache.clear();
-                state.clear_orderbooks_for_exchange(Exchange::Coinbase);
+                state.clear_exchange_caches(Exchange::Coinbase).await;
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Reconnected(Exchange::Coinbase));
+                }
             }
             WsMessage::Disconnected => {
                 warn!("Coinbase: Disconnected from WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Disconnected(Exchange::Coinbase));
+                }
             }
             WsMessage::Error(e) => {
                 warn!("Coinbase: Error - {}", e);
+            }
+            WsMessage::CircuitBreakerOpen(wait_time) => {
+                warn!("Coinbase: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::CircuitBreakerOpen(Exchange::Coinbase, wait_time));
+                }
             }
             _ => {}
         }
@@ -794,6 +862,7 @@ async fn run_bithumb_feed(
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
     symbol_mappings: Arc<SymbolMappings>,
+    status_notifier: Option<StatusNotifierHandle>,
 ) {
     debug!("Starting Bithumb live feed processor");
     let orderbook_cache: OrderbookCache = std::sync::Arc::new(dashmap::DashMap::new());
@@ -854,20 +923,32 @@ async fn run_bithumb_feed(
             }
             WsMessage::Connected => {
                 debug!("Bithumb: Connected to WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Connected(Exchange::Bithumb));
+                }
             }
             WsMessage::Reconnected => {
-                info!("Bithumb: Reconnected - clearing orderbook cache (No OB until snapshot)");
+                info!("Bithumb: Reconnected - clearing all cached data");
                 orderbook_cache.clear();
-                state.clear_orderbooks_for_exchange(Exchange::Bithumb);
+                state.clear_exchange_caches(Exchange::Bithumb).await;
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Reconnected(Exchange::Bithumb));
+                }
             }
             WsMessage::Disconnected => {
                 warn!("Bithumb: Disconnected from WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Disconnected(Exchange::Bithumb));
+                }
             }
             WsMessage::Error(e) => {
                 warn!("Bithumb: Error - {}", e);
             }
             WsMessage::CircuitBreakerOpen(wait_time) => {
                 warn!("Bithumb: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::CircuitBreakerOpen(Exchange::Bithumb, wait_time));
+                }
             }
         }
     }
@@ -881,6 +962,7 @@ async fn run_bybit_feed(
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
     symbol_mappings: Arc<SymbolMappings>,
+    status_notifier: Option<StatusNotifierHandle>,
 ) {
     debug!("Starting Bybit live feed processor");
 
@@ -935,19 +1017,31 @@ async fn run_bybit_feed(
             }
             WsMessage::Connected => {
                 debug!("Bybit: Connected to WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Connected(Exchange::Bybit));
+                }
             }
             WsMessage::Reconnected => {
-                info!("Bybit: Reconnected - clearing orderbook cache (No OB until snapshot)");
-                state.clear_orderbooks_for_exchange(Exchange::Bybit);
+                info!("Bybit: Reconnected - clearing all cached data");
+                state.clear_exchange_caches(Exchange::Bybit).await;
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Reconnected(Exchange::Bybit));
+                }
             }
             WsMessage::Disconnected => {
                 warn!("Bybit: Disconnected from WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Disconnected(Exchange::Bybit));
+                }
             }
             WsMessage::Error(e) => {
                 warn!("Bybit: Error - {}", e);
             }
             WsMessage::CircuitBreakerOpen(wait_time) => {
                 warn!("Bybit: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::CircuitBreakerOpen(Exchange::Bybit, wait_time));
+                }
             }
         }
     }
@@ -960,6 +1054,7 @@ async fn run_gateio_feed(
     broadcast_tx: BroadcastSender,
     mut rx: mpsc::Receiver<WsMessage>,
     symbol_mappings: Arc<SymbolMappings>,
+    status_notifier: Option<StatusNotifierHandle>,
 ) {
     debug!("Starting Gate.io live feed processor");
 
@@ -1019,19 +1114,31 @@ async fn run_gateio_feed(
             }
             WsMessage::Connected => {
                 debug!("Gate.io: Connected to WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Connected(Exchange::GateIO));
+                }
             }
             WsMessage::Reconnected => {
-                info!("Gate.io: Reconnected - clearing orderbook cache (No OB until snapshot)");
-                state.clear_orderbooks_for_exchange(Exchange::GateIO);
+                info!("Gate.io: Reconnected - clearing all cached data");
+                state.clear_exchange_caches(Exchange::GateIO).await;
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Reconnected(Exchange::GateIO));
+                }
             }
             WsMessage::Disconnected => {
                 warn!("Gate.io: Disconnected from WebSocket");
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::Disconnected(Exchange::GateIO));
+                }
             }
             WsMessage::Error(e) => {
                 warn!("Gate.io: Error - {}", e);
             }
             WsMessage::CircuitBreakerOpen(wait_time) => {
                 warn!("Gate.io: Circuit breaker OPEN - connection blocked for {:?}", wait_time);
+                if let Some(ref notifier) = status_notifier {
+                    notifier.try_send(StatusEvent::CircuitBreakerOpen(Exchange::GateIO, wait_time));
+                }
             }
         }
     }
@@ -1334,6 +1441,7 @@ async fn spawn_live_feeds(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     symbol_mappings: &SymbolMappings,
+    status_notifier: Option<StatusNotifierHandle>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::new();
 
@@ -1490,8 +1598,9 @@ async fn spawn_live_feeds(
         let binance_state = state.clone();
         let binance_broadcast = broadcast_tx.clone();
         let binance_mappings = symbol_mappings_arc.clone();
+        let binance_notifier = status_notifier.clone();
         handles.push(tokio::spawn(async move {
-            run_binance_feed(binance_state, binance_broadcast, binance_rx, binance_mappings).await;
+            run_binance_feed(binance_state, binance_broadcast, binance_rx, binance_mappings, binance_notifier).await;
         }));
     }
 
@@ -1558,8 +1667,9 @@ async fn spawn_live_feeds(
                 let coinbase_state = state.clone();
                 let coinbase_broadcast = broadcast_tx.clone();
                 let coinbase_mappings = symbol_mappings_arc.clone();
+                let coinbase_notifier = status_notifier.clone();
                 handles.push(tokio::spawn(async move {
-                    run_coinbase_feed(coinbase_state, coinbase_broadcast, coinbase_rx, coinbase_mappings).await;
+                    run_coinbase_feed(coinbase_state, coinbase_broadcast, coinbase_rx, coinbase_mappings, coinbase_notifier).await;
                 }));
             }
         } else {
@@ -1583,8 +1693,9 @@ async fn spawn_live_feeds(
         let upbit_state = state.clone();
         let upbit_broadcast = broadcast_tx.clone();
         let upbit_mappings = symbol_mappings_arc.clone();
+        let upbit_notifier = status_notifier.clone();
         handles.push(tokio::spawn(async move {
-            run_upbit_feed(upbit_state, upbit_broadcast, upbit_rx, upbit_mappings).await;
+            run_upbit_feed(upbit_state, upbit_broadcast, upbit_rx, upbit_mappings, upbit_notifier).await;
         }));
     }
 
@@ -1604,8 +1715,9 @@ async fn spawn_live_feeds(
         let bithumb_state = state.clone();
         let bithumb_broadcast = broadcast_tx.clone();
         let bithumb_mappings = symbol_mappings_arc.clone();
+        let bithumb_notifier = status_notifier.clone();
         handles.push(tokio::spawn(async move {
-            run_bithumb_feed(bithumb_state, bithumb_broadcast, bithumb_rx, bithumb_mappings).await;
+            run_bithumb_feed(bithumb_state, bithumb_broadcast, bithumb_rx, bithumb_mappings, bithumb_notifier).await;
         }));
     }
 
@@ -1635,8 +1747,9 @@ async fn spawn_live_feeds(
         let bybit_state = state.clone();
         let bybit_broadcast = broadcast_tx.clone();
         let bybit_mappings = symbol_mappings_arc.clone();
+        let bybit_notifier = status_notifier.clone();
         handles.push(tokio::spawn(async move {
-            run_bybit_feed(bybit_state, bybit_broadcast, bybit_rx, bybit_mappings).await;
+            run_bybit_feed(bybit_state, bybit_broadcast, bybit_rx, bybit_mappings, bybit_notifier).await;
         }));
     }
 
@@ -1663,8 +1776,9 @@ async fn spawn_live_feeds(
         let gateio_state = state.clone();
         let gateio_broadcast = broadcast_tx.clone();
         let gateio_mappings = symbol_mappings_arc.clone();
+        let gateio_notifier = status_notifier.clone();
         handles.push(tokio::spawn(async move {
-            run_gateio_feed(gateio_state, gateio_broadcast, gateio_rx, gateio_mappings).await;
+            run_gateio_feed(gateio_state, gateio_broadcast, gateio_rx, gateio_mappings, gateio_notifier).await;
         }));
     }
 
@@ -1850,6 +1964,17 @@ async fn main() {
         None
     };
 
+    // Initialize status notifier for WebSocket connection monitoring
+    let status_notifier = status_notifier::try_start_status_notifier();
+    if status_notifier.is_some() {
+        info!("📱 Status notifier enabled for WebSocket connection monitoring");
+    }
+
+    // Send server started notification
+    if let Some(ref notifier) = status_notifier {
+        notifier.try_send(StatusEvent::ServerStarted);
+    }
+
     // Spawn background tasks with broadcast sender
     let detector_state = state.clone();
     let detector_broadcast = broadcast_tx.clone();
@@ -1885,10 +2010,22 @@ async fn main() {
         run_market_discovery(discovery_state, discovery_broadcast, discovery_mappings).await;
     });
 
+    // Start stale price cleanup task (runs every 10 seconds)
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            let expired = cleanup_state.expire_stale_prices().await;
+            if expired > 0 {
+                tracing::debug!("Expired {} stale price entries", expired);
+            }
+        }
+    });
+
     // Spawn price source (live or simulated)
     let feed_handles: Vec<tokio::task::JoinHandle<()>> = if args.live {
         info!("📡 Using LIVE WebSocket feeds");
-        spawn_live_feeds(state.clone(), broadcast_tx.clone(), &symbol_mappings).await
+        spawn_live_feeds(state.clone(), broadcast_tx.clone(), &symbol_mappings, status_notifier.clone()).await
     } else {
         info!("🎮 Using SIMULATED price feeds");
         let price_state = state.clone();
@@ -1906,6 +2043,12 @@ async fn main() {
         .expect("Failed to listen for Ctrl+C");
 
     warn!("Shutdown signal received");
+
+    // Send server stopping notification
+    if let Some(ref notifier) = status_notifier {
+        notifier.try_send(StatusEvent::ServerStopping);
+    }
+
     state.stop();
 
     // Wait for tasks with timeout, then abort
