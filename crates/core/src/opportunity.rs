@@ -247,6 +247,14 @@ pub struct ArbitrageOpportunity {
     /// Timestamp when target price was recorded (ms since epoch)
     #[serde(default)]
     pub target_price_timestamp_ms: u64,
+
+    // Raw prices (original exchange prices without conversion)
+    /// Raw price from source exchange in original quote currency (e.g., ₩265 for KRW, 0.203 for USDT)
+    #[serde(default)]
+    pub source_raw_price: u64,
+    /// Raw price from target exchange in original quote currency
+    #[serde(default)]
+    pub target_raw_price: u64,
 }
 
 impl ArbitrageOpportunity {
@@ -388,6 +396,8 @@ impl ArbitrageOpportunity {
             optimal_size_reason: OptimalSizeReason::default(),
             source_price_timestamp_ms: 0,
             target_price_timestamp_ms: 0,
+            source_raw_price: 0,
+            target_raw_price: 0,
         }
     }
 
@@ -413,6 +423,18 @@ impl ArbitrageOpportunity {
     ) -> Self {
         self.source_price_timestamp_ms = source_timestamp_ms;
         self.target_price_timestamp_ms = target_timestamp_ms;
+        self
+    }
+
+    /// Set raw prices from original exchanges (builder pattern).
+    /// These are the actual prices from the exchange without any currency conversion.
+    pub fn with_raw_prices(
+        mut self,
+        source_raw_price: FixedPoint,
+        target_raw_price: FixedPoint,
+    ) -> Self {
+        self.source_raw_price = source_raw_price.0;
+        self.target_raw_price = target_raw_price.0;
         self
     }
 
