@@ -224,20 +224,10 @@ export function useOpportunities() {
     const getOppKey = (opp: ArbitrageOpportunity) =>
       `${opp.symbol}-${opp.source_exchange}-${opp.target_exchange}`;
 
-    // Max age for opportunities (10 seconds)
-    const MAX_AGE_MS = 10_000;
-
     // Flush pending updates at 10 FPS (every 100ms)
     const flushUpdates = () => {
       if (pendingUpdateRef.current) {
         pendingUpdateRef.current = false;
-        const now = Date.now();
-        // Remove stale opportunities
-        for (const [key, opp] of oppMapRef.current) {
-          if (now - opp.timestamp > MAX_AGE_MS) {
-            oppMapRef.current.delete(key);
-          }
-        }
         // Sort by premium_bps descending, limit to 50
         const sorted = Array.from(oppMapRef.current.values())
           .sort((a, b) => b.premium_bps - a.premium_bps)
