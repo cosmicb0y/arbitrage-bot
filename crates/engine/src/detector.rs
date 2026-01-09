@@ -25,7 +25,7 @@ impl Default for DetectorConfig {
     fn default() -> Self {
         Self {
             min_premium_bps: 30,
-            max_staleness_ms: 5000,
+            max_staleness_ms: 0, // Disabled - prices are managed by WebSocket reconnection logic
             enabled_exchanges: vec![
                 Exchange::Binance,
                 Exchange::Coinbase,
@@ -150,8 +150,8 @@ impl OpportunityDetector {
         if let Some(mut matrix) = self.matrices.get_mut(&pair_id) {
             matrix.update_price_with_bid_ask(exchange, price, bid, ask, bid_size, ask_size, quote);
         } else {
-            // Insert new matrix
-            let mut matrix = PremiumMatrix::new(pair_id);
+            // Insert new matrix with configured staleness threshold
+            let mut matrix = PremiumMatrix::with_staleness(pair_id, self.config.max_staleness_ms);
             matrix.update_price_with_bid_ask(exchange, price, bid, ask, bid_size, ask_size, quote);
             self.matrices.insert(pair_id, matrix);
         }
@@ -185,8 +185,8 @@ impl OpportunityDetector {
         if let Some(mut matrix) = self.matrices.get_mut(&pair_id) {
             matrix.update_price_with_bid_ask_and_raw(exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
         } else {
-            // Insert new matrix
-            let mut matrix = PremiumMatrix::new(pair_id);
+            // Insert new matrix with configured staleness threshold
+            let mut matrix = PremiumMatrix::with_staleness(pair_id, self.config.max_staleness_ms);
             matrix.update_price_with_bid_ask_and_raw(exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
             self.matrices.insert(pair_id, matrix);
         }

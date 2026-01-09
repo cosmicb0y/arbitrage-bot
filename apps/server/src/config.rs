@@ -46,7 +46,7 @@ impl Default for DetectorSettings {
     fn default() -> Self {
         Self {
             min_premium_bps: 30,
-            max_staleness_ms: 5000,
+            max_staleness_ms: 0, // Disabled - prices are managed by WebSocket reconnection logic
             scan_interval_ms: 100,
         }
     }
