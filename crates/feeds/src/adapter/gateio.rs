@@ -193,7 +193,8 @@ impl GateIOAdapter {
 
     pub fn is_orderbook_message(json: &str) -> bool {
         // spot.obu channel for both full snapshots and delta updates
-        json.contains("\"channel\":\"spot.obu\"")
+        // Filter out subscribe/unsubscribe confirmations (event != "update")
+        json.contains("\"channel\":\"spot.obu\"") && json.contains("\"event\":\"update\"")
     }
 
     pub fn parse_orderbook_with_symbol(
@@ -272,8 +273,10 @@ impl GateIOAdapter {
             s: String,                    // "ob.BTC_USDT.50"
             #[serde(default)]
             full: bool,                   // true for snapshot, absent/false for delta
-            b: Vec<[String; 2]>,          // bids
-            a: Vec<[String; 2]>,          // asks
+            #[serde(default)]
+            b: Vec<[String; 2]>,          // bids (optional in delta updates)
+            #[serde(default)]
+            a: Vec<[String; 2]>,          // asks (optional in delta updates)
         }
 
         #[derive(Debug, Deserialize)]
