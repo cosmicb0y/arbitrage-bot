@@ -176,7 +176,7 @@ impl TelegramBot {
                     },
                     config.min_premium_bps,
                     if config.min_profit_usd > 0.0 {
-                        format!(" OR Profit >= ${:.2}", config.min_profit_usd)
+                        format!(" AND Profit >= ${:.2}", config.min_profit_usd)
                     } else {
                         String::new()
                     }
@@ -218,7 +218,7 @@ impl TelegramBot {
                         if usd > 0.0 {
                             bot.send_message(
                                 msg.chat.id,
-                                format!("Minimum profit set to ${:.2} USD\n\nAlerts will trigger when:\n• Premium >= {} bps OR\n• Expected profit >= ${:.2}", usd, config.min_premium_bps, usd),
+                                format!("Minimum profit set to ${:.2} USD\n\nAlerts will trigger when:\n• Premium >= {} bps AND\n• Expected profit >= ${:.2}", usd, config.min_premium_bps, usd),
                             )
                             .await?;
                         } else {

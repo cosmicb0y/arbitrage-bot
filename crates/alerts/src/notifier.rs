@@ -158,9 +158,12 @@ impl Notifier {
             };
 
             let meets_premium = premium_bps >= config.min_premium_bps;
-            let meets_profit = config.min_profit_usd > 0.0 && optimal_profit_usd >= config.min_profit_usd;
+            let meets_profit = config.min_profit_usd == 0.0 || optimal_profit_usd >= config.min_profit_usd;
 
-            if !meets_premium && !meets_profit {
+            // Both conditions must be met (AND logic)
+            // - Premium must always meet threshold
+            // - Profit must meet threshold if min_profit_usd is configured (> 0)
+            if !meets_premium || !meets_profit {
                 continue;
             }
 
