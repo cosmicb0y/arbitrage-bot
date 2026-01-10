@@ -157,7 +157,9 @@ async fn process_text_message(text: &str, ctx: &FeedContext) {
                 static LOGGED: std::sync::atomic::AtomicU32 =
                     std::sync::atomic::AtomicU32::new(0);
                 if LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 5 {
-                    tracing::warn!("GateIO parse error: {}", e);
+                    // Log truncated message for debugging
+                    let msg_preview: String = text.chars().take(300).collect();
+                    tracing::warn!("GateIO parse error: {} | msg: {}", e, msg_preview);
                 }
             }
         }
