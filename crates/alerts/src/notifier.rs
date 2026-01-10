@@ -269,16 +269,33 @@ impl Notifier {
 
     /// Clear opportunities that are no longer above threshold.
     ///
-    /// Compares the current detected opportunities with the active list in DB,
-    /// and marks any that are no longer detected as inactive.
+    /// Only processes symbols that had price updates (present in current_opportunities).
+    /// This prevents clearing opportunities for unrelated symbols.
     pub async fn clear_missing_opportunities(
         &self,
         current_opportunities: &[ArbitrageOpportunity],
     ) -> Result<u32, NotifierError> {
+        use std::collections::HashSet;
+
+        // Collect symbols that had price updates
+        let checked_symbols: HashSet<&str> = current_opportunities
+            .iter()
+            .map(|opp| opp.asset.symbol.as_str())
+            .collect();
+
+        if checked_symbols.is_empty() {
+            return Ok(0);
+        }
+
         let active = self.db.get_all_active_opportunities().await?;
         let mut cleared = 0u32;
 
         for (symbol, source, target) in active {
+            // Only process symbols that had price updates
+            if !checked_symbols.contains(symbol.as_str()) {
+                continue;
+            }
+
             let still_active = current_opportunities.iter().any(|opp| {
                 opp.asset.symbol == symbol
                     && format!("{:?}", opp.source_exchange) == source
