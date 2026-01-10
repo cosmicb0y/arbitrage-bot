@@ -582,10 +582,7 @@ pub fn broadcast_price_with_quote(tx: &BroadcastSender, exchange: Exchange, pair
         bid: tick.bid().to_f64(),
         ask: tick.ask().to_f64(),
         volume_24h: tick.volume_24h().to_f64(),
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64,
+        timestamp: tick.timestamp_ms(),
         quote: quote.map(|q| q.to_string()),
     };
 
