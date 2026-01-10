@@ -269,10 +269,8 @@ impl WsClient {
                             }
                             Message::Text(text) => {
                                 // Forward orderbook updates to the channel (non-blocking)
-                                // Gate.io spot.obu sends full orderbook snapshots with full=true
-                                if text.contains("\"channel\":\"spot.obu\"")
-                                    && (text.contains("\"full\":true") || text.contains("\"full\": true"))
-                                {
+                                // Gate.io spot.obu sends both snapshots (full=true) and deltas
+                                if text.contains("\"channel\":\"spot.obu\"") {
                                     let _ = self.tx.try_send(WsMessage::Text(text.clone()));
                                 }
                             }
@@ -323,9 +321,7 @@ impl WsClient {
             match tokio::time::timeout(Duration::from_millis(100), read.next()).await {
                 Ok(Some(Ok(Message::Text(text)))) => {
                     final_drain += 1;
-                    if text.contains("\"channel\":\"spot.obu\"")
-                        && (text.contains("\"full\":true") || text.contains("\"full\": true"))
-                    {
+                    if text.contains("\"channel\":\"spot.obu\"") {
                         let _ = self.tx.try_send(WsMessage::Text(text));
                     }
                 }
