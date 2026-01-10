@@ -71,14 +71,20 @@ impl StatusNotifierConfig {
 pub struct StatusNotifier {
     config: StatusNotifierConfig,
     http_client: reqwest::Client,
+    hostname: String,
 }
 
 impl StatusNotifier {
     /// Create a new status notifier.
     pub fn new(config: StatusNotifierConfig) -> Self {
+        let hostname = hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+
         Self {
             config,
             http_client: reqwest::Client::new(),
+            hostname,
         }
     }
 
@@ -118,12 +124,17 @@ impl StatusNotifier {
             }
         };
 
-        // Add timestamp for connection events (not for server start/stop)
+        // Add hostname and timestamp
         let full_message = match event {
             StatusEvent::ServerStarted | StatusEvent::ServerStopping => message,
             _ => {
                 let now = chrono::Utc::now();
-                format!("{}\n\n⏰ {}", message, now.format("%Y-%m-%d %H:%M:%S UTC"))
+                format!(
+                    "<b>{}</b>\n{}\n\n⏰ {}",
+                    self.hostname,
+                    message,
+                    now.format("%Y-%m-%d %H:%M:%S UTC")
+                )
             }
         };
 
