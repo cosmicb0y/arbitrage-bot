@@ -31,10 +31,21 @@ pub async fn run_upbit_feed(ctx: FeedContext, mut rx: mpsc::Receiver<WsMessage>)
         // Handle connection lifecycle events
         let cache_ref = &orderbook_cache;
         let state_ref = &ctx.state;
-        match handle_connection_event(&msg, Exchange::Upbit, &ctx.status_notifier, || {
-            cache_ref.clear();
-            state_ref.clear_exchange_caches(Exchange::Upbit);
-        }) {
+        match handle_connection_event(
+            &msg,
+            Exchange::Upbit,
+            &ctx.status_notifier,
+            || {
+                cache_ref.clear();
+                state_ref.clear_exchange_caches(Exchange::Upbit);
+            },
+            || {
+                // On disconnect: drain stale messages and clear caches
+                while rx.try_recv().is_ok() {}
+                cache_ref.clear();
+                state_ref.clear_exchange_caches(Exchange::Upbit);
+            },
+        ) {
             ConnectionAction::Continue => continue,
             ConnectionAction::ProcessMessage => {}
         }

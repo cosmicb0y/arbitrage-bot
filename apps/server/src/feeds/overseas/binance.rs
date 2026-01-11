@@ -26,9 +26,17 @@ pub async fn run_binance_feed(ctx: FeedContext, mut rx: mpsc::Receiver<WsMessage
 
         // Handle connection lifecycle events
         let state_ref = &ctx.state;
-        match handle_connection_event(&msg, Exchange::Binance, &ctx.status_notifier, || {
-            state_ref.clear_exchange_caches(Exchange::Binance);
-        }) {
+        match handle_connection_event(
+            &msg,
+            Exchange::Binance,
+            &ctx.status_notifier,
+            || state_ref.clear_exchange_caches(Exchange::Binance),
+            || {
+                // On disconnect: drain stale messages and clear caches
+                while rx.try_recv().is_ok() {}
+                state_ref.clear_exchange_caches(Exchange::Binance);
+            },
+        ) {
             ConnectionAction::Continue => continue,
             ConnectionAction::ProcessMessage => {}
         }

@@ -28,9 +28,17 @@ pub async fn run_bybit_feed(ctx: FeedContext, mut rx: mpsc::Receiver<WsMessage>)
 
         // Handle connection lifecycle events
         let state_ref = &ctx.state;
-        match handle_connection_event(&msg, Exchange::Bybit, &ctx.status_notifier, || {
-            state_ref.clear_exchange_caches(Exchange::Bybit);
-        }) {
+        match handle_connection_event(
+            &msg,
+            Exchange::Bybit,
+            &ctx.status_notifier,
+            || state_ref.clear_exchange_caches(Exchange::Bybit),
+            || {
+                // On disconnect: drain stale messages and clear caches
+                while rx.try_recv().is_ok() {}
+                state_ref.clear_exchange_caches(Exchange::Bybit);
+            },
+        ) {
             ConnectionAction::Continue => continue,
             ConnectionAction::ProcessMessage => {}
         }

@@ -43,12 +43,30 @@ pub async fn run_coinbase_feed(ctx: FeedContext, mut rx: mpsc::Receiver<WsMessag
         }
 
         // Handle connection lifecycle events
-        let cache_ref = &mut orderbook_cache;
         let state_ref = &ctx.state;
-        match handle_connection_event(&msg, Exchange::Coinbase, &ctx.status_notifier, || {
-            cache_ref.clear();
-            state_ref.clear_exchange_caches(Exchange::Coinbase);
-        }) {
+        let action = handle_connection_event(
+            &msg,
+            Exchange::Coinbase,
+            &ctx.status_notifier,
+            || state_ref.clear_exchange_caches(Exchange::Coinbase),
+            || {
+                // On disconnect: clear caches (drain happens after)
+                state_ref.clear_exchange_caches(Exchange::Coinbase);
+            },
+        );
+
+        // Handle cache clearing and message drain for Coinbase (uses local HashMap)
+        match &msg {
+            WsMessage::Reconnected | WsMessage::Disconnected => {
+                orderbook_cache.clear();
+                if matches!(msg, WsMessage::Disconnected) {
+                    while rx.try_recv().is_ok() {}
+                }
+            }
+            _ => {}
+        }
+
+        match action {
             ConnectionAction::Continue => continue,
             ConnectionAction::ProcessMessage => {}
         }
