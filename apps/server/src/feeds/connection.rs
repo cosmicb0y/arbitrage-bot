@@ -27,18 +27,21 @@ pub enum ConnectionAction {
 /// * `exchange` - The exchange this message is from
 /// * `status_notifier` - Optional notifier for connection status updates
 /// * `on_reconnect` - Callback invoked on reconnection for cache clearing
+/// * `on_disconnect` - Callback invoked on disconnection for cache clearing
 ///
 /// # Returns
 /// * `ConnectionAction::Continue` - The message was a connection event, skip to next
 /// * `ConnectionAction::ProcessMessage` - The message is data, process it normally
-pub fn handle_connection_event<F>(
+pub fn handle_connection_event<F1, F2>(
     msg: &WsMessage,
     exchange: Exchange,
     status_notifier: &Option<StatusNotifierHandle>,
-    on_reconnect: F,
+    on_reconnect: F1,
+    on_disconnect: F2,
 ) -> ConnectionAction
 where
-    F: FnOnce(),
+    F1: FnOnce(),
+    F2: FnOnce(),
 {
     match msg {
         WsMessage::Connected => {
@@ -57,7 +60,8 @@ where
             ConnectionAction::Continue
         }
         WsMessage::Disconnected => {
-            warn!("{:?}: Disconnected from WebSocket", exchange);
+            warn!("{:?}: Disconnected - clearing caches to prevent stale data", exchange);
+            on_disconnect();
             if let Some(ref notifier) = status_notifier {
                 notifier.try_send(StatusEvent::Disconnected(exchange));
             }
