@@ -2,11 +2,21 @@
 //!
 //! This module provides feed handlers for processing real-time price data
 //! from various cryptocurrency exchanges.
+//!
+//! ## Architecture
+//!
+//! Feed processing is split between `crates/feeds` (runners) and this module (handler):
+//! - **Runners** (in `arbitrage_feeds::runner`): Parse exchange-specific messages, emit `FeedMessage`
+//! - **Handler** (`handler::run_feed_handler`): Process `FeedMessage`, update state, broadcast to clients
+//!
+//! ## Data Flow
+//!
+//! ```text
+//! WsClient (WebSocket) → Runner (parsing) → FeedMessage → Handler (state update, broadcast)
+//! ```
 
 pub mod common;
-pub mod connection;
-pub mod korean;
-pub mod overseas;
+pub mod handler;
 
 use crate::state::SharedState;
 use crate::status_notifier::StatusNotifierHandle;
@@ -43,10 +53,5 @@ impl FeedContext {
     }
 }
 
-// Re-export feed handlers for convenient access
-pub use korean::bithumb::run_bithumb_feed;
-pub use korean::upbit::run_upbit_feed;
-pub use overseas::binance::run_binance_feed;
-pub use overseas::bybit::run_bybit_feed;
-pub use overseas::coinbase::run_coinbase_feed;
-pub use overseas::gateio::run_gateio_feed;
+// Re-export handler
+pub use handler::run_feed_handler;

@@ -2,6 +2,12 @@
 //!
 //! This crate provides WebSocket connections to various exchanges
 //! for collecting real-time price data.
+//!
+//! ## Architecture
+//!
+//! - `adapter/` - Exchange-specific message parsing
+//! - `runner/` - Feed runners that process WebSocket messages and emit `FeedMessage`
+//! - `message` - Channel message types (`FeedMessage`, `ParsedTick`, `ConnectionEvent`)
 
 pub mod adapter;
 pub mod aggregator;
@@ -9,7 +15,9 @@ pub mod discovery;
 pub mod error;
 pub mod feed;
 pub mod manager;
+pub mod message;
 pub mod rest;
+pub mod runner;
 pub mod symbol_mapping;
 pub mod websocket;
 
@@ -23,6 +31,8 @@ pub use discovery::*;
 pub use error::*;
 pub use feed::*;
 pub use manager::*;
+pub use message::{ConnectionEvent, FeedMessage, Orderbook, ParsedTick};
 pub use rest::*;
+pub use runner::*;
 pub use symbol_mapping::*;
 pub use websocket::*;
