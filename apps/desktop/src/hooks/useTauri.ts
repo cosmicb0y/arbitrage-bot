@@ -14,6 +14,7 @@ import type {
   ExchangeWalletStatus,
   SymbolMapping,
   SymbolMappings,
+  PremiumMatrixData,
 } from "../types";
 
 // Check if running inside Tauri
@@ -26,8 +27,8 @@ const WS_SERVER_URL = "ws://127.0.0.1:9001/ws";
 
 // WebSocket message types from CLI server
 interface WsServerMessage {
-  type: "price" | "prices" | "stats" | "opportunity" | "opportunities" | "exchange_rate" | "common_markets" | "wallet_status";
-  data: PriceData | PriceData[] | BotStats | ArbitrageOpportunity | ArbitrageOpportunity[] | ExchangeRate | CommonMarkets | WsWalletStatusData;
+  type: "price" | "prices" | "stats" | "opportunity" | "opportunities" | "exchange_rate" | "common_markets" | "wallet_status" | "premium_matrix";
+  data: PriceData | PriceData[] | BotStats | ArbitrageOpportunity | ArbitrageOpportunity[] | ExchangeRate | CommonMarkets | WsWalletStatusData | PremiumMatrixData;
 }
 
 // Shared WebSocket connection for browser mode
@@ -280,8 +281,6 @@ export function useOpportunities() {
   const pendingUpdateRef = useRef<boolean>(false);
 
   useEffect(() => {
-    // Remove opportunities not updated in 60 seconds
-    const REMOVE_THRESHOLD_MS = 60_000;
     // Minimum spread threshold: 30 bps (0.3%)
     const MIN_SPREAD_BPS = 30;
 
@@ -309,22 +308,6 @@ export function useOpportunities() {
       }
     }, 1000);
 
-    // Cleanup very old opportunities every 10 seconds
-    const cleanupStale = () => {
-      const now = Date.now();
-      let removed = false;
-      for (const [key, opp] of opportunityCache.entries()) {
-        if (now - opp.timestamp > REMOVE_THRESHOLD_MS) {
-          opportunityCache.delete(key);
-          removed = true;
-        }
-      }
-      if (removed) {
-        pendingUpdateRef.current = true;
-      }
-    };
-    const cleanupInterval = setInterval(cleanupStale, 10000);
-
     // Initialize from cache immediately on mount
     if (opportunityCache.size > 0) {
       pendingUpdateRef.current = true;
@@ -350,7 +333,6 @@ export function useOpportunities() {
       return () => {
         clearInterval(flushInterval);
         clearInterval(ageUpdateInterval);
-        clearInterval(cleanupInterval);
         unsubscribe();
       };
     }
@@ -402,7 +384,6 @@ export function useOpportunities() {
     return () => {
       clearInterval(flushInterval);
       clearInterval(ageUpdateInterval);
-      clearInterval(cleanupInterval);
       if (unlistenNew) unlistenNew();
       if (unlistenBatch) unlistenBatch();
     };
@@ -817,4 +798,65 @@ export function useSymbolMappings() {
   }, []);
 
   return { mappings, loading, upsertMapping, removeMapping, saveMappings, refetch: fetchMappings };
+}
+
+// ============ Premium Matrix ============
+
+// Cache for premium matrices (symbol -> matrix data)
+const premiumMatrixCache = new Map<string, PremiumMatrixData>();
+
+/**
+ * Hook to receive premium matrix updates via WebSocket from the server.
+ * The server broadcasts pre-calculated premium values for all exchange pairs.
+ * Returns a Map of symbol -> PremiumMatrixData
+ */
+export function usePremiumMatrix() {
+  const [matrices, setMatrices] = useState<Map<string, PremiumMatrixData>>(premiumMatrixCache);
+  const pendingUpdateRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    // Flush pending updates at 10 FPS
+    const flushUpdates = () => {
+      if (pendingUpdateRef.current) {
+        pendingUpdateRef.current = false;
+        setMatrices(new Map(premiumMatrixCache));
+      }
+    };
+    const flushInterval = setInterval(flushUpdates, 100);
+
+    // Browser fallback: use shared WebSocket
+    if (!isTauri()) {
+      const unsubscribe = wsManager.subscribe((msg) => {
+        if (msg.type === "premium_matrix") {
+          const data = msg.data as PremiumMatrixData;
+          premiumMatrixCache.set(data.symbol, data);
+          pendingUpdateRef.current = true;
+        }
+      });
+
+      return () => {
+        clearInterval(flushInterval);
+        unsubscribe();
+      };
+    }
+
+    // Tauri mode: listen for premium_matrix events
+    let unlisten: UnlistenFn | undefined;
+
+    const setup = async () => {
+      unlisten = await listen<PremiumMatrixData>("premium_matrix", (event) => {
+        premiumMatrixCache.set(event.payload.symbol, event.payload);
+        pendingUpdateRef.current = true;
+      });
+    };
+
+    setup();
+
+    return () => {
+      clearInterval(flushInterval);
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  return matrices;
 }

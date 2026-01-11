@@ -216,6 +216,26 @@ pub struct WalletStatusData {
     pub timestamp: u64,
 }
 
+/// Premium entry for a single exchange pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PremiumEntry {
+    pub buy_exchange: String,
+    pub sell_exchange: String,
+    pub buy_quote: String,
+    pub sell_quote: String,
+    pub tether_premium_bps: i32,
+    pub kimchi_premium_bps: i32,
+}
+
+/// Premium matrix for a single symbol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PremiumMatrixData {
+    pub symbol: String,
+    pub pair_id: u32,
+    pub entries: Vec<PremiumEntry>,
+    pub timestamp: u64,
+}
+
 /// WebSocket message types from CLI server.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -241,6 +261,9 @@ pub enum WsServerMessage {
     /// Wallet status for deposit/withdraw
     #[serde(rename = "wallet_status")]
     WalletStatus(WalletStatusData),
+    /// Premium matrix for a symbol (all exchange pairs)
+    #[serde(rename = "premium_matrix")]
+    PremiumMatrix(PremiumMatrixData),
 }
 
 /// Application state shared across commands.
@@ -461,6 +484,9 @@ async fn connect_to_server(
                         WsServerMessage::WalletStatus(wallet_status) => {
                             let _ = app.emit("wallet_status", &wallet_status);
                             state.update_wallet_status(wallet_status);
+                        }
+                        WsServerMessage::PremiumMatrix(matrix) => {
+                            let _ = app.emit("premium_matrix", &matrix);
                         }
                     }
                 }

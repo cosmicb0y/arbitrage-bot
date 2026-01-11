@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { usePrices, useOpportunities, useExchangeRate, useCommonMarkets } from "../hooks/useTauri";
-import type { PriceData, ExchangeRate } from "../types";
+import { usePrices, useOpportunities, useExchangeRate, useCommonMarkets, usePremiumMatrix } from "../hooks/useTauri";
+import type { PriceData, ExchangeRate, PremiumMatrixData } from "../types";
 
 type PremiumMode = "kimchi" | "tether";
 type QuoteFilter = "all" | "USDT" | "USDC";
@@ -55,6 +55,7 @@ function Dashboard() {
   const { opportunities } = useOpportunities();
   const exchangeRate = useExchangeRate();
   const commonMarkets = useCommonMarkets();
+  const premiumMatrices = usePremiumMatrix();
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [minVolume, setMinVolume] = useState<number>(0);
@@ -126,16 +127,21 @@ function Dashboard() {
         if (pricesA && !pricesB) return -1;
         if (!pricesA && pricesB) return 1;
         if (!pricesA || !pricesB) return a.localeCompare(b);
-        // Sort by spread (descending)
-        const maxA = Math.max(...pricesA.map(p => p.price));
-        const minA = Math.min(...pricesA.map(p => p.price));
-        const maxB = Math.max(...pricesB.map(p => p.price));
-        const minB = Math.min(...pricesB.map(p => p.price));
-        const spreadA = minA > 0 ? (maxA - minA) / minA : 0;
-        const spreadB = minB > 0 ? (maxB - minB) / minB : 0;
+        // Sort by max premium from server matrix (descending)
+        const matrixA = premiumMatrices.get(a);
+        const matrixB = premiumMatrices.get(b);
+        const getMaxPremium = (m: PremiumMatrixData | undefined) => {
+          if (!m || m.entries.length === 0) return 0;
+          const premiums = m.entries.map(e =>
+            premiumMode === "kimchi" ? e.kimchi_premium_bps : e.tether_premium_bps
+          );
+          return Math.max(...premiums);
+        };
+        const spreadA = getMaxPremium(matrixA);
+        const spreadB = getMaxPremium(matrixB);
         return spreadB - spreadA;
       });
-  }, [allSymbols, pricesBySymbol, searchQuery, minVolume]);
+  }, [allSymbols, pricesBySymbol, searchQuery, minVolume, premiumMatrices, premiumMode]);
 
   // Auto-select first symbol if none selected
   const activeSymbol = selectedSymbol && allSymbols.has(selectedSymbol)
@@ -303,9 +309,18 @@ function Dashboard() {
               {symbols.map((symbol) => {
                 const exchangePrices = pricesBySymbol[symbol];
                 const hasPriceData = exchangePrices && exchangePrices.length > 0;
-                const maxPrice = hasPriceData ? Math.max(...exchangePrices.map(p => p.price)) : 0;
-                const minPrice = hasPriceData ? Math.min(...exchangePrices.map(p => p.price)) : 0;
-                const spread = maxPrice > 0 ? ((maxPrice - minPrice) / minPrice) * 100 : 0;
+                // Use server premium matrix for spread calculation (more accurate)
+                const matrix = premiumMatrices.get(symbol);
+                let spread = 0;
+                let hasMatrix = false;
+                if (matrix && matrix.entries.length > 0) {
+                  hasMatrix = true;
+                  // Get max premium from server-calculated matrix (based on current premiumMode)
+                  const premiums = matrix.entries.map(e =>
+                    premiumMode === "kimchi" ? e.kimchi_premium_bps : e.tether_premium_bps
+                  );
+                  spread = Math.max(...premiums) / 100; // bps to %
+                }
                 const totalVolume = hasPriceData ? getSymbolTotalVolume(symbol) : 0;
 
                 return (
@@ -323,8 +338,8 @@ function Dashboard() {
                         {symbol}
                       </span>
                       {hasPriceData ? (
-                        <span className={`text-sm font-mono ${spread >= 0.5 ? "text-success-500" : "text-gray-500"}`}>
-                          {spread.toFixed(2)}%
+                        <span className={`text-sm font-mono ${spread >= 0.5 ? "text-success-500" : hasMatrix ? "text-gray-500" : "text-gray-600"}`}>
+                          {hasMatrix ? `${spread.toFixed(2)}%` : "..."}
                         </span>
                       ) : (
                         <span className="text-xs text-gray-600">no data</span>
@@ -415,6 +430,7 @@ function Dashboard() {
                   exchangeRate={exchangeRate}
                   quoteFilter={quoteFilter}
                   symbol={activeSymbol}
+                  serverMatrix={premiumMatrices.get(activeSymbol)}
                 />
                 <div className="mt-4 pt-4 border-t border-dark-700">
                   <h3 className="text-sm text-gray-400 mb-3">Exchange Prices</h3>
@@ -525,9 +541,10 @@ interface PremiumMatrixProps {
   exchangeRate: ExchangeRate | null;
   quoteFilter: QuoteFilter;
   symbol: string;
+  serverMatrix?: PremiumMatrixData;
 }
 
-function PremiumMatrix({ prices, premiumMode, exchangeRate, quoteFilter, symbol }: PremiumMatrixProps) {
+function PremiumMatrix({ prices, premiumMode, exchangeRate, quoteFilter, symbol, serverMatrix }: PremiumMatrixProps) {
   // Filter prices by quote currency (KRW is always included)
   const filteredPrices = useMemo(() => {
     if (quoteFilter === "all") return prices;
@@ -551,41 +568,90 @@ function PremiumMatrix({ prices, premiumMode, exchangeRate, quoteFilter, symbol 
   }));
 
   /**
+   * Get premium from server-calculated matrix data.
+   * Returns the premium for the given buy/sell exchange pair.
+   */
+  const getServerPremium = (buyExchange: string, sellExchange: string, buyQuote: string, sellQuote: string): number | null => {
+    if (!serverMatrix) {
+      // Debug: log when serverMatrix is not available
+      // console.debug(`[PremiumMatrix] No serverMatrix for ${symbol}`);
+      return null;
+    }
+
+    // Server uses Debug format for exchange (e.g., "Upbit"), which should match client
+    // Server uses as_str() for quote (e.g., "KRW", "USDT"), which should match client
+    const entry = serverMatrix.entries.find(
+      (e) => e.buy_exchange === buyExchange && e.sell_exchange === sellExchange
+        && e.buy_quote === buyQuote && e.sell_quote === sellQuote
+    );
+
+    if (!entry) {
+      return null;
+    }
+
+    return premiumMode === "kimchi" ? entry.kimchi_premium_bps : entry.tether_premium_bps;
+  };
+
+  /**
    * Calculate premium between buy and sell positions
-   * - Raw premium: direct USD price comparison (all prices are already in USD)
-   * - Kimchi premium: for KRW trades, adjust using bank rate vs USDT rate
-   * - Tether premium: same as raw (prices already converted via USDT/KRW)
+   * - First tries to use server-calculated premium (more accurate)
+   * - Falls back to client-side calculation if server data not available
    */
   const getPremium = (buyIdx: number, sellIdx: number): number => {
     if (buyIdx === sellIdx) return 0;
 
     const buyEntry = priceEntries[buyIdx];
     const sellEntry = priceEntries[sellIdx];
-    const buyPrice = buyEntry?.price || 0;
-    const sellPrice = sellEntry?.price || 0;
 
-    if (buyPrice === 0) return 0;
+    // Try to get server-calculated premium first
+    const buyQuote = buyEntry?.quote || "USD";
+    const sellQuote = sellEntry?.quote || "USD";
+    const serverPremium = getServerPremium(buyEntry?.exchange, sellEntry?.exchange, buyQuote, sellQuote);
+    if (serverPremium !== null) {
+      return serverPremium;
+    }
 
-    // Raw premium (direct USD comparison)
-    const rawPremium = Math.round(((sellPrice - buyPrice) / buyPrice) * 10000);
-
-    // If neither side is KRW, return raw premium
+    // Fallback to client-side calculation
+    // Use USD-normalized prices for comparison
+    // For KRW markets, we MUST have price_usd; raw KRW price is not comparable
     const buyIsKrw = buyEntry?.isKrw;
     const sellIsKrw = sellEntry?.isKrw;
 
+    let buyPriceUsd: number;
+    let sellPriceUsd: number;
+
+    if (buyIsKrw) {
+      // KRW market: must use price_usd, cannot fall back to raw price
+      if (buyEntry?.price_usd == null) return 0;
+      buyPriceUsd = buyEntry.price_usd;
+    } else {
+      buyPriceUsd = buyEntry?.price_usd ?? buyEntry?.price ?? 0;
+    }
+
+    if (sellIsKrw) {
+      // KRW market: must use price_usd, cannot fall back to raw price
+      if (sellEntry?.price_usd == null) return 0;
+      sellPriceUsd = sellEntry.price_usd;
+    } else {
+      sellPriceUsd = sellEntry?.price_usd ?? sellEntry?.price ?? 0;
+    }
+
+    if (buyPriceUsd === 0) return 0;
+
+    // Raw premium using USD prices
+    const rawPremium = Math.round(((sellPriceUsd - buyPriceUsd) / buyPriceUsd) * 10000);
+
+    // If neither side is KRW, return raw premium
     if (!buyIsKrw && !sellIsKrw) {
       return rawPremium;
     }
 
-    // Tether premium = raw premium (already converted via USDT/KRW)
+    // Tether premium = raw premium (price_usd is already converted via USDT/KRW)
     if (premiumMode === "tether") {
       return rawPremium;
     }
 
     // Kimchi premium: adjust for bank rate vs USDT rate difference
-    // KRW prices were converted: krw_original / usdt_krw = price_usd_stored
-    // Kimchi should use: krw_original / usd_krw = price_usd_kimchi
-    // Ratio: price_usd_kimchi / price_usd_stored = usdt_krw / usd_krw
     const usdKrw = exchangeRate?.api_rate;
     const usdtKrw = exchangeRate?.upbit_usdt_krw || exchangeRate?.usd_krw;
 
@@ -595,15 +661,14 @@ function PremiumMatrix({ prices, premiumMode, exchangeRate, quoteFilter, symbol 
 
     const rateRatio = usdtKrw / usdKrw;
 
-    // Adjust KRW price to what it would be using bank rate
-    let adjustedBuyPrice = buyPrice;
-    let adjustedSellPrice = sellPrice;
+    let adjustedBuyPrice = buyPriceUsd;
+    let adjustedSellPrice = sellPriceUsd;
 
     if (buyIsKrw) {
-      adjustedBuyPrice = buyPrice * rateRatio;
+      adjustedBuyPrice = buyPriceUsd * rateRatio;
     }
     if (sellIsKrw) {
-      adjustedSellPrice = sellPrice * rateRatio;
+      adjustedSellPrice = sellPriceUsd * rateRatio;
     }
 
     if (adjustedBuyPrice === 0) return rawPremium;

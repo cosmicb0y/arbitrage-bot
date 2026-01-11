@@ -4,13 +4,20 @@ export interface PriceData {
   exchange: string;
   symbol: string;
   pair_id: number;
+  // Price in original quote currency
   price: number;
+  // Bid in original quote currency
   bid: number;
+  // Ask in original quote currency
   ask: number;
   volume_24h: number;
   timestamp: number;
   // Quote currency (e.g., "USDT", "USDC", "USD", "KRW")
   quote?: string;
+  // USD-normalized prices for cross-currency comparison
+  price_usd?: number;
+  bid_usd?: number;
+  ask_usd?: number;
 }
 
 // USD-like stablecoin quote type
@@ -185,4 +192,24 @@ export interface SymbolMapping {
 
 export interface SymbolMappings {
   mappings: SymbolMapping[];
+}
+
+// Premium matrix entry for a single exchange pair
+export interface PremiumEntry {
+  buy_exchange: string;
+  sell_exchange: string;
+  buy_quote: string;
+  sell_quote: string;
+  // Tether premium (USDlike): bps
+  tether_premium_bps: number;
+  // Kimchi premium (USD via forex): bps
+  kimchi_premium_bps: number;
+}
+
+// Premium matrix for a single symbol
+export interface PremiumMatrixData {
+  symbol: string;
+  pair_id: number;
+  entries: PremiumEntry[];
+  timestamp: number;
 }
