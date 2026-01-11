@@ -15,6 +15,73 @@ const getOppKey = (opp: { symbol: string; source_exchange: string; target_exchan
 
 type PremiumMode = "usdlike" | "kimchi";
 
+// Generate exchange market URL for a symbol
+const getExchangeMarketUrl = (exchange: string, symbol: string, quote: string): string | null => {
+  const base = symbol.toUpperCase();
+  const q = quote?.toUpperCase() || "USDT";
+
+  switch (exchange) {
+    case "Binance":
+      return `https://www.binance.com/en/trade/${base}_${q}`;
+    case "Upbit":
+      return `https://upbit.com/exchange?code=CRIX.UPBIT.${q}-${base}`;
+    case "Bithumb":
+      return `https://www.bithumb.com/trade/order/${base}_${q}`;
+    case "Bybit":
+      return `https://www.bybit.com/en/trade/spot/${base}/${q}`;
+    case "GateIO":
+      return `https://www.gate.io/trade/${base}_${q}`;
+    case "Coinbase":
+      return `https://www.coinbase.com/advanced-trade/spot/${base}-${q}`;
+    case "Kraken":
+      return `https://pro.kraken.com/app/trade/${base.toLowerCase()}-${q.toLowerCase()}`;
+    case "OKX":
+      return `https://www.okx.com/trade-spot/${base.toLowerCase()}-${q.toLowerCase()}`;
+    case "Bitget":
+      return `https://www.bitget.com/spot/${base}${q}`;
+    case "MEXC":
+      return `https://www.mexc.com/exchange/${base}_${q}`;
+    case "HTX":
+      return `https://www.htx.com/trade/${base.toLowerCase()}_${q.toLowerCase()}`;
+    case "KuCoin":
+      return `https://www.kucoin.com/trade/${base}-${q}`;
+    default:
+      return null;
+  }
+};
+
+// Exchange link component
+const ExchangeLink = ({
+  exchange,
+  symbol,
+  quote,
+  className,
+}: {
+  exchange: string;
+  symbol: string;
+  quote: string;
+  className?: string;
+}) => {
+  const url = getExchangeMarketUrl(exchange, symbol, quote);
+
+  if (!url) {
+    return <span className={className}>{exchange}</span>;
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`${className} hover:underline cursor-pointer`}
+      onClick={(e) => e.stopPropagation()}
+      title={`Open ${exchange} ${symbol}/${quote} market`}
+    >
+      {exchange}
+    </a>
+  );
+};
+
 function Opportunities() {
   const { opportunities: rawOpportunities, executeOpportunity } = useOpportunities();
   const prices = usePrices();
@@ -448,9 +515,12 @@ function Opportunities() {
                   <td className="p-4">
                     <div className="flex items-center space-x-2">
                       <div className="flex items-center gap-1">
-                        <span className="text-success-500 font-medium">
-                          {opp.source_exchange}
-                        </span>
+                        <ExchangeLink
+                          exchange={opp.source_exchange}
+                          symbol={opp.symbol}
+                          quote={opp.source_quote || 'USD'}
+                          className="text-success-500 font-medium"
+                        />
                         <span className={`text-xs px-1 py-0.5 rounded ${
                           opp.source_quote === 'KRW' ? 'bg-yellow-500/20 text-yellow-400' :
                           opp.source_quote === 'USDC' ? 'bg-blue-500/20 text-blue-400' :
@@ -462,9 +532,12 @@ function Opportunities() {
                       </div>
                       <span className="text-gray-500">→</span>
                       <div className="flex items-center gap-1">
-                        <span className="text-primary-500 font-medium">
-                          {opp.target_exchange}
-                        </span>
+                        <ExchangeLink
+                          exchange={opp.target_exchange}
+                          symbol={opp.symbol}
+                          quote={opp.target_quote || 'USD'}
+                          className="text-primary-500 font-medium"
+                        />
                         <span className={`text-xs px-1 py-0.5 rounded ${
                           opp.target_quote === 'KRW' ? 'bg-yellow-500/20 text-yellow-400' :
                           opp.target_quote === 'USDC' ? 'bg-blue-500/20 text-blue-400' :
@@ -729,17 +802,17 @@ function Opportunities() {
                     {(() => {
                       const ageMs = opp.age_ms ?? 0;
                       const ageSec = Math.floor(ageMs / 1000);
-                      const isStale = ageSec >= 10;
-                      const isVeryStale = ageSec >= 30;
+                      // 직관적 색상: 신선할수록 초록, 오래될수록 빨강
+                      const getAgeColor = (sec: number) => {
+                        if (sec < 5) return "text-success-400";   // 5초 미만: 밝은 초록 (신선)
+                        if (sec < 15) return "text-success-500";  // 5-14초: 초록 (양호)
+                        if (sec < 30) return "text-yellow-400";   // 15-29초: 노랑 (주의)
+                        if (sec < 60) return "text-orange-400";   // 30-59초: 주황 (오래됨)
+                        return "text-danger-400";                 // 60초 이상: 빨강 (매우 오래됨)
+                      };
                       return (
                         <span
-                          className={`text-xs font-mono ${
-                            isVeryStale
-                              ? "text-danger-400"
-                              : isStale
-                                ? "text-yellow-500"
-                                : "text-gray-500"
-                          }`}
+                          className={`text-xs font-mono ${getAgeColor(ageSec)}`}
                           title={`Last updated ${ageSec}s ago`}
                         >
                           {ageSec}s
