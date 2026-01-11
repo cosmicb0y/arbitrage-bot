@@ -28,14 +28,26 @@ pub struct WsPriceData {
     pub exchange: String,
     pub symbol: String,
     pub pair_id: u32,
+    /// Price in original quote currency
     pub price: f64,
+    /// Bid in original quote currency
     pub bid: f64,
+    /// Ask in original quote currency
     pub ask: f64,
     pub volume_24h: f64,
     pub timestamp: u64,
     /// Quote currency (e.g., "USDT", "USDC", "USD", "KRW")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quote: Option<String>,
+    /// Price converted to USD (for cross-currency comparison)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_usd: Option<f64>,
+    /// Bid converted to USD
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bid_usd: Option<f64>,
+    /// Ask converted to USD
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_usd: Option<f64>,
 }
 
 /// Stats data for WebSocket broadcast.
@@ -198,6 +210,28 @@ pub struct WsWalletStatusData {
     pub timestamp: u64,
 }
 
+/// Premium entry for a single exchange pair.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsPremiumEntry {
+    pub buy_exchange: String,
+    pub sell_exchange: String,
+    pub buy_quote: String,
+    pub sell_quote: String,
+    /// Tether premium (USDlike): bps
+    pub tether_premium_bps: i32,
+    /// Kimchi premium (USD via forex): bps
+    pub kimchi_premium_bps: i32,
+}
+
+/// Premium matrix for a single symbol.
+#[derive(Debug, Clone, Serialize)]
+pub struct WsPremiumMatrixData {
+    pub symbol: String,
+    pub pair_id: u32,
+    pub entries: Vec<WsPremiumEntry>,
+    pub timestamp: u64,
+}
+
 /// WebSocket message types.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", content = "data")]
@@ -223,6 +257,9 @@ pub enum WsServerMessage {
     /// Wallet status for deposit/withdraw
     #[serde(rename = "wallet_status")]
     WalletStatus(WsWalletStatusData),
+    /// Premium matrix for a symbol (all exchange pairs)
+    #[serde(rename = "premium_matrix")]
+    PremiumMatrix(WsPremiumMatrixData),
 }
 
 /// Broadcast channel sender.
@@ -382,6 +419,10 @@ async fn collect_prices(state: &SharedState) -> Vec<WsPriceData> {
                 .unwrap()
                 .as_millis() as u64,
             quote,
+            // USD prices not available from this context
+            price_usd: None,
+            bid_usd: None,
+            ask_usd: None,
         });
     }
 
@@ -569,11 +610,26 @@ async fn collect_common_markets(state: &SharedState) -> Option<WsCommonMarketsDa
 
 /// Broadcast a single price update (event-driven).
 pub fn broadcast_price(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, symbol: &str, tick: &PriceTick) {
-    broadcast_price_with_quote(tx, exchange, pair_id, symbol, None, tick);
+    broadcast_price_with_quote_and_usd(tx, exchange, pair_id, symbol, None, tick, None, None, None);
 }
 
 /// Broadcast a single price update with quote currency (event-driven).
 pub fn broadcast_price_with_quote(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, symbol: &str, quote: Option<&str>, tick: &PriceTick) {
+    broadcast_price_with_quote_and_usd(tx, exchange, pair_id, symbol, quote, tick, None, None, None);
+}
+
+/// Broadcast a single price update with quote currency and USD-converted prices (event-driven).
+pub fn broadcast_price_with_quote_and_usd(
+    tx: &BroadcastSender,
+    exchange: Exchange,
+    pair_id: u32,
+    symbol: &str,
+    quote: Option<&str>,
+    tick: &PriceTick,
+    price_usd: Option<f64>,
+    bid_usd: Option<f64>,
+    ask_usd: Option<f64>,
+) {
     let price_data = WsPriceData {
         exchange: format!("{:?}", exchange),
         symbol: symbol.to_string(),
@@ -584,6 +640,9 @@ pub fn broadcast_price_with_quote(tx: &BroadcastSender, exchange: Exchange, pair
         volume_24h: tick.volume_24h().to_f64(),
         timestamp: tick.timestamp_ms(),
         quote: quote.map(|q| q.to_string()),
+        price_usd,
+        bid_usd,
+        ask_usd,
     };
 
     let _ = tx.send(WsServerMessage::Price(price_data));
@@ -770,6 +829,27 @@ pub fn broadcast_wallet_status(
     };
 
     let _ = tx.send(WsServerMessage::WalletStatus(data));
+}
+
+/// Broadcast premium matrix for a symbol to all clients.
+/// This sends all exchange pair premiums for the given symbol.
+pub fn broadcast_premium_matrix(
+    tx: &BroadcastSender,
+    symbol: &str,
+    pair_id: u32,
+    entries: Vec<WsPremiumEntry>,
+) {
+    let data = WsPremiumMatrixData {
+        symbol: symbol.to_string(),
+        pair_id,
+        entries,
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    };
+
+    let _ = tx.send(WsServerMessage::PremiumMatrix(data));
 }
 
 /// Create WebSocket server and return the broadcast sender for event-driven updates.

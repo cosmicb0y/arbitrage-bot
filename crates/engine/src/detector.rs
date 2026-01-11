@@ -121,6 +121,12 @@ impl OpportunityDetector {
         self.symbol_registry.get(&pair_id).map(|r| r.value().clone())
     }
 
+    /// Get the premium matrix for a pair_id.
+    /// Returns a reference guard that can be used to access the matrix.
+    pub fn get_matrix(&self, pair_id: u32) -> Option<dashmap::mapref::one::Ref<'_, u32, PremiumMatrix>> {
+        self.matrices.get(&pair_id)
+    }
+
     /// Update price for an exchange/pair with default quote (USD).
     /// Lock-free: uses DashMap entry API for concurrent access.
     pub fn update_price(&self, exchange: Exchange, pair_id: u32, price: FixedPoint) {

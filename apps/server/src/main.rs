@@ -22,11 +22,13 @@ use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberI
 use arbitrage_alerts::{Database, Notifier, NotifierConfig, TelegramBot};
 
 use arbitrage_core::{Exchange, FixedPoint, PriceTick, QuoteCurrency};
+use arbitrage_engine::ConversionRates;
 use arbitrage_feeds::{
     load_mappings, BinanceAdapter, BithumbAdapter, BybitAdapter, CoinbaseAdapter, CoinbaseCredentials,
-    ExchangeAdapter, FeedConfig, GateIOAdapter, MarketDiscovery, SymbolMappings,
+    ExchangeAdapter, FeedConfig, FeedMessage, GateIOAdapter, MarketDiscovery, SymbolMappings,
     UpbitAdapter, WsClient, BinanceRestFetcher, BybitRestFetcher, GateIORestFetcher,
     UpbitRestFetcher, BithumbRestFetcher, CoinbaseRestFetcher,
+    runner as feed_runner,
 };
 use feeds::common::{convert_stablecoin_to_usd_for_exchange, extract_binance_base_quote, extract_bybit_base_quote};
 use feeds::FeedContext;
@@ -114,6 +116,82 @@ fn parse_mode(mode: &str) -> ExecutionMode {
     }
 }
 
+/// Broadcast premium matrix for a pair to all WebSocket clients.
+fn broadcast_premium_matrix_for_pair(
+    state: &SharedState,
+    broadcast_tx: &BroadcastSender,
+    pair_id: u32,
+    symbol: &str,
+) {
+    // Get conversion rates from state
+    let usdt_krw = state.get_upbit_usdt_krw().map(|p| p.to_f64());
+    let usdc_krw = state.get_upbit_usdc_krw().map(|p| p.to_f64());
+    let usd_krw = exchange_rate::get_api_rate().or(usdt_krw);
+    let bithumb_usdt_krw = state.get_bithumb_usdt_krw().map(|p| p.to_f64());
+    let bithumb_usdc_krw = state.get_bithumb_usdc_krw().map(|p| p.to_f64());
+
+    let rates = ConversionRates {
+        usdt_usd: state.get_usdt_usd_price().to_f64(),
+        usdc_usd: state.get_usdc_usd_price().to_f64(),
+        usd_krw: usd_krw.unwrap_or(0.0),
+        upbit_usdt_krw: usdt_krw.unwrap_or(0.0),
+        upbit_usdc_krw: usdc_krw.unwrap_or(0.0),
+        bithumb_usdt_krw: bithumb_usdt_krw.unwrap_or(0.0),
+        bithumb_usdc_krw: bithumb_usdc_krw.unwrap_or(0.0),
+    };
+
+    // Get the premium matrix for this pair
+    if let Some(matrix) = state.detector.get_matrix(pair_id) {
+        let premiums = matrix.all_premiums_multi_denomination(&rates);
+
+        // Log conversion rates and entry count for KRW debugging
+        let krw_entries: Vec<_> = premiums.iter()
+            .filter(|p| p.2 == QuoteCurrency::KRW || p.3 == QuoteCurrency::KRW)
+            .collect();
+        if !krw_entries.is_empty() {
+            tracing::debug!(
+                symbol = symbol,
+                total_entries = premiums.len(),
+                krw_entries = krw_entries.len(),
+                upbit_usdt_krw = rates.upbit_usdt_krw,
+                bithumb_usdt_krw = rates.bithumb_usdt_krw,
+                usd_krw = rates.usd_krw,
+                "Premium matrix for symbol with KRW markets"
+            );
+            // Log first few KRW entries for debugging
+            for (i, e) in krw_entries.iter().take(2).enumerate() {
+                tracing::debug!(
+                    i = i,
+                    buy_ex = ?e.0,
+                    sell_ex = ?e.1,
+                    buy_quote = ?e.2,
+                    sell_quote = ?e.3,
+                    tether_bps = e.10,
+                    kimchi_bps = e.12,
+                    "KRW entry details"
+                );
+            }
+        }
+
+        // Convert to WsPremiumEntry
+        // Use Display format for quote currency (e.g., "KRW", "USDT")
+        // Use Debug format for exchange (e.g., "Binance", "Upbit")
+        let entries: Vec<ws_server::WsPremiumEntry> = premiums
+            .iter()
+            .map(|p| ws_server::WsPremiumEntry {
+                buy_exchange: format!("{:?}", p.0),
+                sell_exchange: format!("{:?}", p.1),
+                buy_quote: p.2.as_str().to_string(),
+                sell_quote: p.3.as_str().to_string(),
+                tether_premium_bps: p.10,  // usdlike_premium_bps
+                kimchi_premium_bps: p.12,  // kimchi_premium
+            })
+            .collect();
+
+        ws_server::broadcast_premium_matrix(broadcast_tx, symbol, pair_id, entries);
+    }
+}
+
 /// Event-driven opportunity detector.
 ///
 /// Reacts immediately to price update events from feed handlers.
@@ -145,6 +223,9 @@ async fn run_event_driven_detector(
                     );
                     ws_server::broadcast_opportunity(&broadcast_tx, &state, opp);
                 }
+
+                // Broadcast premium matrix for this symbol (all exchange pairs)
+                broadcast_premium_matrix_for_pair(&state, &broadcast_tx, event.pair_id, &event.symbol);
 
                 // Send Telegram alerts
                 if let Some(ref notifier) = notifier {
@@ -311,9 +392,9 @@ async fn fetch_initial_orderbooks(
                 *bid_size, *ask_size, quote_currency
             ).await;
 
-            // Broadcast to connected clients
+            // Broadcast to connected clients with USD prices for comparison
             let tick = PriceTick::with_depth(Exchange::Binance, pair_id, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency);
-            ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Binance, pair_id, &display_symbol, Some(&quote), &tick);
+            ws_server::broadcast_price_with_quote_and_usd(broadcast_tx, Exchange::Binance, pair_id, &display_symbol, Some(&quote), &tick, Some(mid_usd.to_f64()), Some(bid_usd.to_f64()), Some(ask_usd.to_f64()));
             total_updated += 1;
         }
     }
@@ -351,9 +432,9 @@ async fn fetch_initial_orderbooks(
                 *bid_size, *ask_size, quote_currency
             ).await;
 
-            // Broadcast to connected clients
+            // Broadcast to connected clients with USD prices for comparison
             let tick = PriceTick::with_depth(Exchange::Bybit, pair_id, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency);
-            ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Bybit, pair_id, &display_symbol, Some(&quote), &tick);
+            ws_server::broadcast_price_with_quote_and_usd(broadcast_tx, Exchange::Bybit, pair_id, &display_symbol, Some(&quote), &tick, Some(mid_usd.to_f64()), Some(bid_usd.to_f64()), Some(ask_usd.to_f64()));
             total_updated += 1;
         }
     }
@@ -385,9 +466,9 @@ async fn fetch_initial_orderbooks(
                 *bid_size, *ask_size, quote_currency
             ).await;
 
-            // Broadcast to connected clients
+            // Broadcast to connected clients with USD prices for comparison
             let tick = PriceTick::with_depth(Exchange::GateIO, pair_id, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency);
-            ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::GateIO, pair_id, &display_symbol, Some(&quote), &tick);
+            ws_server::broadcast_price_with_quote_and_usd(broadcast_tx, Exchange::GateIO, pair_id, &display_symbol, Some(&quote), &tick, Some(mid_usd.to_f64()), Some(bid_usd.to_f64()), Some(ask_usd.to_f64()));
             total_updated += 1;
         }
     }
@@ -424,6 +505,9 @@ async fn fetch_initial_orderbooks(
             let display_symbol = symbol_mappings.canonical_name("Upbit", &base);
             let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
 
+            // Original KRW prices for tick
+            let mid_price_krw = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
+
             // Convert KRW prices to USD if we have the exchange rate
             if let Some(usdt_krw_rate) = usdt_krw {
                 // KRW -> USDT -> USD
@@ -443,24 +527,22 @@ async fn fetch_initial_orderbooks(
                     *bid_size, *ask_size, QuoteCurrency::KRW
                 ).await;
 
-                // Broadcast to connected clients
-                let tick = PriceTick::with_depth(Exchange::Upbit, pair_id, mid_price_fp, bid_fp, ask_fp, *bid_size, *ask_size, QuoteCurrency::KRW);
-                ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Upbit, pair_id, &display_symbol, Some("KRW"), &tick);
+                // Broadcast with original KRW prices in tick, USD prices in separate fields
+                let tick = PriceTick::with_depth(Exchange::Upbit, pair_id, mid_price_krw, *bid, *ask, *bid_size, *ask_size, QuoteCurrency::KRW);
+                ws_server::broadcast_price_with_quote_and_usd(broadcast_tx, Exchange::Upbit, pair_id, &display_symbol, Some("KRW"), &tick, Some(mid_price_usd), Some(bid_usd), Some(ask_usd));
             } else {
                 // No exchange rate available yet, store raw KRW prices
-                // They will be updated when WebSocket provides the rate
-                let mid_price = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
                 // When no exchange rate, raw = normalized (both KRW)
                 state.update_price_with_bid_ask_and_raw(
                     Exchange::Upbit, pair_id, &display_symbol,
-                    mid_price, *bid, *ask,  // KRW (no conversion)
-                    *bid, *ask,              // Original KRW
+                    mid_price_krw, *bid, *ask,  // KRW (no conversion)
+                    *bid, *ask,                  // Original KRW
                     *bid_size, *ask_size, QuoteCurrency::KRW
                 ).await;
 
-                // Broadcast to connected clients
-                let tick = PriceTick::with_depth(Exchange::Upbit, pair_id, mid_price, *bid, *ask, *bid_size, *ask_size, QuoteCurrency::KRW);
-                ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Upbit, pair_id, &display_symbol, Some("KRW"), &tick);
+                // Broadcast with original KRW prices, no USD conversion available
+                let tick = PriceTick::with_depth(Exchange::Upbit, pair_id, mid_price_krw, *bid, *ask, *bid_size, *ask_size, QuoteCurrency::KRW);
+                ws_server::broadcast_price_with_quote_and_usd(broadcast_tx, Exchange::Upbit, pair_id, &display_symbol, Some("KRW"), &tick, None, None, None);
                 debug!("  Upbit: {} stored as KRW (no exchange rate yet)", display_symbol);
             }
             total_updated += 1;
@@ -494,6 +576,9 @@ async fn fetch_initial_orderbooks(
         let display_symbol = symbol_mappings.canonical_name("Bithumb", symbol);
         let pair_id = arbitrage_core::symbol_to_pair_id(&display_symbol);
 
+        // Original KRW prices for tick
+        let mid_price_krw = FixedPoint::from_f64((bid.to_f64() + ask.to_f64()) / 2.0);
+
         // All Bithumb prices are in KRW
         if let Some(usdt_krw_rate) = bithumb_usdt_krw {
             let bid_usd = bid.to_f64() / usdt_krw_rate * usdt_usd;
@@ -512,9 +597,9 @@ async fn fetch_initial_orderbooks(
                 *bid_size, *ask_size, QuoteCurrency::KRW
             ).await;
 
-            // Broadcast to connected clients
-            let tick = PriceTick::with_depth(Exchange::Bithumb, pair_id, mid_price_fp, bid_fp, ask_fp, *bid_size, *ask_size, QuoteCurrency::KRW);
-            ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Bithumb, pair_id, &display_symbol, Some("KRW"), &tick);
+            // Broadcast with original KRW prices in tick, USD prices in separate fields
+            let tick = PriceTick::with_depth(Exchange::Bithumb, pair_id, mid_price_krw, *bid, *ask, *bid_size, *ask_size, QuoteCurrency::KRW);
+            ws_server::broadcast_price_with_quote_and_usd(broadcast_tx, Exchange::Bithumb, pair_id, &display_symbol, Some("KRW"), &tick, Some(mid_price_usd), Some(bid_usd), Some(ask_usd));
         }
         // Note: If USDT/KRW rate is not available, we skip this symbol.
         // KRW prices without conversion would be invalid in USD terms.
@@ -546,9 +631,9 @@ async fn fetch_initial_orderbooks(
                 *bid_size, *ask_size, quote_currency
             ).await;
 
-            // Broadcast to connected clients
+            // Broadcast with original prices in tick, USD prices in separate fields
             let tick = PriceTick::with_depth(Exchange::Coinbase, pair_id, mid_price, *bid, *ask, *bid_size, *ask_size, quote_currency);
-            ws_server::broadcast_price_with_quote(broadcast_tx, Exchange::Coinbase, pair_id, base, Some(quote), &tick);
+            ws_server::broadcast_price_with_quote_and_usd(broadcast_tx, Exchange::Coinbase, pair_id, base, Some(quote), &tick, Some(mid_usd.to_f64()), Some(bid_usd.to_f64()), Some(ask_usd.to_f64()));
             total_updated += 1;
             debug!("  Coinbase: {} @ {:.4} (REST)", product_id, mid_price.to_f64());
         }
@@ -692,9 +777,24 @@ async fn spawn_live_feeds(
     // Convert symbol_mappings to Arc for sharing across tasks
     let symbol_mappings_arc = Arc::new(symbol_mappings.clone());
 
+    // Create shared channel for all feed messages
+    // All runners send FeedMessage to this channel, one handler processes them
+    let (feed_tx, feed_rx) = mpsc::channel::<FeedMessage>(30000);
+
+    // Start the common feed handler
+    let handler_ctx = FeedContext::new(
+        state.clone(),
+        broadcast_tx.clone(),
+        symbol_mappings_arc.clone(),
+        status_notifier.clone(),
+    );
+    handles.push(tokio::spawn(async move {
+        feeds::run_feed_handler(feed_rx, handler_ctx).await;
+    }));
+
     // Binance
     if !binance_symbols.is_empty() {
-        let (binance_tx, binance_rx) = mpsc::channel(5000); // ~10x symbols for high volume
+        let (ws_tx, ws_rx) = mpsc::channel(5000);
 
         // Add stablecoin rate symbols to subscription
         let mut all_binance_symbols = binance_symbols.clone();
@@ -703,36 +803,29 @@ async fn spawn_live_feeds(
         all_binance_symbols.push("USDCUSD".to_string());
 
         // Use combined stream URL (includes stream name in response, needed for depth streams)
-        // Depth stream responses don't include symbol, so we need the wrapper format
         let combined_url = BinanceAdapter::ws_url_combined(&all_binance_symbols);
         let mut binance_config = FeedConfig::for_exchange(Exchange::Binance);
         binance_config.ws_url = combined_url;
 
-        let binance_client = WsClient::new(binance_config.clone(), binance_tx);
+        let binance_client = WsClient::new(binance_config.clone(), ws_tx);
         handles.push(tokio::spawn(async move {
-            // Combined stream URL auto-subscribes, no need to send SUBSCRIBE messages
             if let Err(e) = binance_client.run(None).await {
                 warn!("Binance WebSocket error: {}", e);
             }
         }));
 
-        let binance_ctx = FeedContext::new(
-            state.clone(),
-            broadcast_tx.clone(),
-            symbol_mappings_arc.clone(),
-            status_notifier.clone(),
-        );
+        // Runner: WsMessage -> FeedMessage
+        let feed_tx_clone = feed_tx.clone();
         handles.push(tokio::spawn(async move {
-            feeds::run_binance_feed(binance_ctx, binance_rx).await;
+            feed_runner::run_binance(ws_rx, feed_tx_clone).await;
         }));
     }
 
     // Coinbase (requires authentication for level2 channel)
-    // Send multiple subscription messages in batches to avoid "too many L2 streams" error
     if !coinbase_symbols.is_empty() {
         if let Some(credentials) = CoinbaseCredentials::from_env() {
             let coinbase_config = FeedConfig::for_exchange(Exchange::Coinbase);
-            let (coinbase_tx, coinbase_rx) = mpsc::channel(5000);
+            let (ws_tx, ws_rx) = mpsc::channel(5000);
 
             const BATCH_SIZE: usize = 20;
 
@@ -780,21 +873,17 @@ async fn spawn_live_feeds(
                     all_subscribe_msgs.len()
                 );
 
-                let coinbase_client = WsClient::new(coinbase_config.clone(), coinbase_tx);
+                let coinbase_client = WsClient::new(coinbase_config.clone(), ws_tx);
                 handles.push(tokio::spawn(async move {
                     if let Err(e) = coinbase_client.run_with_messages(Some(all_subscribe_msgs)).await {
                         warn!("Coinbase WebSocket error: {}", e);
                     }
                 }));
 
-                let coinbase_ctx = FeedContext::new(
-                    state.clone(),
-                    broadcast_tx.clone(),
-                    symbol_mappings_arc.clone(),
-                    status_notifier.clone(),
-                );
+                // Runner: WsMessage -> FeedMessage
+                let feed_tx_clone = feed_tx.clone();
                 handles.push(tokio::spawn(async move {
-                    feeds::run_coinbase_feed(coinbase_ctx, coinbase_rx).await;
+                    feed_runner::run_coinbase(ws_rx, feed_tx_clone).await;
                 }));
             }
         } else {
@@ -805,59 +894,49 @@ async fn spawn_live_feeds(
     // Upbit
     if !upbit_symbols.is_empty() {
         let upbit_config = FeedConfig::for_exchange(Exchange::Upbit);
-        let (upbit_tx, upbit_rx) = mpsc::channel(5000); // ~22x symbols for high volume
+        let (ws_tx, ws_rx) = mpsc::channel(5000);
         let upbit_subscribe = UpbitAdapter::subscribe_message(&upbit_symbols);
 
-        let upbit_client = WsClient::new(upbit_config.clone(), upbit_tx);
+        let upbit_client = WsClient::new(upbit_config.clone(), ws_tx);
         handles.push(tokio::spawn(async move {
             if let Err(e) = upbit_client.run(Some(upbit_subscribe)).await {
                 warn!("Upbit WebSocket error: {}", e);
             }
         }));
 
-        let upbit_ctx = FeedContext::new(
-            state.clone(),
-            broadcast_tx.clone(),
-            symbol_mappings_arc.clone(),
-            status_notifier.clone(),
-        );
+        // Runner: WsMessage -> FeedMessage
+        let feed_tx_clone = feed_tx.clone();
         handles.push(tokio::spawn(async move {
-            feeds::run_upbit_feed(upbit_ctx, upbit_rx).await;
+            feed_runner::run_upbit(ws_rx, feed_tx_clone).await;
         }));
     }
 
     // Bithumb
     if !bithumb_symbols.is_empty() {
         let bithumb_config = FeedConfig::for_exchange(Exchange::Bithumb);
-        let (bithumb_tx, bithumb_rx) = mpsc::channel(5000); // ~22x symbols for high volume
+        let (ws_tx, ws_rx) = mpsc::channel(5000);
         let bithumb_subscribe = BithumbAdapter::subscribe_message(&bithumb_symbols);
 
-        let bithumb_client = WsClient::new(bithumb_config.clone(), bithumb_tx);
+        let bithumb_client = WsClient::new(bithumb_config.clone(), ws_tx);
         handles.push(tokio::spawn(async move {
             if let Err(e) = bithumb_client.run(Some(bithumb_subscribe)).await {
                 warn!("Bithumb WebSocket error: {}", e);
             }
         }));
 
-        let bithumb_ctx = FeedContext::new(
-            state.clone(),
-            broadcast_tx.clone(),
-            symbol_mappings_arc.clone(),
-            status_notifier.clone(),
-        );
+        // Runner: WsMessage -> FeedMessage
+        let feed_tx_clone = feed_tx.clone();
         handles.push(tokio::spawn(async move {
-            feeds::run_bithumb_feed(bithumb_ctx, bithumb_rx).await;
+            feed_runner::run_bithumb(ws_rx, feed_tx_clone).await;
         }));
     }
 
     // Bybit
     if !bybit_symbols.is_empty() {
         let bybit_config = FeedConfig::for_exchange(Exchange::Bybit);
-        let (bybit_tx, bybit_rx) = mpsc::channel(10000); // Larger buffer for orderbook.50 (50 levels per update)
+        let (ws_tx, ws_rx) = mpsc::channel(10000);
 
         // Add stablecoin rate symbols to subscription
-        // Bybit doesn't have USDT/USD pair, but has USDC/USDT
-        // Also add BTC/USD and BTC/USDC for deriving stablecoin rates
         let mut all_bybit_symbols = bybit_symbols.clone();
         all_bybit_symbols.push("USDCUSDT".to_string());
         all_bybit_symbols.push("BTCUSD".to_string());
@@ -866,52 +945,44 @@ async fn spawn_live_feeds(
         // Bybit has a limit of 10 args per subscription, so we batch them
         let bybit_subscribe_msgs = BybitAdapter::subscribe_messages(&all_bybit_symbols);
 
-        let bybit_client = WsClient::new(bybit_config.clone(), bybit_tx);
+        let bybit_client = WsClient::new(bybit_config.clone(), ws_tx);
         handles.push(tokio::spawn(async move {
             if let Err(e) = bybit_client.run_with_messages(Some(bybit_subscribe_msgs)).await {
                 warn!("Bybit WebSocket error: {}", e);
             }
         }));
 
-        let bybit_ctx = FeedContext::new(
-            state.clone(),
-            broadcast_tx.clone(),
-            symbol_mappings_arc.clone(),
-            status_notifier.clone(),
-        );
+        // Runner: WsMessage -> FeedMessage
+        let feed_tx_clone = feed_tx.clone();
         handles.push(tokio::spawn(async move {
-            feeds::run_bybit_feed(bybit_ctx, bybit_rx).await;
+            feed_runner::run_bybit(ws_rx, feed_tx_clone).await;
         }));
     }
 
     // Gate.io
     if !gateio_symbols.is_empty() {
         let gateio_config = FeedConfig::for_exchange(Exchange::GateIO);
-        let (gateio_tx, gateio_rx) = mpsc::channel(5000); // Larger buffer for Gate.io (754 symbols, high message volume)
+        let (ws_tx, ws_rx) = mpsc::channel(5000);
 
         // Add stablecoin rate symbols to subscription
         let mut all_gateio_symbols = gateio_symbols.clone();
         all_gateio_symbols.push("USDT_USD".to_string());
         all_gateio_symbols.push("USDC_USDT".to_string());
 
-        // Subscribe to both ticker and order_book for orderbook depth
+        // Subscribe to orderbook channel
         let gateio_subscribe_msgs = GateIOAdapter::subscribe_messages(&all_gateio_symbols);
 
-        let gateio_client = WsClient::new(gateio_config.clone(), gateio_tx);
+        let gateio_client = WsClient::new(gateio_config.clone(), ws_tx);
         handles.push(tokio::spawn(async move {
             if let Err(e) = gateio_client.run_with_messages(Some(gateio_subscribe_msgs)).await {
                 warn!("Gate.io WebSocket error: {}", e);
             }
         }));
 
-        let gateio_ctx = FeedContext::new(
-            state.clone(),
-            broadcast_tx.clone(),
-            symbol_mappings_arc.clone(),
-            status_notifier.clone(),
-        );
+        // Runner: WsMessage -> FeedMessage
+        let feed_tx_clone = feed_tx.clone();
         handles.push(tokio::spawn(async move {
-            feeds::run_gateio_feed(gateio_ctx, gateio_rx).await;
+            feed_runner::run_gateio(ws_rx, feed_tx_clone).await;
         }));
     }
 
