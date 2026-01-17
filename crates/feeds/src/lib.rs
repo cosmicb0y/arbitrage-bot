@@ -18,6 +18,7 @@ pub mod manager;
 pub mod message;
 pub mod rest;
 pub mod runner;
+pub mod subscription;
 pub mod symbol_mapping;
 pub mod websocket;
 
@@ -34,5 +35,14 @@ pub use manager::*;
 pub use message::{ConnectionEvent, FeedMessage, Orderbook, ParsedTick};
 pub use rest::*;
 pub use runner::*;
+pub use subscription::{
+    BatchSubscriptionConfig, BatchSubscriptionResult, BinanceSubscriptionBuilder,
+    BithumbSubscriptionBuilder, BybitSubscriptionBuilder, CoinbaseSubscriptionBuilder,
+    ExchangeRateLimit, ExchangeSubscriptionTracker, GateIOSubscriptionBuilder,
+    NewMarketSubscriptionHandler, SubscriptionChange, SubscriptionError, SubscriptionEvent,
+    SubscriptionEventType, SubscriptionLogger, SubscriptionManager, SubscriptionRateLimiter,
+    SubscriptionRetryPolicy, SubscriptionRetryState, SubscriptionStatus, UpbitSubscriptionBuilder,
+    SUBSCRIPTION_CHANNEL_BUFFER,
+};
 pub use symbol_mapping::*;
 pub use websocket::*;
