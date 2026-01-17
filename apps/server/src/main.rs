@@ -29,6 +29,9 @@ use arbitrage_feeds::{
     UpbitAdapter, WsClient, BinanceRestFetcher, BybitRestFetcher, GateIORestFetcher,
     UpbitRestFetcher, BithumbRestFetcher, CoinbaseRestFetcher,
     runner as feed_runner,
+    SubscriptionManager, BinanceSubscriptionBuilder, BithumbSubscriptionBuilder,
+    BybitSubscriptionBuilder, CoinbaseSubscriptionBuilder, GateIOSubscriptionBuilder,
+    UpbitSubscriptionBuilder,
 };
 use feeds::common::{convert_stablecoin_to_usd_for_exchange, extract_binance_base_quote, extract_bybit_base_quote};
 use feeds::FeedContext;
@@ -643,13 +646,17 @@ async fn fetch_initial_orderbooks(
 }
 
 /// Spawn live WebSocket feeds
+/// Returns task handles and the SubscriptionManager for runtime subscription updates.
 async fn spawn_live_feeds(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     symbol_mappings: &SymbolMappings,
     status_notifier: Option<StatusNotifierHandle>,
-) -> Vec<tokio::task::JoinHandle<()>> {
+) -> (Vec<tokio::task::JoinHandle<()>>, Arc<SubscriptionManager>) {
     let mut handles = Vec::new();
+
+    // Create SubscriptionManager for runtime dynamic subscriptions
+    let mut subscription_manager = SubscriptionManager::new();
 
     // First, do an initial market discovery to get common symbols
     let discovery = MarketDiscovery::new();
@@ -796,6 +803,10 @@ async fn spawn_live_feeds(
     if !binance_symbols.is_empty() {
         let (ws_tx, ws_rx) = mpsc::channel(5000);
 
+        // Create subscription channel for runtime dynamic subscriptions
+        let (sub_tx, sub_rx) = SubscriptionManager::create_channel();
+        subscription_manager.register_exchange(Exchange::Binance, sub_tx);
+
         // Add stablecoin rate symbols to subscription
         let mut all_binance_symbols = binance_symbols.clone();
         all_binance_symbols.push("USDTUSD".to_string());
@@ -807,7 +818,9 @@ async fn spawn_live_feeds(
         let mut binance_config = FeedConfig::for_exchange(Exchange::Binance);
         binance_config.ws_url = combined_url;
 
-        let binance_client = WsClient::new(binance_config.clone(), ws_tx);
+        // Connect subscription channel with BinanceSubscriptionBuilder for runtime dynamic subscriptions
+        let binance_client = WsClient::new(binance_config.clone(), ws_tx)
+            .with_subscription_channel(sub_rx, Box::new(BinanceSubscriptionBuilder::new()));
         handles.push(tokio::spawn(async move {
             if let Err(e) = binance_client.run(None).await {
                 warn!("Binance WebSocket error: {}", e);
@@ -826,6 +839,10 @@ async fn spawn_live_feeds(
         if let Some(credentials) = CoinbaseCredentials::from_env() {
             let coinbase_config = FeedConfig::for_exchange(Exchange::Coinbase);
             let (ws_tx, ws_rx) = mpsc::channel(5000);
+
+            // Create subscription channel for runtime dynamic subscriptions
+            let (sub_tx, sub_rx) = SubscriptionManager::create_channel();
+            subscription_manager.register_exchange(Exchange::Coinbase, sub_tx);
 
             const BATCH_SIZE: usize = 20;
 
@@ -873,7 +890,8 @@ async fn spawn_live_feeds(
                     all_subscribe_msgs.len()
                 );
 
-                let coinbase_client = WsClient::new(coinbase_config.clone(), ws_tx);
+                let coinbase_client = WsClient::new(coinbase_config.clone(), ws_tx)
+                    .with_subscription_channel(sub_rx, Box::new(CoinbaseSubscriptionBuilder::new()));
                 handles.push(tokio::spawn(async move {
                     if let Err(e) = coinbase_client.run_with_messages(Some(all_subscribe_msgs)).await {
                         warn!("Coinbase WebSocket error: {}", e);
@@ -895,9 +913,15 @@ async fn spawn_live_feeds(
     if !upbit_symbols.is_empty() {
         let upbit_config = FeedConfig::for_exchange(Exchange::Upbit);
         let (ws_tx, ws_rx) = mpsc::channel(5000);
+
+        // Create subscription channel for runtime dynamic subscriptions
+        let (sub_tx, sub_rx) = SubscriptionManager::create_channel();
+        subscription_manager.register_exchange(Exchange::Upbit, sub_tx);
+
         let upbit_subscribe = UpbitAdapter::subscribe_message(&upbit_symbols);
 
-        let upbit_client = WsClient::new(upbit_config.clone(), ws_tx);
+        let upbit_client = WsClient::new(upbit_config.clone(), ws_tx)
+            .with_subscription_channel(sub_rx, Box::new(UpbitSubscriptionBuilder::new()));
         handles.push(tokio::spawn(async move {
             if let Err(e) = upbit_client.run(Some(upbit_subscribe)).await {
                 warn!("Upbit WebSocket error: {}", e);
@@ -915,9 +939,15 @@ async fn spawn_live_feeds(
     if !bithumb_symbols.is_empty() {
         let bithumb_config = FeedConfig::for_exchange(Exchange::Bithumb);
         let (ws_tx, ws_rx) = mpsc::channel(5000);
+
+        // Create subscription channel for runtime dynamic subscriptions
+        let (sub_tx, sub_rx) = SubscriptionManager::create_channel();
+        subscription_manager.register_exchange(Exchange::Bithumb, sub_tx);
+
         let bithumb_subscribe = BithumbAdapter::subscribe_message(&bithumb_symbols);
 
-        let bithumb_client = WsClient::new(bithumb_config.clone(), ws_tx);
+        let bithumb_client = WsClient::new(bithumb_config.clone(), ws_tx)
+            .with_subscription_channel(sub_rx, Box::new(BithumbSubscriptionBuilder::new()));
         handles.push(tokio::spawn(async move {
             if let Err(e) = bithumb_client.run(Some(bithumb_subscribe)).await {
                 warn!("Bithumb WebSocket error: {}", e);
@@ -936,6 +966,10 @@ async fn spawn_live_feeds(
         let bybit_config = FeedConfig::for_exchange(Exchange::Bybit);
         let (ws_tx, ws_rx) = mpsc::channel(10000);
 
+        // Create subscription channel for runtime dynamic subscriptions
+        let (sub_tx, sub_rx) = SubscriptionManager::create_channel();
+        subscription_manager.register_exchange(Exchange::Bybit, sub_tx);
+
         // Add stablecoin rate symbols to subscription
         let mut all_bybit_symbols = bybit_symbols.clone();
         all_bybit_symbols.push("USDCUSDT".to_string());
@@ -945,7 +979,8 @@ async fn spawn_live_feeds(
         // Bybit has a limit of 10 args per subscription, so we batch them
         let bybit_subscribe_msgs = BybitAdapter::subscribe_messages(&all_bybit_symbols);
 
-        let bybit_client = WsClient::new(bybit_config.clone(), ws_tx);
+        let bybit_client = WsClient::new(bybit_config.clone(), ws_tx)
+            .with_subscription_channel(sub_rx, Box::new(BybitSubscriptionBuilder::new()));
         handles.push(tokio::spawn(async move {
             if let Err(e) = bybit_client.run_with_messages(Some(bybit_subscribe_msgs)).await {
                 warn!("Bybit WebSocket error: {}", e);
@@ -964,6 +999,10 @@ async fn spawn_live_feeds(
         let gateio_config = FeedConfig::for_exchange(Exchange::GateIO);
         let (ws_tx, ws_rx) = mpsc::channel(5000);
 
+        // Create subscription channel for runtime dynamic subscriptions
+        let (sub_tx, sub_rx) = SubscriptionManager::create_channel();
+        subscription_manager.register_exchange(Exchange::GateIO, sub_tx);
+
         // Add stablecoin rate symbols to subscription
         let mut all_gateio_symbols = gateio_symbols.clone();
         all_gateio_symbols.push("USDT_USD".to_string());
@@ -972,7 +1011,8 @@ async fn spawn_live_feeds(
         // Subscribe to orderbook channel
         let gateio_subscribe_msgs = GateIOAdapter::subscribe_messages(&all_gateio_symbols);
 
-        let gateio_client = WsClient::new(gateio_config.clone(), ws_tx);
+        let gateio_client = WsClient::new(gateio_config.clone(), ws_tx)
+            .with_subscription_channel(sub_rx, Box::new(GateIOSubscriptionBuilder::new()));
         handles.push(tokio::spawn(async move {
             if let Err(e) = gateio_client.run_with_messages(Some(gateio_subscribe_msgs)).await {
                 warn!("Gate.io WebSocket error: {}", e);
@@ -986,15 +1026,20 @@ async fn spawn_live_feeds(
         }));
     }
 
-    handles
+    // Wrap SubscriptionManager in Arc for sharing with run_market_discovery
+    let subscription_manager = Arc::new(subscription_manager);
+
+    (handles, subscription_manager)
 }
 
 /// Run market discovery loop - periodically fetches markets from exchanges
 /// and broadcasts common markets to clients.
+/// Also triggers runtime subscription updates via SubscriptionManager.
 async fn run_market_discovery(
     state: SharedState,
     broadcast_tx: BroadcastSender,
     _symbol_mappings: Arc<SymbolMappings>,
+    subscription_manager: Arc<SubscriptionManager>,
 ) {
     debug!("Starting market discovery loop");
 
@@ -1025,6 +1070,73 @@ async fn run_market_discovery(
 
             // Broadcast to connected clients
             ws_server::broadcast_common_markets(&broadcast_tx, &common);
+
+            // Trigger runtime subscription updates for new markets
+            // Extract symbols per exchange from by_quote and update subscriptions
+            // This will calculate diff and only subscribe to new markets
+            use std::collections::HashSet;
+            let mut binance_markets: HashSet<String> = HashSet::new();
+            let mut coinbase_markets: HashSet<String> = HashSet::new();
+            let mut upbit_markets: HashSet<String> = HashSet::new();
+            let mut bithumb_markets: HashSet<String> = HashSet::new();
+            let mut bybit_markets: HashSet<String> = HashSet::new();
+            let mut gateio_markets: HashSet<String> = HashSet::new();
+
+            for (_key, exchange_markets) in &common.by_quote {
+                for (exchange, market_info) in exchange_markets {
+                    match exchange.as_str() {
+                        "Binance" => { binance_markets.insert(market_info.symbol.to_lowercase()); }
+                        "Coinbase" => { coinbase_markets.insert(market_info.symbol.clone()); }
+                        "Upbit" => { upbit_markets.insert(market_info.symbol.clone()); }
+                        "Bithumb" => { bithumb_markets.insert(market_info.symbol.clone()); }
+                        "Bybit" => { bybit_markets.insert(market_info.symbol.clone()); }
+                        "GateIO" => { gateio_markets.insert(market_info.symbol.clone()); }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Update subscriptions for each exchange (diff is calculated internally)
+            // Note: Actual subscription messages won't be sent until Epic 2
+            // when SubscriptionBuilder implementations are added
+            let binance_vec: Vec<String> = binance_markets.into_iter().collect();
+            let coinbase_vec: Vec<String> = coinbase_markets.into_iter().collect();
+            let upbit_vec: Vec<String> = upbit_markets.into_iter().collect();
+            let bithumb_vec: Vec<String> = bithumb_markets.into_iter().collect();
+            let bybit_vec: Vec<String> = bybit_markets.into_iter().collect();
+            let gateio_vec: Vec<String> = gateio_markets.into_iter().collect();
+
+            // Only log if there are new subscriptions (update_subscriptions returns count)
+            if let Ok(count) = subscription_manager.update_subscriptions(Exchange::Binance, &binance_vec).await {
+                if count > 0 {
+                    info!("📡 Binance: {} new markets queued for subscription", count);
+                }
+            }
+            if let Ok(count) = subscription_manager.update_subscriptions(Exchange::Coinbase, &coinbase_vec).await {
+                if count > 0 {
+                    info!("📡 Coinbase: {} new markets queued for subscription", count);
+                }
+            }
+            if let Ok(count) = subscription_manager.update_subscriptions(Exchange::Upbit, &upbit_vec).await {
+                if count > 0 {
+                    info!("📡 Upbit: {} new markets queued for subscription", count);
+                }
+            }
+            if let Ok(count) = subscription_manager.update_subscriptions(Exchange::Bithumb, &bithumb_vec).await {
+                if count > 0 {
+                    info!("📡 Bithumb: {} new markets queued for subscription", count);
+                }
+            }
+            if let Ok(count) = subscription_manager.update_subscriptions(Exchange::Bybit, &bybit_vec).await {
+                if count > 0 {
+                    info!("📡 Bybit: {} new markets queued for subscription", count);
+                }
+            }
+            if let Ok(count) = subscription_manager.update_subscriptions(Exchange::GateIO, &gateio_vec).await {
+                if count > 0 {
+                    info!("📡 GateIO: {} new markets queued for subscription", count);
+                }
+            }
         } else {
             warn!(
                 "Only {} exchanges responded, need at least 2 for comparison",
@@ -1206,14 +1318,6 @@ async fn main() {
         wallet_status::run_wallet_status_updater(wallet_broadcast).await;
     });
 
-    // Start market discovery loop
-    let discovery_state = state.clone();
-    let discovery_broadcast = broadcast_tx.clone();
-    let discovery_mappings = symbol_mappings.clone();
-    tokio::spawn(async move {
-        run_market_discovery(discovery_state, discovery_broadcast, discovery_mappings).await;
-    });
-
     // Start stale price cleanup task (runs every 10 seconds)
     let cleanup_state = state.clone();
     tokio::spawn(async move {
@@ -1227,17 +1331,36 @@ async fn main() {
     });
 
     // Spawn price source (live or simulated)
-    let feed_handles: Vec<tokio::task::JoinHandle<()>> = if args.live {
+    // For live feeds, we also get the SubscriptionManager for runtime subscription updates
+    let (feed_handles, subscription_manager): (Vec<tokio::task::JoinHandle<()>>, Option<Arc<SubscriptionManager>>) = if args.live {
         info!("📡 Using LIVE WebSocket feeds");
-        spawn_live_feeds(state.clone(), broadcast_tx.clone(), &symbol_mappings, status_notifier.clone()).await
+        let (handles, sub_mgr) = spawn_live_feeds(state.clone(), broadcast_tx.clone(), &symbol_mappings, status_notifier.clone()).await;
+        (handles, Some(sub_mgr))
     } else {
         info!("🎮 Using SIMULATED price feeds");
         let price_state = state.clone();
         let price_broadcast = broadcast_tx.clone();
-        vec![tokio::spawn(async move {
+        let handles = vec![tokio::spawn(async move {
             run_price_simulator(price_state, price_broadcast).await;
-        })]
+        })];
+        (handles, None)
     };
+
+    // Start market discovery loop
+    // Pass SubscriptionManager for runtime subscription updates (live mode only)
+    let discovery_state = state.clone();
+    let discovery_broadcast = broadcast_tx.clone();
+    let discovery_mappings = symbol_mappings.clone();
+    if let Some(sub_mgr) = subscription_manager {
+        tokio::spawn(async move {
+            run_market_discovery(discovery_state, discovery_broadcast, discovery_mappings, sub_mgr).await;
+        });
+    } else {
+        // Simulated mode - no SubscriptionManager, use dummy version
+        tokio::spawn(async move {
+            run_market_discovery(discovery_state, discovery_broadcast, discovery_mappings, Arc::new(SubscriptionManager::new())).await;
+        });
+    }
 
     // Handle shutdown
     info!("Press Ctrl+C to stop...");
