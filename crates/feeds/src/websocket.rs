@@ -1,6 +1,6 @@
 //! WebSocket client for exchange connections.
 
-use crate::{FeedConfig, FeedError};
+use crate::{FeedConfig, FeedError, SubscriptionChange};
 use arbitrage_core::Exchange;
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
@@ -8,6 +8,33 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
+
+/// Trait for building exchange-specific subscription messages.
+///
+/// Each exchange has a different protocol for subscribing to market data streams.
+/// This trait abstracts the message format so WsClient can send subscriptions
+/// without knowing the exchange-specific details.
+///
+/// ## Example Implementation
+///
+/// ```rust,ignore
+/// struct BinanceSubscriptionBuilder;
+///
+/// impl SubscriptionBuilder for BinanceSubscriptionBuilder {
+///     fn build_subscribe_message(&self, symbols: &[String]) -> String {
+///         let streams: Vec<String> = symbols.iter()
+///             .map(|s| format!("{}@depth20@100ms", s.to_lowercase()))
+///             .collect();
+///         format!(r#"{{"method":"SUBSCRIBE","params":{:?},"id":1}}"#, streams)
+///     }
+/// }
+/// ```
+pub trait SubscriptionBuilder: Send + Sync {
+    /// Build a subscription message for the given symbols.
+    ///
+    /// Returns a JSON string to send to the WebSocket server.
+    fn build_subscribe_message(&self, symbols: &[String]) -> String;
+}
 
 /// Message received from WebSocket.
 #[derive(Debug, Clone)]
@@ -161,6 +188,10 @@ pub struct WsClient {
     config: FeedConfig,
     tx: mpsc::Sender<WsMessage>,
     shutdown_rx: Option<oneshot::Receiver<()>>,
+    /// Channel for receiving subscription change requests at runtime.
+    subscription_rx: Option<mpsc::Receiver<SubscriptionChange>>,
+    /// Builder for creating exchange-specific subscription messages.
+    subscription_builder: Option<Box<dyn SubscriptionBuilder>>,
 }
 
 impl WsClient {
@@ -170,6 +201,8 @@ impl WsClient {
             config,
             tx,
             shutdown_rx: None,
+            subscription_rx: None,
+            subscription_builder: None,
         }
     }
 
@@ -178,6 +211,28 @@ impl WsClient {
     /// WebSocket Close frame and terminate cleanly.
     pub fn with_shutdown(mut self, rx: oneshot::Receiver<()>) -> Self {
         self.shutdown_rx = Some(rx);
+        self
+    }
+
+    /// Attach a subscription channel for runtime subscription changes.
+    ///
+    /// When messages are received on this channel, the client will send
+    /// subscription requests to the WebSocket server using the configured builder.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,ignore
+    /// let (sub_tx, sub_rx) = mpsc::channel(1024);
+    /// let client = WsClient::new(config, tx)
+    ///     .with_subscription_channel(sub_rx, Box::new(BinanceSubscriptionBuilder));
+    /// ```
+    pub fn with_subscription_channel(
+        mut self,
+        rx: mpsc::Receiver<SubscriptionChange>,
+        builder: Box<dyn SubscriptionBuilder>,
+    ) -> Self {
+        self.subscription_rx = Some(rx);
+        self.subscription_builder = Some(builder);
         self
     }
 
@@ -361,6 +416,9 @@ impl WsClient {
         // Take ownership of shutdown receiver for the reconnect loop
         let mut shutdown_rx = self.shutdown_rx.take();
 
+        // Take ownership of subscription channel for runtime subscription changes
+        let mut subscription_rx = self.subscription_rx.take();
+
         loop {
             // Check for shutdown signal before attempting connection
             if let Some(ref mut rx) = shutdown_rx {
@@ -398,7 +456,7 @@ impl WsClient {
             connection_start = Instant::now();
             let is_reconnect = has_connected_once;
 
-            match self.connect_and_handle(&subscribe_msgs, is_reconnect, &mut shutdown_rx).await {
+            match self.connect_and_handle(&subscribe_msgs, is_reconnect, &mut shutdown_rx, &mut subscription_rx).await {
                 Ok(()) => {
                     debug!("WebSocket connection closed normally for {:?}", self.config.exchange);
                     break;
@@ -468,6 +526,7 @@ impl WsClient {
         subscribe_msgs: &Option<Vec<String>>,
         is_reconnect: bool,
         shutdown_rx: &mut Option<oneshot::Receiver<()>>,
+        subscription_rx: &mut Option<mpsc::Receiver<SubscriptionChange>>,
     ) -> Result<(), FeedError> {
         let is_gateio = self.config.exchange == Exchange::GateIO;
         debug!("Connecting to {:?}: {}", self.config.exchange, self.config.ws_url);
@@ -555,71 +614,104 @@ impl WsClient {
                 return Err(FeedError::Disconnected("Ping timeout - no PONG received".to_string()));
             }
 
-            // Build the select with optional shutdown handling
-            // Using a macro-like approach to handle Option<Receiver>
-            let shutdown_triggered = if let Some(ref mut rx) = shutdown_rx {
-                tokio::select! {
-                    msg = read.next() => {
-                        Self::handle_ws_message(
-                            &self.config.exchange,
-                            &self.tx,
-                            msg,
-                            &mut message_count,
-                            &mut last_message_time,
-                            &mut awaiting_pong,
-                            &ping_sent_time,
-                            &last_ping_time,
-                            &mut write,
-                        ).await?;
-                        false
+            // Select between: ws message, ping timer, shutdown signal, and subscription changes
+            enum SelectResult {
+                WsMessage,
+                PingTick,
+                Shutdown,
+                Subscription(SubscriptionChange),
+            }
+
+            // Use biased select to prioritize subscription changes
+            let result = tokio::select! {
+                biased;
+
+                // Runtime subscription changes (highest priority for responsiveness)
+                Some(change) = async {
+                    match subscription_rx {
+                        Some(ref mut rx) => rx.recv().await,
+                        None => std::future::pending().await,
                     }
-                    _ = ping_timer.tick() => {
-                        Self::handle_ping(
-                            &self.config.exchange,
-                            &mut write,
-                            &mut awaiting_pong,
-                            &mut ping_sent_time,
-                            &mut last_ping_time,
-                        ).await?;
-                        false
+                } => SelectResult::Subscription(change),
+
+                // Shutdown signal
+                _ = async {
+                    match shutdown_rx {
+                        Some(ref mut rx) => rx.await.ok(),
+                        None => std::future::pending().await,
                     }
-                    _ = rx => {
-                        true
-                    }
-                }
-            } else {
-                tokio::select! {
-                    msg = read.next() => {
-                        Self::handle_ws_message(
-                            &self.config.exchange,
-                            &self.tx,
-                            msg,
-                            &mut message_count,
-                            &mut last_message_time,
-                            &mut awaiting_pong,
-                            &ping_sent_time,
-                            &last_ping_time,
-                            &mut write,
-                        ).await?;
-                        false
-                    }
-                    _ = ping_timer.tick() => {
-                        Self::handle_ping(
-                            &self.config.exchange,
-                            &mut write,
-                            &mut awaiting_pong,
-                            &mut ping_sent_time,
-                            &mut last_ping_time,
-                        ).await?;
-                        false
-                    }
+                } => SelectResult::Shutdown,
+
+                // Ping timer
+                _ = ping_timer.tick() => SelectResult::PingTick,
+
+                // WebSocket message (default)
+                msg = read.next() => {
+                    Self::handle_ws_message(
+                        &self.config.exchange,
+                        &self.tx,
+                        msg,
+                        &mut message_count,
+                        &mut last_message_time,
+                        &mut awaiting_pong,
+                        &ping_sent_time,
+                        &last_ping_time,
+                        &mut write,
+                    ).await?;
+                    SelectResult::WsMessage
                 }
             };
 
-            if shutdown_triggered {
-                info!("{:?}: Graceful shutdown requested, sending Close frame", self.config.exchange);
-                let _ = write.send(Message::Close(None)).await;
-                return Ok(());
+            match result {
+                SelectResult::WsMessage => {
+                    // Already handled above
+                }
+                SelectResult::PingTick => {
+                    Self::handle_ping(
+                        &self.config.exchange,
+                        &mut write,
+                        &mut awaiting_pong,
+                        &mut ping_sent_time,
+                        &mut last_ping_time,
+                    ).await?;
+                }
+                SelectResult::Shutdown => {
+                    info!("{:?}: Graceful shutdown requested, sending Close frame", self.config.exchange);
+                    let _ = write.send(Message::Close(None)).await;
+                    return Ok(());
+                }
+                SelectResult::Subscription(change) => {
+                    // Handle runtime subscription change
+                    if let SubscriptionChange::Subscribe(symbols) = change {
+                        if let Some(ref builder) = self.subscription_builder {
+                            let msg = builder.build_subscribe_message(&symbols);
+                            info!(
+                                "{:?}: Runtime subscription for {} symbols",
+                                self.config.exchange,
+                                symbols.len()
+                            );
+                            debug!(
+                                "{:?}: Sending subscription message: {}",
+                                self.config.exchange,
+                                &msg[..msg.len().min(200)]
+                            );
+                            if let Err(e) = write.send(Message::Text(msg)).await {
+                                warn!(
+                                    "{:?}: Failed to send runtime subscription: {}",
+                                    self.config.exchange, e
+                                );
+                                // Don't return error - connection may still be alive
+                                // Let the next iteration detect if connection is dead
+                            }
+                        } else {
+                            debug!(
+                                "{:?}: Subscription change received but no builder configured",
+                                self.config.exchange
+                            );
+                        }
+                    }
+                    // Note: Unsubscribe handling can be added in future stories if needed
+                }
             }
         }
     }
@@ -850,5 +942,73 @@ mod tests {
         let config = FeedConfig::for_exchange(Exchange::Binance);
         let (tx, _rx) = mpsc::channel(100);
         let _client = WsClient::new(config, tx);
+    }
+
+    // ========== SubscriptionBuilder Tests ==========
+
+    /// Mock subscription builder for testing
+    struct MockSubscriptionBuilder;
+
+    impl SubscriptionBuilder for MockSubscriptionBuilder {
+        fn build_subscribe_message(&self, symbols: &[String]) -> String {
+            format!(r#"{{"subscribe":{:?}}}"#, symbols)
+        }
+    }
+
+    #[test]
+    fn test_subscription_builder_trait() {
+        let builder = MockSubscriptionBuilder;
+        let symbols = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
+        let msg = builder.build_subscribe_message(&symbols);
+
+        assert!(msg.contains("subscribe"));
+        assert!(msg.contains("BTCUSDT"));
+        assert!(msg.contains("ETHUSDT"));
+    }
+
+    #[test]
+    fn test_ws_client_with_subscription_channel() {
+        let config = FeedConfig::for_exchange(Exchange::Binance);
+        let (tx, _rx) = mpsc::channel(100);
+        let (sub_tx, sub_rx) = mpsc::channel::<crate::SubscriptionChange>(100);
+
+        let client = WsClient::new(config, tx)
+            .with_subscription_channel(sub_rx, Box::new(MockSubscriptionBuilder));
+
+        // Verify subscription channel and builder are set
+        assert!(client.subscription_rx.is_some());
+        assert!(client.subscription_builder.is_some());
+
+        // Verify sender is not closed
+        assert!(!sub_tx.is_closed());
+    }
+
+    #[test]
+    fn test_ws_client_without_subscription_channel() {
+        let config = FeedConfig::for_exchange(Exchange::Binance);
+        let (tx, _rx) = mpsc::channel(100);
+
+        let client = WsClient::new(config, tx);
+
+        // Verify no subscription channel by default
+        assert!(client.subscription_rx.is_none());
+        assert!(client.subscription_builder.is_none());
+    }
+
+    #[test]
+    fn test_ws_client_builder_chain() {
+        let config = FeedConfig::for_exchange(Exchange::Binance);
+        let (tx, _rx) = mpsc::channel(100);
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (_sub_tx, sub_rx) = mpsc::channel::<crate::SubscriptionChange>(100);
+
+        // Test builder chaining
+        let client = WsClient::new(config, tx)
+            .with_shutdown(shutdown_rx)
+            .with_subscription_channel(sub_rx, Box::new(MockSubscriptionBuilder));
+
+        assert!(client.shutdown_rx.is_some());
+        assert!(client.subscription_rx.is_some());
+        assert!(client.subscription_builder.is_some());
     }
 }
