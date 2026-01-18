@@ -60,10 +60,7 @@ impl QuoteCurrency {
     pub fn is_usd_equivalent(self) -> bool {
         matches!(
             self,
-            QuoteCurrency::USD
-                | QuoteCurrency::USDT
-                | QuoteCurrency::USDC
-                | QuoteCurrency::BUSD
+            QuoteCurrency::USD | QuoteCurrency::USDT | QuoteCurrency::USDC | QuoteCurrency::BUSD
         )
     }
 

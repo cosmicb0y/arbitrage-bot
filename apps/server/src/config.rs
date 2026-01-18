@@ -157,6 +157,9 @@ mod tests {
         let config = AppConfig::default();
         let json = serde_json::to_string(&config).unwrap();
         let parsed: AppConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.detector.min_premium_bps, config.detector.min_premium_bps);
+        assert_eq!(
+            parsed.detector.min_premium_bps,
+            config.detector.min_premium_bps
+        );
     }
 }

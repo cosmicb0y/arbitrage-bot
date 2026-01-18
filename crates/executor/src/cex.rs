@@ -148,8 +148,8 @@ impl MockCexClient {
     /// Create with default balances.
     pub fn new() -> Self {
         let mut balances = HashMap::new();
-        balances.insert("BTC".to_string(), 10_00000000);  // 10 BTC
-        balances.insert("USDT".to_string(), 100000_00000000);  // 100k USDT
+        balances.insert("BTC".to_string(), 10_00000000); // 10 BTC
+        balances.insert("USDT".to_string(), 100000_00000000); // 100k USDT
 
         Self {
             balances,

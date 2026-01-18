@@ -65,8 +65,8 @@ impl FeeConfig {
             Exchange::GateIO => Self::with_maker_taker(20, 20),  // 0.2% / 0.2%
 
             // Korean exchanges (typically lower fees)
-            Exchange::Upbit => Self::with_maker_taker(5, 5),     // 0.05% / 0.05%
-            Exchange::Bithumb => Self::with_maker_taker(4, 4),   // 0.04% / 0.04%
+            Exchange::Upbit => Self::with_maker_taker(5, 5), // 0.05% / 0.05%
+            Exchange::Bithumb => Self::with_maker_taker(4, 4), // 0.04% / 0.04%
 
             // Default for unknown exchanges
             _ => Self::default(),
@@ -182,7 +182,11 @@ impl FeeManager {
     }
 
     /// Get withdrawal fee for a specific asset on an exchange.
-    pub fn get_withdrawal_fee(&self, exchange: Exchange, asset: &str) -> Option<&AssetWithdrawalFee> {
+    pub fn get_withdrawal_fee(
+        &self,
+        exchange: Exchange,
+        asset: &str,
+    ) -> Option<&AssetWithdrawalFee> {
         self.withdrawal_fees.get(&(exchange, asset.to_string()))
     }
 
@@ -254,9 +258,18 @@ mod tests {
 
     #[test]
     fn test_exchange_specific_fees() {
-        assert_eq!(FeeConfig::default_for_exchange(Exchange::Binance).taker_fee_bps, 10);
-        assert_eq!(FeeConfig::default_for_exchange(Exchange::Coinbase).taker_fee_bps, 60);
-        assert_eq!(FeeConfig::default_for_exchange(Exchange::Upbit).taker_fee_bps, 5);
+        assert_eq!(
+            FeeConfig::default_for_exchange(Exchange::Binance).taker_fee_bps,
+            10
+        );
+        assert_eq!(
+            FeeConfig::default_for_exchange(Exchange::Coinbase).taker_fee_bps,
+            60
+        );
+        assert_eq!(
+            FeeConfig::default_for_exchange(Exchange::Upbit).taker_fee_bps,
+            5
+        );
     }
 
     #[test]
@@ -286,8 +299,8 @@ mod tests {
         let (buy_fee, sell_fee, withdrawal) =
             manager.get_arbitrage_fees(Exchange::Binance, Exchange::Upbit, "BTC");
 
-        assert_eq!(buy_fee, 10);  // Binance taker
-        assert_eq!(sell_fee, 5);  // Upbit taker
+        assert_eq!(buy_fee, 10); // Binance taker
+        assert_eq!(sell_fee, 5); // Upbit taker
         assert!(withdrawal > 0); // Binance BTC withdrawal
     }
 

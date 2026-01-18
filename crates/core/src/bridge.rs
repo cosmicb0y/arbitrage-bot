@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum BridgeProtocol {
-    Native = 0,     // Exchange's own bridge
+    Native = 0, // Exchange's own bridge
     LayerZero = 1,
     Wormhole = 2,
     Stargate = 3,
@@ -139,7 +139,7 @@ mod tests {
             BridgeProtocol::Stargate,
             Chain::Ethereum,
             Chain::Arbitrum,
-            50, // 0.5% fee
+            50,  // 0.5% fee
             300, // 5 minutes
         );
 

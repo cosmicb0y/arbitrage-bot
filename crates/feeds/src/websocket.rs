@@ -275,7 +275,8 @@ impl WsClient {
     ) -> Result<(), FeedError>
     where
         S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
-        R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+        R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+            + Unpin,
     {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
@@ -308,7 +309,12 @@ impl WsClient {
                 if let Err(e) = write.send(Message::Text(ping_msg)).await {
                     warn!("Gate.io: Failed to send keep-alive app ping: {}", e);
                 }
-                debug!("Gate.io: Sent keep-alive ping at {}/{} (drained {} msgs)", i + 1, total, messages_drained);
+                debug!(
+                    "Gate.io: Sent keep-alive ping at {}/{} (drained {} msgs)",
+                    i + 1,
+                    total,
+                    messages_drained
+                );
                 last_ping = std::time::Instant::now();
             }
 
@@ -353,9 +359,15 @@ impl WsClient {
                 subscription_errors += 1;
                 if subscription_errors > 3 {
                     error!("Gate.io: Too many subscription errors, aborting");
-                    return Err(FeedError::ConnectionFailed(format!("Subscription failed: {}", e)));
+                    return Err(FeedError::ConnectionFailed(format!(
+                        "Subscription failed: {}",
+                        e
+                    )));
                 }
-                warn!("Gate.io: Subscription error ({}): {}", subscription_errors, e);
+                warn!(
+                    "Gate.io: Subscription error ({}): {}",
+                    subscription_errors, e
+                );
                 // Wait a bit and retry
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
@@ -405,7 +417,10 @@ impl WsClient {
     /// Reconnection counter resets after 5 minutes of stable connection.
     /// If a shutdown signal is received, the client will gracefully close the connection.
     /// Circuit breaker prevents infinite reconnection attempts during extended outages.
-    pub async fn run_with_messages(mut self, subscribe_msgs: Option<Vec<String>>) -> Result<(), FeedError> {
+    pub async fn run_with_messages(
+        mut self,
+        subscribe_msgs: Option<Vec<String>>,
+    ) -> Result<(), FeedError> {
         let mut reconnect_attempts = 0u32;
         let mut connection_start: Instant;
         let mut has_connected_once = false;
@@ -423,7 +438,10 @@ impl WsClient {
             // Check for shutdown signal before attempting connection
             if let Some(ref mut rx) = shutdown_rx {
                 if rx.try_recv().is_ok() {
-                    info!("{:?}: Shutdown requested, not reconnecting", self.config.exchange);
+                    info!(
+                        "{:?}: Shutdown requested, not reconnecting",
+                        self.config.exchange
+                    );
                     return Ok(());
                 }
             }
@@ -456,9 +474,20 @@ impl WsClient {
             connection_start = Instant::now();
             let is_reconnect = has_connected_once;
 
-            match self.connect_and_handle(&subscribe_msgs, is_reconnect, &mut shutdown_rx, &mut subscription_rx).await {
+            match self
+                .connect_and_handle(
+                    &subscribe_msgs,
+                    is_reconnect,
+                    &mut shutdown_rx,
+                    &mut subscription_rx,
+                )
+                .await
+            {
                 Ok(()) => {
-                    debug!("WebSocket connection closed normally for {:?}", self.config.exchange);
+                    debug!(
+                        "WebSocket connection closed normally for {:?}",
+                        self.config.exchange
+                    );
                     break;
                 }
                 Err(e) => {
@@ -472,8 +501,7 @@ impl WsClient {
                     if connection_duration > Duration::from_secs(300) {
                         info!(
                             "{:?}: Connection was stable for {:?}, resetting reconnect counter",
-                            self.config.exchange,
-                            connection_duration
+                            self.config.exchange, connection_duration
                         );
                         reconnect_attempts = 0;
                         // Also reset circuit breaker on stable connection
@@ -529,19 +557,27 @@ impl WsClient {
         subscription_rx: &mut Option<mpsc::Receiver<SubscriptionChange>>,
     ) -> Result<(), FeedError> {
         let is_gateio = self.config.exchange == Exchange::GateIO;
-        debug!("Connecting to {:?}: {}", self.config.exchange, self.config.ws_url);
+        debug!(
+            "Connecting to {:?}: {}",
+            self.config.exchange, self.config.ws_url
+        );
 
         // Apply connection timeout to prevent indefinite hangs
         let connect_timeout = Duration::from_millis(self.config.connect_timeout_ms);
-        let (ws_stream, response) = tokio::time::timeout(connect_timeout, connect_async(&self.config.ws_url))
-            .await
-            .map_err(|_| {
-                FeedError::Timeout(format!(
-                    "Connection to {:?} timed out after {}ms",
-                    self.config.exchange, self.config.connect_timeout_ms
-                ))
-            })??;
-        debug!("{:?}: Connected (status: {:?})", self.config.exchange, response.status());
+        let (ws_stream, response) =
+            tokio::time::timeout(connect_timeout, connect_async(&self.config.ws_url))
+                .await
+                .map_err(|_| {
+                    FeedError::Timeout(format!(
+                        "Connection to {:?} timed out after {}ms",
+                        self.config.exchange, self.config.connect_timeout_ms
+                    ))
+                })??;
+        debug!(
+            "{:?}: Connected (status: {:?})",
+            self.config.exchange,
+            response.status()
+        );
         if is_reconnect {
             let _ = self.tx.send(WsMessage::Reconnected).await;
         } else {
@@ -554,21 +590,41 @@ impl WsClient {
         // This prevents TCP buffer overflow by reading server responses while sending subscriptions
         if is_gateio {
             if let Some(ref msgs) = subscribe_msgs {
-                self.send_gateio_subscriptions(&mut write, &mut read, msgs).await?;
+                self.send_gateio_subscriptions(&mut write, &mut read, msgs)
+                    .await?;
             }
         } else {
             // Other exchanges: simple sequential subscription
             if let Some(ref msgs) = subscribe_msgs {
-                debug!("{:?}: Sending {} subscription message(s)", self.config.exchange, msgs.len());
+                debug!(
+                    "{:?}: Sending {} subscription message(s)",
+                    self.config.exchange,
+                    msgs.len()
+                );
                 for (i, msg) in msgs.iter().enumerate() {
-                    debug!("{:?}: Sending subscription {}/{}", self.config.exchange, i + 1, msgs.len());
+                    debug!(
+                        "{:?}: Sending subscription {}/{}",
+                        self.config.exchange,
+                        i + 1,
+                        msgs.len()
+                    );
                     if let Err(e) = write.send(Message::Text(msg.clone())).await {
-                        error!("{:?}: Failed to send subscription: {}", self.config.exchange, e);
-                        return Err(FeedError::ConnectionFailed(format!("Subscription failed: {}", e)));
+                        error!(
+                            "{:?}: Failed to send subscription: {}",
+                            self.config.exchange, e
+                        );
+                        return Err(FeedError::ConnectionFailed(format!(
+                            "Subscription failed: {}",
+                            e
+                        )));
                     }
                     if msgs.len() > 1 && i < msgs.len() - 1 {
                         // Binance has stricter rate limits, use longer delay
-                        let delay = if self.config.exchange == Exchange::Binance { 250 } else { 50 };
+                        let delay = if self.config.exchange == Exchange::Binance {
+                            250
+                        } else {
+                            50
+                        };
                         tokio::time::sleep(Duration::from_millis(delay)).await;
                     }
                 }
@@ -596,22 +652,35 @@ impl WsClient {
         let mut message_count = 0u64;
 
         if self.config.exchange == Exchange::GateIO {
-            debug!("Gate.io: ping interval set to {}ms (dual ping: WS + app-level)", self.config.ping_interval_ms);
+            debug!(
+                "Gate.io: ping interval set to {}ms (dual ping: WS + app-level)",
+                self.config.ping_interval_ms
+            );
         }
 
         loop {
             // Check for stale connection
             if last_message_time.elapsed() > stale_timeout {
-                warn!("{:?}: No messages received for {:?}, forcing reconnect",
-                    self.config.exchange, last_message_time.elapsed());
-                return Err(FeedError::Disconnected("Stale connection - no messages received".to_string()));
+                warn!(
+                    "{:?}: No messages received for {:?}, forcing reconnect",
+                    self.config.exchange,
+                    last_message_time.elapsed()
+                );
+                return Err(FeedError::Disconnected(
+                    "Stale connection - no messages received".to_string(),
+                ));
             }
 
             // Check for ping timeout (no PONG received after sending PING)
             if awaiting_pong && ping_sent_time.elapsed() > ping_timeout {
-                warn!("{:?}: No PONG received for {:?} after PING, forcing reconnect",
-                    self.config.exchange, ping_sent_time.elapsed());
-                return Err(FeedError::Disconnected("Ping timeout - no PONG received".to_string()));
+                warn!(
+                    "{:?}: No PONG received for {:?} after PING, forcing reconnect",
+                    self.config.exchange,
+                    ping_sent_time.elapsed()
+                );
+                return Err(FeedError::Disconnected(
+                    "Ping timeout - no PONG received".to_string(),
+                ));
             }
 
             // Select between: ws message, ping timer, shutdown signal, and subscription changes
@@ -673,10 +742,14 @@ impl WsClient {
                         &mut awaiting_pong,
                         &mut ping_sent_time,
                         &mut last_ping_time,
-                    ).await?;
+                    )
+                    .await?;
                 }
                 SelectResult::Shutdown => {
-                    info!("{:?}: Graceful shutdown requested, sending Close frame", self.config.exchange);
+                    info!(
+                        "{:?}: Graceful shutdown requested, sending Close frame",
+                        self.config.exchange
+                    );
                     let _ = write.send(Message::Close(None)).await;
                     return Ok(());
                 }
@@ -742,13 +815,20 @@ impl WsClient {
                 if *exchange == Exchange::GateIO {
                     // Log errors only
                     if text.contains("error") {
-                        warn!("Gate.io msg #{}: {}", message_count, &text[..text.len().min(200)]);
+                        warn!(
+                            "Gate.io msg #{}: {}",
+                            message_count,
+                            &text[..text.len().min(200)]
+                        );
                     }
                 }
 
                 // Handle Gate.io application-level pong response (ignore it)
                 if *exchange == Exchange::GateIO && text.contains("\"channel\":\"spot.pong\"") {
-                    debug!("Gate.io: Received pong response (latency: {:?})", last_ping_time.elapsed());
+                    debug!(
+                        "Gate.io: Received pong response (latency: {:?})",
+                        last_ping_time.elapsed()
+                    );
                     return Ok(());
                 }
 
@@ -756,7 +836,10 @@ impl WsClient {
                 // Bybit responds with {"success":true,"ret_msg":"pong","conn_id":"...","op":"pong"}
                 if *exchange == Exchange::Bybit && text.contains("\"op\":\"pong\"") {
                     *awaiting_pong = false;
-                    debug!("Bybit: Received pong response (latency: {:?})", ping_sent_time.elapsed());
+                    debug!(
+                        "Bybit: Received pong response (latency: {:?})",
+                        ping_sent_time.elapsed()
+                    );
                     return Ok(());
                 }
 
@@ -775,8 +858,13 @@ impl WsClient {
                         mpsc::error::TrySendError::Full(_) => {
                             // Channel full - reconnect to resync orderbook
                             // This is critical for delta-based exchanges (Bybit, Coinbase)
-                            warn!("{:?}: Channel full, forcing reconnect to resync orderbook", exchange);
-                            return Err(FeedError::Disconnected("Channel full - resync needed".to_string()));
+                            warn!(
+                                "{:?}: Channel full, forcing reconnect to resync orderbook",
+                                exchange
+                            );
+                            return Err(FeedError::Disconnected(
+                                "Channel full - resync needed".to_string(),
+                            ));
                         }
                         mpsc::error::TrySendError::Closed(_) => {
                             error!("{:?}: Channel closed", exchange);
@@ -788,27 +876,40 @@ impl WsClient {
             Some(Ok(Message::Binary(data))) => {
                 *message_count += 1;
                 // Use try_send for binary data too - reconnect if full
-                if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(WsMessage::Binary(data.clone())) {
+                if let Err(mpsc::error::TrySendError::Full(_)) =
+                    tx.try_send(WsMessage::Binary(data.clone()))
+                {
                     warn!("{:?}: Channel full (binary), forcing reconnect", exchange);
-                    return Err(FeedError::Disconnected("Channel full - resync needed".to_string()));
+                    return Err(FeedError::Disconnected(
+                        "Channel full - resync needed".to_string(),
+                    ));
                 }
             }
             Some(Ok(Message::Ping(data))) => {
                 debug!("{:?}: Received WebSocket PING, sending PONG", exchange);
                 if let Err(e) = write.send(Message::Pong(data)).await {
                     error!("{:?}: Failed to send PONG: {}", exchange, e);
-                    return Err(FeedError::ConnectionFailed(format!("PONG send failed: {}", e)));
+                    return Err(FeedError::ConnectionFailed(format!(
+                        "PONG send failed: {}",
+                        e
+                    )));
                 }
             }
             Some(Ok(Message::Pong(_))) => {
                 // Pong received, connection is alive
                 *awaiting_pong = false;
-                debug!("{:?}: Received WebSocket PONG (latency: {:?})", exchange, ping_sent_time.elapsed());
+                debug!(
+                    "{:?}: Received WebSocket PONG (latency: {:?})",
+                    exchange,
+                    ping_sent_time.elapsed()
+                );
             }
             Some(Ok(Message::Close(frame))) => {
                 debug!("{:?}: Received close frame: {:?}", exchange, frame);
                 // Return a special marker - we use Ok but caller should handle graceful close
-                return Err(FeedError::Disconnected("Server closed connection".to_string()));
+                return Err(FeedError::Disconnected(
+                    "Server closed connection".to_string(),
+                ));
             }
             Some(Err(e)) => {
                 error!("{:?}: WebSocket read error: {}", exchange, e);
@@ -842,14 +943,20 @@ impl WsClient {
             // 1. Send WebSocket protocol-level ping
             if let Err(e) = write.send(Message::Ping(vec![])).await {
                 error!("Gate.io: Failed to send WS PING: {}", e);
-                return Err(FeedError::ConnectionFailed(format!("WS PING failed: {}", e)));
+                return Err(FeedError::ConnectionFailed(format!(
+                    "WS PING failed: {}",
+                    e
+                )));
             }
 
             // 2. Send application-level ping (spot.ping channel)
             let ping_msg = Self::create_gateio_ping();
             if let Err(e) = write.send(Message::Text(ping_msg)).await {
                 error!("Gate.io: Failed to send app-level ping: {}", e);
-                return Err(FeedError::ConnectionFailed(format!("App ping failed: {}", e)));
+                return Err(FeedError::ConnectionFailed(format!(
+                    "App ping failed: {}",
+                    e
+                )));
             }
             *last_ping_time = std::time::Instant::now();
             *awaiting_pong = true;
@@ -858,9 +965,15 @@ impl WsClient {
             // Bybit requires application-level ping: {"op": "ping"}
             // The server responds with {"op": "pong", ...}
             // Timeout is 10 minutes but we ping every 20s for safety
-            if let Err(e) = write.send(Message::Text(r#"{"op": "ping"}"#.to_string())).await {
+            if let Err(e) = write
+                .send(Message::Text(r#"{"op": "ping"}"#.to_string()))
+                .await
+            {
                 error!("Bybit: Failed to send app-level ping: {}", e);
-                return Err(FeedError::ConnectionFailed(format!("App ping failed: {}", e)));
+                return Err(FeedError::ConnectionFailed(format!(
+                    "App ping failed: {}",
+                    e
+                )));
             }
             *awaiting_pong = true;
             *ping_sent_time = std::time::Instant::now();

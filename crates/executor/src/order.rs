@@ -31,7 +31,10 @@ impl OrderStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Failed | OrderStatus::Expired
+            OrderStatus::Filled
+                | OrderStatus::Cancelled
+                | OrderStatus::Failed
+                | OrderStatus::Expired
         )
     }
 
@@ -363,8 +366,8 @@ mod tests {
 
     #[test]
     fn test_order_with_slippage() {
-        let order = Order::market(Exchange::Binance, 1, TradeSide::Buy, 1_00000000)
-            .with_slippage(100); // 1%
+        let order =
+            Order::market(Exchange::Binance, 1, TradeSide::Buy, 1_00000000).with_slippage(100); // 1%
 
         assert_eq!(order.max_slippage_bps, 100);
     }
@@ -419,7 +422,10 @@ mod tests {
         order.fail("Insufficient balance");
 
         assert_eq!(order.status, OrderStatus::Failed);
-        assert_eq!(order.error_message, Some("Insufficient balance".to_string()));
+        assert_eq!(
+            order.error_message,
+            Some("Insufficient balance".to_string())
+        );
     }
 
     #[test]

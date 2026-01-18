@@ -205,8 +205,11 @@ pub async fn fetch_binance_wallet() -> Result<ExchangeWalletInfo, String> {
         })
         .collect();
 
-    info!("Fetched Binance wallet: {} balances, {} assets with status",
-          balances.len(), wallet_status.len());
+    info!(
+        "Fetched Binance wallet: {} balances, {} assets with status",
+        balances.len(),
+        wallet_status.len()
+    );
 
     Ok(ExchangeWalletInfo {
         exchange: "Binance".to_string(),
@@ -313,7 +316,10 @@ pub async fn fetch_upbit_wallet_status() -> Result<Vec<AssetWalletStatus>, Strin
         })
         .collect();
 
-    info!("Fetched Upbit wallet status: {} assets", wallet_status.len());
+    info!(
+        "Fetched Upbit wallet status: {} assets",
+        wallet_status.len()
+    );
     Ok(wallet_status)
 }
 
@@ -395,18 +401,12 @@ fn generate_upbit_token(
     use base64::{engine::general_purpose::STANDARD, Engine};
 
     // Use nanoseconds + random component for unique nonce
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let nonce = format!("{}{:06}", now.as_millis(), now.subsec_nanos() % 1_000_000);
 
     // Simple JWT structure for Upbit
     let header = r#"{"alg":"HS256","typ":"JWT"}"#;
-    let payload = format!(
-        r#"{{"access_key":"{}","nonce":"{}"}}"#,
-        access_key,
-        nonce
-    );
+    let payload = format!(r#"{{"access_key":"{}","nonce":"{}"}}"#, access_key, nonce);
 
     let header_b64 = STANDARD.encode(header);
     let payload_b64 = STANDARD.encode(&payload);
@@ -491,7 +491,10 @@ pub async fn fetch_bithumb_wallet_status() -> Result<Vec<AssetWalletStatus>, Str
     let body = resp.text().await.unwrap_or_default();
 
     if !status.is_success() {
-        return Err(format!("Bithumb wallet status API error: status={}, body={}", status, body));
+        return Err(format!(
+            "Bithumb wallet status API error: status={}, body={}",
+            status, body
+        ));
     }
 
     // Response is a direct array, not wrapped in {status, data}
@@ -593,7 +596,10 @@ async fn fetch_bithumb_balances() -> Result<Vec<AssetBalance>, String> {
     let body = resp.text().await.unwrap_or_default();
 
     if !status.is_success() {
-        return Err(format!("Bithumb accounts API error: status={}, body={}", status, body));
+        return Err(format!(
+            "Bithumb accounts API error: status={}, body={}",
+            status, body
+        ));
     }
 
     let accounts: Vec<BithumbAccount> = serde_json::from_str(&body)
@@ -826,7 +832,7 @@ fn generate_coinbase_cdp_jwt(
     request_path: &str,
 ) -> Result<String, String> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use p256::ecdsa::{SigningKey, Signature, signature::Signer};
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
     use p256::pkcs8::DecodePrivateKey;
     use p256::SecretKey;
 
@@ -835,12 +841,21 @@ fn generate_coinbase_cdp_jwt(
     let signing_key = if secret_key_pem.contains("EC PRIVATE KEY") {
         SecretKey::from_sec1_pem(secret_key_pem)
             .map(|sk| SigningKey::from(&sk))
-            .map_err(|e| format!("Failed to parse SEC1 EC private key: {}. Key preview: {:?}", e, &secret_key_pem.chars().take(100).collect::<String>()))?
+            .map_err(|e| {
+                format!(
+                    "Failed to parse SEC1 EC private key: {}. Key preview: {:?}",
+                    e,
+                    &secret_key_pem.chars().take(100).collect::<String>()
+                )
+            })?
     } else if secret_key_pem.contains("PRIVATE KEY") {
         SigningKey::from_pkcs8_pem(secret_key_pem)
             .map_err(|e| format!("Failed to parse PKCS#8 private key: {}", e))?
     } else {
-        return Err(format!("Invalid key format. Expected PEM format but got: {:?}", &secret_key_pem.chars().take(50).collect::<String>()));
+        return Err(format!(
+            "Invalid key format. Expected PEM format but got: {:?}",
+            &secret_key_pem.chars().take(50).collect::<String>()
+        ));
     };
 
     let now = SystemTime::now()
@@ -849,7 +864,11 @@ fn generate_coinbase_cdp_jwt(
         .as_secs();
 
     // Generate random nonce (32 bytes hex string)
-    let nonce = format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
+    let nonce = format!(
+        "{:016x}{:016x}",
+        rand::random::<u64>(),
+        rand::random::<u64>()
+    );
 
     // JWT Header: {"alg": "ES256", "typ": "JWT", "kid": key_name, "nonce": nonce}
     let header = serde_json::json!({
@@ -923,7 +942,8 @@ async fn fetch_coinbase_balances() -> Result<Vec<AssetBalance>, String> {
     let response: CoinbaseAccountsResponse = serde_json::from_str(&body_text)
         .map_err(|e| format!("Failed to parse Coinbase accounts: {}", e))?;
 
-    let balances: Vec<AssetBalance> = response.accounts
+    let balances: Vec<AssetBalance> = response
+        .accounts
         .into_iter()
         .filter_map(|a| {
             let free: f64 = a.available_balance.value.parse().unwrap_or(0.0);
@@ -1060,7 +1080,13 @@ struct BybitCoinBalance {
 }
 
 /// Sign request for Bybit V5 API (HMAC-SHA256)
-fn sign_bybit(timestamp: u64, api_key: &str, recv_window: &str, query: &str, secret: &str) -> String {
+fn sign_bybit(
+    timestamp: u64,
+    api_key: &str,
+    recv_window: &str,
+    query: &str,
+    secret: &str,
+) -> String {
     let sign_str = format!("{}{}{}{}", timestamp, api_key, recv_window, query);
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
     mac.update(sign_str.as_bytes());
@@ -1103,20 +1129,29 @@ pub async fn fetch_bybit_wallet_status() -> Result<Vec<AssetWalletStatus>, Strin
     let body = resp.text().await.unwrap_or_default();
 
     if !status.is_success() {
-        return Err(format!("Bybit coin info API error: status={}, body={}", status, body));
+        return Err(format!(
+            "Bybit coin info API error: status={}, body={}",
+            status, body
+        ));
     }
 
     let response: BybitCoinInfoResponse = serde_json::from_str(&body)
         .map_err(|e| format!("Failed to parse Bybit coin info: {}", e))?;
 
     if response.ret_code != 0 {
-        return Err(format!("Bybit API error: {} - {}", response.ret_code, response.ret_msg));
+        return Err(format!(
+            "Bybit API error: {} - {}",
+            response.ret_code, response.ret_msg
+        ));
     }
 
-    let wallet_status: Vec<AssetWalletStatus> = response.result.rows
+    let wallet_status: Vec<AssetWalletStatus> = response
+        .result
+        .rows
         .into_iter()
         .map(|coin| {
-            let network_statuses: Vec<NetworkStatus> = coin.chains
+            let network_statuses: Vec<NetworkStatus> = coin
+                .chains
                 .into_iter()
                 .map(|chain| {
                     let deposit_enabled = chain.chain_deposit == "1";
@@ -1139,7 +1174,11 @@ pub async fn fetch_bybit_wallet_status() -> Result<Vec<AssetWalletStatus>, Strin
 
             AssetWalletStatus {
                 asset: coin.coin.clone(),
-                name: if coin.coin_name.is_empty() { coin.coin } else { coin.coin_name },
+                name: if coin.coin_name.is_empty() {
+                    coin.coin
+                } else {
+                    coin.coin_name
+                },
                 networks: network_statuses,
                 can_deposit,
                 can_withdraw,
@@ -1147,7 +1186,10 @@ pub async fn fetch_bybit_wallet_status() -> Result<Vec<AssetWalletStatus>, Strin
         })
         .collect();
 
-    info!("Fetched Bybit wallet status: {} assets", wallet_status.len());
+    info!(
+        "Fetched Bybit wallet status: {} assets",
+        wallet_status.len()
+    );
     Ok(wallet_status)
 }
 
@@ -1279,7 +1321,10 @@ async fn fetch_bybit_balances() -> Result<Vec<AssetBalance>, String> {
     );
 
     let resp = client
-        .get(format!("https://api.bybit.com/v5/account/wallet-balance?{}", query))
+        .get(format!(
+            "https://api.bybit.com/v5/account/wallet-balance?{}",
+            query
+        ))
         .header("X-BAPI-API-KEY", &creds.bybit.api_key)
         .header("X-BAPI-SIGN", &signature)
         .header("X-BAPI-TIMESTAMP", timestamp.to_string())
@@ -1329,7 +1374,10 @@ async fn fetch_bybit_balances() -> Result<Vec<AssetBalance>, String> {
     );
 
     let resp = client
-        .get(format!("https://api.bybit.com/v5/asset/transfer/query-account-coins-balance?{}", query))
+        .get(format!(
+            "https://api.bybit.com/v5/asset/transfer/query-account-coins-balance?{}",
+            query
+        ))
         .header("X-BAPI-API-KEY", &creds.bybit.api_key)
         .header("X-BAPI-SIGN", &signature)
         .header("X-BAPI-TIMESTAMP", timestamp.to_string())
@@ -1391,7 +1439,10 @@ async fn fetch_bybit_balances() -> Result<Vec<AssetBalance>, String> {
         info!("Bybit EARN: {} positions added", earn_count);
     }
 
-    info!("Bybit fetched {} total balances (UNIFIED + FUND + EARN)", balances.len());
+    info!(
+        "Bybit fetched {} total balances (UNIFIED + FUND + EARN)",
+        balances.len()
+    );
     Ok(balances)
 }
 
@@ -1428,9 +1479,16 @@ pub async fn fetch_bybit_wallet() -> Result<ExchangeWalletInfo, String> {
 // ============================================================================
 
 /// Sign Gate.io API request using HMAC-SHA512.
-fn sign_gateio(timestamp: &str, method: &str, path: &str, query: &str, body: &str, secret: &str) -> String {
+fn sign_gateio(
+    timestamp: &str,
+    method: &str,
+    path: &str,
+    query: &str,
+    body: &str,
+    secret: &str,
+) -> String {
     use hmac::{Hmac, Mac};
-    use sha2::{Sha512, Digest};
+    use sha2::{Digest, Sha512};
 
     // Body hash (SHA512 of body content)
     let body_hash = if body.is_empty() {
@@ -1445,10 +1503,13 @@ fn sign_gateio(timestamp: &str, method: &str, path: &str, query: &str, body: &st
     };
 
     // Signature string: METHOD\nPATH\nQUERY\nBODY_HASH\nTIMESTAMP
-    let sign_string = format!("{}\n{}\n{}\n{}\n{}", method, path, query, body_hash, timestamp);
+    let sign_string = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        method, path, query, body_hash, timestamp
+    );
 
-    let mut mac = Hmac::<Sha512>::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        Hmac::<Sha512>::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(sign_string.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
@@ -1542,7 +1603,11 @@ pub async fn fetch_gateio_wallet_status() -> Result<Vec<AssetWalletStatus>, Stri
 
             AssetWalletStatus {
                 asset: c.currency.clone(),
-                name: if c.name.is_empty() { c.currency } else { c.name },
+                name: if c.name.is_empty() {
+                    c.currency
+                } else {
+                    c.name
+                },
                 networks: network_statuses,
                 can_deposit,
                 can_withdraw,
@@ -1550,7 +1615,10 @@ pub async fn fetch_gateio_wallet_status() -> Result<Vec<AssetWalletStatus>, Stri
         })
         .collect();
 
-    info!("Fetched Gate.io wallet status: {} assets", wallet_status.len());
+    info!(
+        "Fetched Gate.io wallet status: {} assets",
+        wallet_status.len()
+    );
     Ok(wallet_status)
 }
 
@@ -1583,7 +1651,14 @@ async fn fetch_gateio_balances() -> Result<Vec<AssetBalance>, String> {
     let query = "";
     let body = "";
 
-    let signature = sign_gateio(&timestamp, method, path, query, body, &creds.gateio.secret_key);
+    let signature = sign_gateio(
+        &timestamp,
+        method,
+        path,
+        query,
+        body,
+        &creds.gateio.secret_key,
+    );
 
     let resp = client
         .get("https://api.gateio.ws/api/v4/spot/accounts")
@@ -1598,7 +1673,10 @@ async fn fetch_gateio_balances() -> Result<Vec<AssetBalance>, String> {
     let body = resp.text().await.unwrap_or_default();
 
     if !status.is_success() {
-        return Err(format!("Gate.io balance API error: status={}, body={}", status, body));
+        return Err(format!(
+            "Gate.io balance API error: status={}, body={}",
+            status, body
+        ));
     }
 
     let accounts: Vec<GateIOSpotAccount> = serde_json::from_str(&body)

@@ -1,7 +1,10 @@
 //! Tauri IPC commands.
 
 use crate::credentials::{self, Credentials};
-use crate::state::{AppState, BotStats, CommonMarketsData, ExchangeRateData, ExecutionConfig, OpportunityData, PriceData, WalletStatusData};
+use crate::state::{
+    AppState, BotStats, CommonMarketsData, ExchangeRateData, ExecutionConfig, OpportunityData,
+    PriceData, WalletStatusData,
+};
 use crate::symbol_mapping::{self, SymbolMapping, SymbolMappings};
 use std::sync::Arc;
 use tauri::State;
@@ -118,7 +121,9 @@ pub fn save_credentials(creds: Credentials) -> Result<bool, String> {
 
 /// Get wallet info for a specific exchange.
 #[tauri::command]
-pub async fn get_wallet_info(exchange: String) -> Result<crate::exchange_client::ExchangeWalletInfo, String> {
+pub async fn get_wallet_info(
+    exchange: String,
+) -> Result<crate::exchange_client::ExchangeWalletInfo, String> {
     info!("Fetching wallet info for {}", exchange);
     match exchange.to_lowercase().as_str() {
         "binance" => crate::exchange_client::fetch_binance_wallet().await,

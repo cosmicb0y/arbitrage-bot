@@ -105,10 +105,10 @@ async fn process_price_tick(
         // Korean exchanges: KRW → USD conversion
         match convert_krw_to_usd_for_exchange(mid, exchange, &ctx.state) {
             Some(mid_converted) => {
-                let bid_converted =
-                    convert_krw_to_usd_for_exchange(bid, exchange, &ctx.state).unwrap_or(mid_converted);
-                let ask_converted =
-                    convert_krw_to_usd_for_exchange(ask, exchange, &ctx.state).unwrap_or(mid_converted);
+                let bid_converted = convert_krw_to_usd_for_exchange(bid, exchange, &ctx.state)
+                    .unwrap_or(mid_converted);
+                let ask_converted = convert_krw_to_usd_for_exchange(ask, exchange, &ctx.state)
+                    .unwrap_or(mid_converted);
                 (mid_converted, bid_converted, ask_converted)
             }
             None => {
@@ -122,9 +122,12 @@ async fn process_price_tick(
         }
     } else {
         // Overseas exchanges: stablecoin → USD conversion
-        let mid_usd = convert_stablecoin_to_usd_for_exchange(mid, quote_currency, exchange, &ctx.state);
-        let bid_usd = convert_stablecoin_to_usd_for_exchange(bid, quote_currency, exchange, &ctx.state);
-        let ask_usd = convert_stablecoin_to_usd_for_exchange(ask, quote_currency, exchange, &ctx.state);
+        let mid_usd =
+            convert_stablecoin_to_usd_for_exchange(mid, quote_currency, exchange, &ctx.state);
+        let bid_usd =
+            convert_stablecoin_to_usd_for_exchange(bid, quote_currency, exchange, &ctx.state);
+        let ask_usd =
+            convert_stablecoin_to_usd_for_exchange(ask, quote_currency, exchange, &ctx.state);
         (mid_usd, bid_usd, ask_usd)
     };
 

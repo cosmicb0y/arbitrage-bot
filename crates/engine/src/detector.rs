@@ -3,8 +3,11 @@
 //! Monitors price feeds and detects profitable arbitrage opportunities.
 //! Uses lock-free data structures (DashMap) for real-time performance.
 
-use arbitrage_core::{ArbitrageOpportunity, Asset, Chain, Exchange, FixedPoint, QuoteCurrency, UsdlikePremium, UsdlikeQuote};
 use crate::{ConversionRates, PremiumMatrix};
+use arbitrage_core::{
+    ArbitrageOpportunity, Asset, Chain, Exchange, FixedPoint, QuoteCurrency, UsdlikePremium,
+    UsdlikeQuote,
+};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -93,7 +96,9 @@ impl OpportunityDetector {
     /// Get the pair_id for a symbol, registering it if needed (lock-free).
     pub fn get_or_register_pair_id(&self, symbol: &str) -> u32 {
         let pair_id = arbitrage_core::symbol_to_pair_id(symbol);
-        self.symbol_registry.entry(pair_id).or_insert_with(|| symbol.to_string());
+        self.symbol_registry
+            .entry(pair_id)
+            .or_insert_with(|| symbol.to_string());
         pair_id
     }
 
@@ -118,12 +123,17 @@ impl OpportunityDetector {
 
     /// Get symbol for a pair_id from the registry.
     pub fn pair_id_to_symbol(&self, pair_id: u32) -> Option<String> {
-        self.symbol_registry.get(&pair_id).map(|r| r.value().clone())
+        self.symbol_registry
+            .get(&pair_id)
+            .map(|r| r.value().clone())
     }
 
     /// Get the premium matrix for a pair_id.
     /// Returns a reference guard that can be used to access the matrix.
-    pub fn get_matrix(&self, pair_id: u32) -> Option<dashmap::mapref::one::Ref<'_, u32, PremiumMatrix>> {
+    pub fn get_matrix(
+        &self,
+        pair_id: u32,
+    ) -> Option<dashmap::mapref::one::Ref<'_, u32, PremiumMatrix>> {
         self.matrices.get(&pair_id)
     }
 
@@ -134,8 +144,23 @@ impl OpportunityDetector {
     }
 
     /// Update price for an exchange/pair with specified quote currency (lock-free).
-    pub fn update_price_with_quote(&self, exchange: Exchange, pair_id: u32, price: FixedPoint, quote: QuoteCurrency) {
-        self.update_price_with_bid_ask(exchange, pair_id, price, price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0), quote);
+    pub fn update_price_with_quote(
+        &self,
+        exchange: Exchange,
+        pair_id: u32,
+        price: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
+        self.update_price_with_bid_ask(
+            exchange,
+            pair_id,
+            price,
+            price,
+            price,
+            FixedPoint::from_f64(0.0),
+            FixedPoint::from_f64(0.0),
+            quote,
+        );
     }
 
     /// Update price for an exchange/pair with bid/ask from orderbook (lock-free).
@@ -189,11 +214,15 @@ impl OpportunityDetector {
         // DashMap: use get_mut for existing entries, insert only if needed
         // This minimizes lock contention vs entry() API
         if let Some(mut matrix) = self.matrices.get_mut(&pair_id) {
-            matrix.update_price_with_bid_ask_and_raw(exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
+            matrix.update_price_with_bid_ask_and_raw(
+                exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote,
+            );
         } else {
             // Insert new matrix with configured staleness threshold
             let mut matrix = PremiumMatrix::with_staleness(pair_id, self.config.max_staleness_ms);
-            matrix.update_price_with_bid_ask_and_raw(exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
+            matrix.update_price_with_bid_ask_and_raw(
+                exchange, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote,
+            );
             self.matrices.insert(pair_id, matrix);
         }
         tracing::trace!(
@@ -239,7 +268,13 @@ impl OpportunityDetector {
             bithumb_usdc_krw: usdc_krw_rate.unwrap_or(0.0),
         };
 
-        self.detect_with_conversion_rates(pair_id, &rates, usd_krw_rate, usdt_krw_rate, usdc_krw_rate)
+        self.detect_with_conversion_rates(
+            pair_id,
+            &rates,
+            usd_krw_rate,
+            usdt_krw_rate,
+            usdc_krw_rate,
+        )
     }
 
     /// Detect opportunities using full ConversionRates (supports per-exchange rates).
@@ -267,7 +302,24 @@ impl OpportunityDetector {
 
         let premiums = matrix.all_premiums_multi_denomination(rates);
 
-        for (buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, buy_ask_raw, sell_bid_raw, buy_ask_size, sell_bid_size, usdlike_premium_bps, _unused, kimchi_premium, buy_timestamp_ms, sell_timestamp_ms) in premiums {
+        for (
+            buy_ex,
+            sell_ex,
+            buy_quote,
+            sell_quote,
+            buy_ask,
+            sell_bid,
+            buy_ask_raw,
+            sell_bid_raw,
+            buy_ask_size,
+            sell_bid_size,
+            usdlike_premium_bps,
+            _unused,
+            kimchi_premium,
+            buy_timestamp_ms,
+            sell_timestamp_ms,
+        ) in premiums
+        {
             if buy_ask_size.0 == 0 && sell_bid_size.0 == 0 {
                 continue;
             }
@@ -344,7 +396,12 @@ impl OpportunityDetector {
         let mut all_opportunities = Vec::new();
 
         for pair_id in pair_ids {
-            all_opportunities.extend(self.detect_with_all_rates(pair_id, usd_krw_rate, usdt_krw_rate, usdc_krw_rate));
+            all_opportunities.extend(self.detect_with_all_rates(
+                pair_id,
+                usd_krw_rate,
+                usdt_krw_rate,
+                usdc_krw_rate,
+            ));
         }
 
         all_opportunities
@@ -405,17 +462,23 @@ mod tests {
 
         // Add prices with 1% spread (100 bps) and orderbook depth
         detector.update_price_with_bid_ask(
-            Exchange::Binance, 1,
+            Exchange::Binance,
+            1,
             FixedPoint::from_f64(50000.0),
-            FixedPoint::from_f64(49999.0), FixedPoint::from_f64(50000.0),
-            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(49999.0),
+            FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(1.0),
             QuoteCurrency::USD,
         );
         detector.update_price_with_bid_ask(
-            Exchange::Coinbase, 1,
+            Exchange::Coinbase,
+            1,
             FixedPoint::from_f64(50500.0),
-            FixedPoint::from_f64(50500.0), FixedPoint::from_f64(50501.0),
-            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(50500.0),
+            FixedPoint::from_f64(50501.0),
+            FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(1.0),
             QuoteCurrency::USD,
         );
 
@@ -449,17 +512,23 @@ mod tests {
 
         // Use bid/ask with depth for proper opportunity detection
         detector.update_price_with_bid_ask(
-            Exchange::Binance, 1,
+            Exchange::Binance,
+            1,
             FixedPoint::from_f64(50000.0),
-            FixedPoint::from_f64(49999.0), FixedPoint::from_f64(50000.0),
-            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(49999.0),
+            FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(1.0),
             QuoteCurrency::USD,
         );
         detector.update_price_with_bid_ask(
-            Exchange::Coinbase, 1,
+            Exchange::Coinbase,
+            1,
             FixedPoint::from_f64(50500.0),
-            FixedPoint::from_f64(50500.0), FixedPoint::from_f64(50501.0),
-            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(50500.0),
+            FixedPoint::from_f64(50501.0),
+            FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(1.0),
             QuoteCurrency::USD,
         );
 
@@ -481,33 +550,45 @@ mod tests {
 
         // Pair 1: BTC with depth
         detector.update_price_with_bid_ask(
-            Exchange::Binance, 1,
+            Exchange::Binance,
+            1,
             FixedPoint::from_f64(50000.0),
-            FixedPoint::from_f64(49999.0), FixedPoint::from_f64(50000.0),
-            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(49999.0),
+            FixedPoint::from_f64(50000.0),
+            FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(1.0),
             QuoteCurrency::USD,
         );
         detector.update_price_with_bid_ask(
-            Exchange::Coinbase, 1,
+            Exchange::Coinbase,
+            1,
             FixedPoint::from_f64(50500.0),
-            FixedPoint::from_f64(50500.0), FixedPoint::from_f64(50501.0),
-            FixedPoint::from_f64(1.0), FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(50500.0),
+            FixedPoint::from_f64(50501.0),
+            FixedPoint::from_f64(1.0),
+            FixedPoint::from_f64(1.0),
             QuoteCurrency::USD,
         );
 
         // Pair 2: ETH with depth
         detector.update_price_with_bid_ask(
-            Exchange::Binance, 2,
+            Exchange::Binance,
+            2,
             FixedPoint::from_f64(3000.0),
-            FixedPoint::from_f64(2999.0), FixedPoint::from_f64(3000.0),
-            FixedPoint::from_f64(10.0), FixedPoint::from_f64(10.0),
+            FixedPoint::from_f64(2999.0),
+            FixedPoint::from_f64(3000.0),
+            FixedPoint::from_f64(10.0),
+            FixedPoint::from_f64(10.0),
             QuoteCurrency::USD,
         );
         detector.update_price_with_bid_ask(
-            Exchange::Coinbase, 2,
+            Exchange::Coinbase,
+            2,
             FixedPoint::from_f64(3050.0),
-            FixedPoint::from_f64(3050.0), FixedPoint::from_f64(3051.0),
-            FixedPoint::from_f64(10.0), FixedPoint::from_f64(10.0),
+            FixedPoint::from_f64(3050.0),
+            FixedPoint::from_f64(3051.0),
+            FixedPoint::from_f64(10.0),
+            FixedPoint::from_f64(10.0),
             QuoteCurrency::USD,
         );
 
@@ -532,17 +613,23 @@ mod tests {
 
         // Update prices for the dynamic symbol with depth
         detector.update_price_with_bid_ask(
-            Exchange::Binance, pair_id,
+            Exchange::Binance,
+            pair_id,
             FixedPoint::from_f64(0.10),
-            FixedPoint::from_f64(0.0999), FixedPoint::from_f64(0.10),
-            FixedPoint::from_f64(10000.0), FixedPoint::from_f64(10000.0),
+            FixedPoint::from_f64(0.0999),
+            FixedPoint::from_f64(0.10),
+            FixedPoint::from_f64(10000.0),
+            FixedPoint::from_f64(10000.0),
             QuoteCurrency::USD,
         );
         detector.update_price_with_bid_ask(
-            Exchange::Coinbase, pair_id,
+            Exchange::Coinbase,
+            pair_id,
             FixedPoint::from_f64(0.102),
-            FixedPoint::from_f64(0.102), FixedPoint::from_f64(0.1021),
-            FixedPoint::from_f64(10000.0), FixedPoint::from_f64(10000.0),
+            FixedPoint::from_f64(0.102),
+            FixedPoint::from_f64(0.1021),
+            FixedPoint::from_f64(10000.0),
+            FixedPoint::from_f64(10000.0),
             QuoteCurrency::USD,
         );
 

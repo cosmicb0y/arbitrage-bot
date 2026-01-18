@@ -35,7 +35,8 @@ impl OptimalSizeResult {
             return 0;
         }
         // profit / (amount * avg_buy_price) * 10000
-        let notional = (self.amount as i128 * self.avg_buy_price as i128) / FixedPoint::SCALE as i128;
+        let notional =
+            (self.amount as i128 * self.avg_buy_price as i128) / FixedPoint::SCALE as i128;
         if notional == 0 {
             return 0;
         }
@@ -186,8 +187,16 @@ pub fn calculate_optimal_size(
         profit: total_profit as i64,
         avg_buy_price: avg_buy,
         avg_sell_price: avg_sell,
-        levels_consumed_buy: i + if buy_remaining < buy_asks.get(i).map(|x| x.1).unwrap_or(0) { 1 } else { 0 },
-        levels_consumed_sell: j + if sell_remaining < sell_bids.get(j).map(|x| x.1).unwrap_or(0) { 1 } else { 0 },
+        levels_consumed_buy: i + if buy_remaining < buy_asks.get(i).map(|x| x.1).unwrap_or(0) {
+            1
+        } else {
+            0
+        },
+        levels_consumed_sell: j + if sell_remaining < sell_bids.get(j).map(|x| x.1).unwrap_or(0) {
+            1
+        } else {
+            0
+        },
     }
 }
 
@@ -268,9 +277,9 @@ mod tests {
     fn test_multi_level_depth() {
         // Multiple levels on buy side
         let buy_asks = vec![
-            (fp(100.0), fp(5.0)),  // 5 units at 100
-            (fp(100.5), fp(5.0)),  // 5 units at 100.5
-            (fp(101.0), fp(5.0)),  // 5 units at 101 (will not be profitable)
+            (fp(100.0), fp(5.0)), // 5 units at 100
+            (fp(100.5), fp(5.0)), // 5 units at 100.5
+            (fp(101.0), fp(5.0)), // 5 units at 101 (will not be profitable)
         ];
 
         // Single level on sell side
@@ -316,7 +325,8 @@ mod tests {
         assert_eq!(result.amount, 0);
         assert_eq!(result.profit, 0);
 
-        let result = calculate_optimal_size(&[(fp(100.0), fp(1.0))], &[], DepthFeeConfig::default());
+        let result =
+            calculate_optimal_size(&[(fp(100.0), fp(1.0))], &[], DepthFeeConfig::default());
         assert_eq!(result.amount, 0);
     }
 

@@ -132,13 +132,7 @@ fn process_snapshot(
             .collect();
 
         emit_price_tick(
-            product_id,
-            best_bid,
-            best_ask,
-            bid_size,
-            ask_size,
-            bids_vec,
-            asks_vec,
+            product_id, best_bid, best_ask, bid_size, ask_size, bids_vec, asks_vec,
             true, // is_snapshot
             tx,
         );
@@ -195,13 +189,7 @@ fn process_update(
                 .collect();
 
             emit_price_tick(
-                product_id,
-                best_bid,
-                best_ask,
-                bid_size,
-                ask_size,
-                bids_vec,
-                asks_vec,
+                product_id, best_bid, best_ask, bid_size, ask_size, bids_vec, asks_vec,
                 false, // is_snapshot (this is a delta-applied update)
                 tx,
             );

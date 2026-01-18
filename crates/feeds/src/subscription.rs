@@ -533,7 +533,10 @@ impl SubscriptionManager {
             }
         }
 
-        Ok(BatchSubscriptionResult::success(subscribed, batches_processed))
+        Ok(BatchSubscriptionResult::success(
+            subscribed,
+            batches_processed,
+        ))
     }
 
     /// Subscribe to symbols across multiple exchanges in batches.
@@ -932,10 +935,7 @@ pub enum SubscriptionError {
         attempts: u32,
     },
     /// Subscription timed out waiting for confirmation.
-    SubscriptionTimeout {
-        exchange: Exchange,
-        symbol: String,
-    },
+    SubscriptionTimeout { exchange: Exchange, symbol: String },
 }
 
 impl std::fmt::Display for SubscriptionError {
@@ -963,11 +963,7 @@ impl std::fmt::Display for SubscriptionError {
                 )
             }
             SubscriptionError::SubscriptionTimeout { exchange, symbol } => {
-                write!(
-                    f,
-                    "Subscription timeout for {} on {:?}",
-                    symbol, exchange
-                )
+                write!(f, "Subscription timeout for {} on {:?}", symbol, exchange)
             }
         }
     }
@@ -1246,13 +1242,13 @@ impl ExchangeRateLimit {
     /// - **Bithumb**: 15 req/sec (conservative estimate, similar to Upbit)
     pub fn for_exchange(exchange: Exchange) -> Self {
         match exchange {
-            Exchange::Binance => Self::new(5, 1000, 200),      // 5 msg/sec, 200ms min delay
-            Exchange::Bybit => Self::new(10, 1000, 100),      // 10 msg/sec, 100ms min delay
-            Exchange::Coinbase => Self::new(50, 1000, 20),    // 50 msg/sec, 20ms min delay
-            Exchange::GateIO => Self::new(50, 1000, 20),      // 50 msg/sec, 20ms min delay
-            Exchange::Upbit => Self::new(15, 1000, 67),       // 15 msg/sec, ~67ms min delay
-            Exchange::Bithumb => Self::new(15, 1000, 67),     // 15 msg/sec, ~67ms min delay
-            _ => Self::new(10, 1000, 100),                    // Default: 10 msg/sec
+            Exchange::Binance => Self::new(5, 1000, 200), // 5 msg/sec, 200ms min delay
+            Exchange::Bybit => Self::new(10, 1000, 100),  // 10 msg/sec, 100ms min delay
+            Exchange::Coinbase => Self::new(50, 1000, 20), // 50 msg/sec, 20ms min delay
+            Exchange::GateIO => Self::new(50, 1000, 20),  // 50 msg/sec, 20ms min delay
+            Exchange::Upbit => Self::new(15, 1000, 67),   // 15 msg/sec, ~67ms min delay
+            Exchange::Bithumb => Self::new(15, 1000, 67), // 15 msg/sec, ~67ms min delay
+            _ => Self::new(10, 1000, 100),                // Default: 10 msg/sec
         }
     }
 
@@ -1538,8 +1534,8 @@ impl Default for SubscriptionRetryPolicy {
     /// - Maximum retries: 5
     fn default() -> Self {
         Self {
-            initial_delay_ms: 2_000,      // 2 seconds
-            max_delay_ms: 300_000,        // 5 minutes
+            initial_delay_ms: 2_000, // 2 seconds
+            max_delay_ms: 300_000,   // 5 minutes
             max_retries: 5,
             jitter_enabled: true,
         }
@@ -2042,7 +2038,9 @@ mod tests {
         assert_eq!(change.len(), 2);
 
         // Verify current subscriptions updated
-        let current = manager.get_current_subscriptions(Exchange::Binance).unwrap();
+        let current = manager
+            .get_current_subscriptions(Exchange::Binance)
+            .unwrap();
         assert!(current.contains("BTCUSDT"));
         assert!(current.contains("ETHUSDT"));
         assert_eq!(manager.subscription_count(Exchange::Binance), 2);
@@ -2252,7 +2250,10 @@ mod tests {
             .await
             .unwrap();
         manager
-            .update_subscriptions(Exchange::Coinbase, &["BTC-USD".to_string(), "ETH-USD".to_string()])
+            .update_subscriptions(
+                Exchange::Coinbase,
+                &["BTC-USD".to_string(), "ETH-USD".to_string()],
+            )
             .await
             .unwrap();
 
@@ -2263,8 +2264,14 @@ mod tests {
         let results = manager.resubscribe_all_exchanges().await;
 
         assert_eq!(results.len(), 2);
-        assert_eq!(*results.get(&Exchange::Binance).unwrap().as_ref().unwrap(), 1);
-        assert_eq!(*results.get(&Exchange::Coinbase).unwrap().as_ref().unwrap(), 2);
+        assert_eq!(
+            *results.get(&Exchange::Binance).unwrap().as_ref().unwrap(),
+            1
+        );
+        assert_eq!(
+            *results.get(&Exchange::Coinbase).unwrap().as_ref().unwrap(),
+            2
+        );
 
         // Verify both exchanges received resubscription
         let binance_msg = rx1.try_recv().unwrap();
@@ -2392,8 +2399,7 @@ mod tests {
         let msg = builder.build_subscribe_message(&["BTCUSDT".to_string(), "ETHUSDT".to_string()]);
 
         // Verify exact JSON structure
-        let expected =
-            r#"{"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms","ethusdt@depth20@100ms"],"id":1}"#;
+        let expected = r#"{"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms","ethusdt@depth20@100ms"],"id":1}"#;
         assert_eq!(msg, expected);
     }
 
@@ -2707,10 +2713,10 @@ mod tests {
     #[test]
     fn test_bithumb_vs_upbit_level_difference() {
         // Verify Bithumb uses level=1 while Upbit uses level=0
-        let bithumb_msg = BithumbSubscriptionBuilder::new()
-            .build_subscribe_message(&["KRW-BTC".to_string()]);
-        let upbit_msg = UpbitSubscriptionBuilder::new()
-            .build_subscribe_message(&["KRW-BTC".to_string()]);
+        let bithumb_msg =
+            BithumbSubscriptionBuilder::new().build_subscribe_message(&["KRW-BTC".to_string()]);
+        let upbit_msg =
+            UpbitSubscriptionBuilder::new().build_subscribe_message(&["KRW-BTC".to_string()]);
 
         assert!(bithumb_msg.contains(r#""level":1"#));
         assert!(upbit_msg.contains(r#""level":0"#));
@@ -2757,12 +2763,12 @@ mod tests {
         let policy = SubscriptionRetryPolicy::default().without_jitter();
 
         // NFR2: 2s → 4s → 8s → 16s → 32s (then capped at 5 min)
-        assert_eq!(policy.calculate_delay(1), 2_000);   // 2^0 * 2000 = 2000
-        assert_eq!(policy.calculate_delay(2), 4_000);   // 2^1 * 2000 = 4000
-        assert_eq!(policy.calculate_delay(3), 8_000);   // 2^2 * 2000 = 8000
-        assert_eq!(policy.calculate_delay(4), 16_000);  // 2^3 * 2000 = 16000
-        assert_eq!(policy.calculate_delay(5), 32_000);  // 2^4 * 2000 = 32000
-        assert_eq!(policy.calculate_delay(6), 64_000);  // 2^5 * 2000 = 64000
+        assert_eq!(policy.calculate_delay(1), 2_000); // 2^0 * 2000 = 2000
+        assert_eq!(policy.calculate_delay(2), 4_000); // 2^1 * 2000 = 4000
+        assert_eq!(policy.calculate_delay(3), 8_000); // 2^2 * 2000 = 8000
+        assert_eq!(policy.calculate_delay(4), 16_000); // 2^3 * 2000 = 16000
+        assert_eq!(policy.calculate_delay(5), 32_000); // 2^4 * 2000 = 32000
+        assert_eq!(policy.calculate_delay(6), 64_000); // 2^5 * 2000 = 64000
         assert_eq!(policy.calculate_delay(7), 128_000); // 2^6 * 2000 = 128000
         assert_eq!(policy.calculate_delay(8), 256_000); // 2^7 * 2000 = 256000
         assert_eq!(policy.calculate_delay(9), 300_000); // Capped at 5 min
@@ -2789,7 +2795,11 @@ mod tests {
         for _ in 0..100 {
             let delay = policy.calculate_delay(1);
             assert!(delay >= 2_000, "Delay {} should be >= 2000", delay);
-            assert!(delay <= 2_500, "Delay {} should be <= 2500 (25% jitter)", delay);
+            assert!(
+                delay <= 2_500,
+                "Delay {} should be <= 2500 (25% jitter)",
+                delay
+            );
         }
     }
 
@@ -2898,16 +2908,28 @@ mod tests {
         let mut state = SubscriptionRetryState::new();
 
         // Initial delay (attempt 0)
-        assert_eq!(state.next_delay(&policy), std::time::Duration::from_millis(2_000));
+        assert_eq!(
+            state.next_delay(&policy),
+            std::time::Duration::from_millis(2_000)
+        );
 
         state.record_failure(); // attempt 1
-        assert_eq!(state.next_delay(&policy), std::time::Duration::from_millis(2_000));
+        assert_eq!(
+            state.next_delay(&policy),
+            std::time::Duration::from_millis(2_000)
+        );
 
         state.record_failure(); // attempt 2
-        assert_eq!(state.next_delay(&policy), std::time::Duration::from_millis(4_000));
+        assert_eq!(
+            state.next_delay(&policy),
+            std::time::Duration::from_millis(4_000)
+        );
 
         state.record_failure(); // attempt 3
-        assert_eq!(state.next_delay(&policy), std::time::Duration::from_millis(8_000));
+        assert_eq!(
+            state.next_delay(&policy),
+            std::time::Duration::from_millis(8_000)
+        );
     }
 
     #[test]
@@ -3117,7 +3139,10 @@ mod tests {
         assert!(!is_exhausted);
 
         let status = tracker.get_status(Exchange::Binance, "BTCUSDT");
-        assert!(matches!(status, Some(SubscriptionStatus::Retrying { attempt: 1, .. })));
+        assert!(matches!(
+            status,
+            Some(SubscriptionStatus::Retrying { attempt: 1, .. })
+        ));
 
         // Second and third failures
         tracker.record_failure(Exchange::Binance, "BTCUSDT", &policy);
@@ -3161,8 +3186,12 @@ mod tests {
         assert_eq!(failed.len(), 2);
 
         // Check both failures are present
-        let binance_failed = failed.iter().any(|(ex, sym, _)| *ex == Exchange::Binance && sym == "BTCUSDT");
-        let coinbase_failed = failed.iter().any(|(ex, sym, _)| *ex == Exchange::Coinbase && sym == "BTC-USD");
+        let binance_failed = failed
+            .iter()
+            .any(|(ex, sym, _)| *ex == Exchange::Binance && sym == "BTCUSDT");
+        let coinbase_failed = failed
+            .iter()
+            .any(|(ex, sym, _)| *ex == Exchange::Coinbase && sym == "BTC-USD");
         assert!(binance_failed);
         assert!(coinbase_failed);
     }
@@ -3451,7 +3480,10 @@ mod tests {
         let elapsed = start.elapsed();
 
         // Should have waited for replenishment
-        assert!(elapsed >= std::time::Duration::from_millis(30), "Should have waited for token");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(30),
+            "Should have waited for token"
+        );
     }
 
     #[test]
@@ -3528,10 +3560,16 @@ mod tests {
         assert_eq!(config.estimated_duration(10), std::time::Duration::ZERO);
 
         // 11 symbols = 2 batches = 1 delay = 100ms
-        assert_eq!(config.estimated_duration(11), std::time::Duration::from_millis(100));
+        assert_eq!(
+            config.estimated_duration(11),
+            std::time::Duration::from_millis(100)
+        );
 
         // 100 symbols = 10 batches = 9 delays = 900ms
-        assert_eq!(config.estimated_duration(100), std::time::Duration::from_millis(900));
+        assert_eq!(
+            config.estimated_duration(100),
+            std::time::Duration::from_millis(900)
+        );
     }
 
     #[test]
@@ -3663,7 +3701,11 @@ mod tests {
         assert_eq!(result.batches_processed, 4); // 3+3+3+1 = 4 batches
 
         // Should have had 3 delays (between 4 batches)
-        assert!(elapsed >= std::time::Duration::from_millis(30), "Expected at least 30ms delay, got {:?}", elapsed);
+        assert!(
+            elapsed >= std::time::Duration::from_millis(30),
+            "Expected at least 30ms delay, got {:?}",
+            elapsed
+        );
 
         // Verify all batches were sent
         let mut total_symbols = 0;
@@ -3730,7 +3772,10 @@ mod tests {
 
         let config = BatchSubscriptionConfig::default();
         let requests = vec![
-            (Exchange::Binance, vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()]),
+            (
+                Exchange::Binance,
+                vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
+            ),
             (Exchange::Coinbase, vec!["BTC-USD".to_string()]),
         ];
 
@@ -3763,7 +3808,9 @@ mod tests {
 
         // Verify current subscriptions were updated
         assert_eq!(manager.subscription_count(Exchange::Binance), 5);
-        let current = manager.get_current_subscriptions(Exchange::Binance).unwrap();
+        let current = manager
+            .get_current_subscriptions(Exchange::Binance)
+            .unwrap();
         for i in 0..5 {
             assert!(current.contains(&format!("SYM{}", i)));
         }
@@ -3798,7 +3845,10 @@ mod tests {
             vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
         );
 
-        assert!(matches!(event.event_type, SubscriptionEventType::Subscribed));
+        assert!(matches!(
+            event.event_type,
+            SubscriptionEventType::Subscribed
+        ));
         assert_eq!(event.exchange, Exchange::Binance);
         assert_eq!(event.symbols.len(), 2);
         assert!(event.error.is_none());
@@ -3822,14 +3872,13 @@ mod tests {
 
     #[test]
     fn test_subscription_event_retry_scheduled() {
-        let event = SubscriptionEvent::retry_scheduled(
-            Exchange::Bybit,
-            "BTCUSDT".to_string(),
-            3,
-            8000,
-        );
+        let event =
+            SubscriptionEvent::retry_scheduled(Exchange::Bybit, "BTCUSDT".to_string(), 3, 8000);
 
-        assert!(matches!(event.event_type, SubscriptionEventType::RetryScheduled));
+        assert!(matches!(
+            event.event_type,
+            SubscriptionEventType::RetryScheduled
+        ));
         assert_eq!(event.exchange, Exchange::Bybit);
         assert_eq!(event.retry_attempt, Some(3));
         assert_eq!(event.retry_delay_ms, Some(8000));
@@ -3837,13 +3886,13 @@ mod tests {
 
     #[test]
     fn test_subscription_event_max_retries_exceeded() {
-        let event = SubscriptionEvent::max_retries_exceeded(
-            Exchange::Upbit,
-            "KRW-BTC".to_string(),
-            5,
-        );
+        let event =
+            SubscriptionEvent::max_retries_exceeded(Exchange::Upbit, "KRW-BTC".to_string(), 5);
 
-        assert!(matches!(event.event_type, SubscriptionEventType::MaxRetriesExceeded));
+        assert!(matches!(
+            event.event_type,
+            SubscriptionEventType::MaxRetriesExceeded
+        ));
         assert_eq!(event.exchange, Exchange::Upbit);
         assert_eq!(event.retry_attempt, Some(5));
         assert!(event.error.is_some());
@@ -3859,7 +3908,10 @@ mod tests {
             5,
         );
 
-        assert!(matches!(event.event_type, SubscriptionEventType::BatchCompleted));
+        assert!(matches!(
+            event.event_type,
+            SubscriptionEventType::BatchCompleted
+        ));
         assert_eq!(event.exchange, Exchange::GateIO);
         assert_eq!(event.batch_info, Some((2, 5)));
         assert_eq!(event.symbols.len(), 2);
@@ -3869,10 +3921,17 @@ mod tests {
     fn test_subscription_event_resubscribed() {
         let event = SubscriptionEvent::resubscribed(
             Exchange::Bithumb,
-            vec!["KRW-BTC".to_string(), "KRW-ETH".to_string(), "KRW-XRP".to_string()],
+            vec![
+                "KRW-BTC".to_string(),
+                "KRW-ETH".to_string(),
+                "KRW-XRP".to_string(),
+            ],
         );
 
-        assert!(matches!(event.event_type, SubscriptionEventType::Resubscribed));
+        assert!(matches!(
+            event.event_type,
+            SubscriptionEventType::Resubscribed
+        ));
         assert_eq!(event.exchange, Exchange::Bithumb);
         assert_eq!(event.symbols.len(), 3);
     }
@@ -3905,30 +3964,17 @@ mod tests {
 
     #[test]
     fn test_subscription_logger_log_failed() {
-        SubscriptionLogger::log_failed(
-            Exchange::Coinbase,
-            "BTC-USD",
-            "Connection timeout",
-        );
+        SubscriptionLogger::log_failed(Exchange::Coinbase, "BTC-USD", "Connection timeout");
     }
 
     #[test]
     fn test_subscription_logger_log_retry() {
-        SubscriptionLogger::log_retry(
-            Exchange::Bybit,
-            "BTCUSDT",
-            2,
-            4000,
-        );
+        SubscriptionLogger::log_retry(Exchange::Bybit, "BTCUSDT", 2, 4000);
     }
 
     #[test]
     fn test_subscription_logger_log_max_retries_exceeded() {
-        SubscriptionLogger::log_max_retries_exceeded(
-            Exchange::Upbit,
-            "KRW-BTC",
-            5,
-        );
+        SubscriptionLogger::log_max_retries_exceeded(Exchange::Upbit, "KRW-BTC", 5);
     }
 
     #[test]

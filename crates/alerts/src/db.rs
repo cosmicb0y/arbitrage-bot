@@ -125,15 +125,21 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
 
-        if let Some((id, telegram_chat_id, min_premium_bps, min_profit_usd, symbols_json, excluded_symbols_json, exchanges_json, enabled)) =
-            existing
+        if let Some((
+            id,
+            telegram_chat_id,
+            min_premium_bps,
+            min_profit_usd,
+            symbols_json,
+            excluded_symbols_json,
+            exchanges_json,
+            enabled,
+        )) = existing
         {
-            let symbols: Vec<String> =
-                serde_json::from_str(&symbols_json).unwrap_or_default();
+            let symbols: Vec<String> = serde_json::from_str(&symbols_json).unwrap_or_default();
             let excluded_symbols: Vec<String> =
                 serde_json::from_str(&excluded_symbols_json).unwrap_or_default();
-            let exchanges: Vec<String> =
-                serde_json::from_str(&exchanges_json).unwrap_or_default();
+            let exchanges: Vec<String> = serde_json::from_str(&exchanges_json).unwrap_or_default();
 
             return Ok(AlertConfig {
                 id,
@@ -162,7 +168,8 @@ impl Database {
     /// Update config.
     pub async fn update_config(&self, config: &AlertConfig) -> Result<(), DbError> {
         let symbols_json = serde_json::to_string(&config.symbols).unwrap_or_default();
-        let excluded_symbols_json = serde_json::to_string(&config.excluded_symbols).unwrap_or_default();
+        let excluded_symbols_json =
+            serde_json::to_string(&config.excluded_symbols).unwrap_or_default();
         let exchanges_json = serde_json::to_string(&config.exchanges).unwrap_or_default();
 
         sqlx::query(
@@ -195,24 +202,35 @@ impl Database {
 
         let configs = rows
             .into_iter()
-            .map(|(id, telegram_chat_id, min_premium_bps, min_profit_usd, symbols_json, excluded_symbols_json, exchanges_json, enabled)| {
-                let symbols: Vec<String> =
-                    serde_json::from_str(&symbols_json).unwrap_or_default();
-                let excluded_symbols: Vec<String> =
-                    serde_json::from_str(&excluded_symbols_json).unwrap_or_default();
-                let exchanges: Vec<String> =
-                    serde_json::from_str(&exchanges_json).unwrap_or_default();
-                AlertConfig {
+            .map(
+                |(
                     id,
                     telegram_chat_id,
                     min_premium_bps,
                     min_profit_usd,
-                    symbols,
-                    excluded_symbols,
-                    exchanges,
+                    symbols_json,
+                    excluded_symbols_json,
+                    exchanges_json,
                     enabled,
-                }
-            })
+                )| {
+                    let symbols: Vec<String> =
+                        serde_json::from_str(&symbols_json).unwrap_or_default();
+                    let excluded_symbols: Vec<String> =
+                        serde_json::from_str(&excluded_symbols_json).unwrap_or_default();
+                    let exchanges: Vec<String> =
+                        serde_json::from_str(&exchanges_json).unwrap_or_default();
+                    AlertConfig {
+                        id,
+                        telegram_chat_id,
+                        min_premium_bps,
+                        min_profit_usd,
+                        symbols,
+                        excluded_symbols,
+                        exchanges,
+                        enabled,
+                    }
+                },
+            )
             .collect();
 
         Ok(configs)

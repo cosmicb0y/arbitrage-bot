@@ -37,11 +37,7 @@ pub type FeedSender = mpsc::Sender<FeedMessage>;
 ///
 /// Returns `true` if the message was a connection event (caller should continue to next message).
 /// Returns `false` if the message is data that should be processed.
-pub fn handle_connection_event(
-    msg: &WsMessage,
-    exchange: Exchange,
-    tx: &FeedSender,
-) -> bool {
+pub fn handle_connection_event(msg: &WsMessage, exchange: Exchange, tx: &FeedSender) -> bool {
     match msg {
         WsMessage::Connected => {
             let _ = tx.try_send(ConnectionEvent::Connected(exchange).into());

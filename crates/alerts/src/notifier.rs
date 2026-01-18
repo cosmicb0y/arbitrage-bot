@@ -158,7 +158,8 @@ impl Notifier {
             };
 
             let meets_premium = premium_bps >= config.min_premium_bps;
-            let meets_profit = config.min_profit_usd == 0.0 || optimal_profit_usd >= config.min_profit_usd;
+            let meets_profit =
+                config.min_profit_usd == 0.0 || optimal_profit_usd >= config.min_profit_usd;
 
             // Both conditions must be met (AND logic)
             // - Premium must always meet threshold
@@ -224,7 +225,11 @@ impl Notifier {
                 target_timestamp_ms,
             );
 
-            match self.bot.send_alert(&config.telegram_chat_id, &message).await {
+            match self
+                .bot
+                .send_alert(&config.telegram_chat_id, &message)
+                .await
+            {
                 Ok(_) => {
                     info!(
                         chat_id = config.telegram_chat_id,

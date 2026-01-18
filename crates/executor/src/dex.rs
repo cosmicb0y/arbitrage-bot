@@ -432,13 +432,8 @@ mod tests {
             50000_00000000,
         );
 
-        let params = executor.build_swap_params(
-            &order,
-            Chain::Ethereum,
-            [0u8; 32],
-            [1u8; 32],
-            [2u8; 32],
-        );
+        let params =
+            executor.build_swap_params(&order, Chain::Ethereum, [0u8; 32], [1u8; 32], [2u8; 32]);
 
         assert_eq!(params.exchange, Exchange::UniswapV3);
         assert_eq!(params.amount_in, 1_00000000);
@@ -447,9 +442,9 @@ mod tests {
 
     #[test]
     fn test_calculate_slippage_bps() {
-        assert_eq!(calculate_slippage_bps(100, 99), 100);  // 1%
-        assert_eq!(calculate_slippage_bps(100, 95), 500);  // 5%
-        assert_eq!(calculate_slippage_bps(100, 100), 0);   // 0%
-        assert_eq!(calculate_slippage_bps(0, 100), 0);     // Edge case
+        assert_eq!(calculate_slippage_bps(100, 99), 100); // 1%
+        assert_eq!(calculate_slippage_bps(100, 95), 500); // 5%
+        assert_eq!(calculate_slippage_bps(100, 100), 0); // 0%
+        assert_eq!(calculate_slippage_bps(0, 100), 0); // Edge case
     }
 }

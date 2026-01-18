@@ -47,9 +47,9 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             mode: ExecutionMode::ManualApproval,
-            max_position_usd: 10000_00000000, // $10,000
-            max_slippage_bps: 50,              // 0.5%
-            min_profit_bps: 30,                // 0.3%
+            max_position_usd: 10000_00000000,     // $10,000
+            max_slippage_bps: 50,                 // 0.5%
+            min_profit_bps: 30,                   // 0.3%
             auto_execute_below_usd: 100_00000000, // $100
         }
     }
@@ -94,10 +94,7 @@ impl OrderStatus {
 
     /// Check if order is currently active.
     pub fn is_active(self) -> bool {
-        matches!(
-            self,
-            OrderStatus::Submitted | OrderStatus::PartiallyFilled
-        )
+        matches!(self, OrderStatus::Submitted | OrderStatus::PartiallyFilled)
     }
 }
 
@@ -181,7 +178,10 @@ mod tests {
     #[test]
     fn test_execution_mode_from_id() {
         assert_eq!(ExecutionMode::from_id(0), Some(ExecutionMode::Auto));
-        assert_eq!(ExecutionMode::from_id(1), Some(ExecutionMode::ManualApproval));
+        assert_eq!(
+            ExecutionMode::from_id(1),
+            Some(ExecutionMode::ManualApproval)
+        );
         assert_eq!(ExecutionMode::from_id(2), Some(ExecutionMode::AlertOnly));
         assert_eq!(ExecutionMode::from_id(255), None);
     }

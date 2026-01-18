@@ -70,6 +70,7 @@ fn main() {
             commands::upsert_symbol_mapping,
             commands::remove_symbol_mapping,
             commands::save_symbol_mappings,
+            wts::wts_open_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

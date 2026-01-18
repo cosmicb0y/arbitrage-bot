@@ -45,12 +45,8 @@ fn process_text_message(text: &str, tx: &FeedSender) {
         {
             // Check if this is a stablecoin rate update
             if symbol == "USDT" || symbol == "USDC" {
-                let rate_tick = ParsedTick::stablecoin_rate(
-                    Exchange::Binance,
-                    &symbol,
-                    &quote,
-                    tick.price(),
-                );
+                let rate_tick =
+                    ParsedTick::stablecoin_rate(Exchange::Binance, &symbol, &quote, tick.price());
                 let _ = tx.try_send(rate_tick.into());
             }
 

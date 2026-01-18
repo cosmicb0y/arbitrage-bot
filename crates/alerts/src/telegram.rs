@@ -84,12 +84,12 @@ impl TelegramBot {
     /// Run the bot command handler.
     pub async fn run(self: Arc<Self>) {
         let bot = self.bot.clone();
-        let handler = Update::filter_message().filter_command::<Command>().endpoint(
-            move |bot: Bot, msg: Message, cmd: Command| {
+        let handler = Update::filter_message()
+            .filter_command::<Command>()
+            .endpoint(move |bot: Bot, msg: Message, cmd: Command| {
                 let this = Arc::clone(&self);
                 async move { this.handle_command(bot, msg, cmd).await }
-            },
-        );
+            });
 
         Dispatcher::builder(bot, handler)
             .enable_ctrlc_handler()
@@ -203,8 +203,11 @@ impl TelegramBot {
                             .await?;
                     }
                 } else {
-                    bot.send_message(msg.chat.id, "Usage: /premium <number>\nExample: /premium 50")
-                        .await?;
+                    bot.send_message(
+                        msg.chat.id,
+                        "Usage: /premium <number>\nExample: /premium 50",
+                    )
+                    .await?;
                 }
             }
 
@@ -391,7 +394,12 @@ fn format_stablecoin_price(price: f64, symbol: &str) -> String {
         // This prevents iOS/Android from detecting as phone number
         let int_part = price.trunc() as i64;
         let frac_part = ((price.fract().abs() * 100.0).round() as i64).min(99);
-        format!("{}.{:02} {}", format_with_commas(int_part), frac_part, symbol)
+        format!(
+            "{}.{:02} {}",
+            format_with_commas(int_part),
+            frac_part,
+            symbol
+        )
     } else if abs_price >= 1.0 {
         format!("{:.4} {}", price, symbol)
     } else if abs_price >= 0.01 {
@@ -431,14 +439,35 @@ fn format_usd_value(value: f64) -> String {
 fn get_exchange_trade_url(exchange: &str, symbol: &str) -> Option<String> {
     let symbol_upper = symbol.to_uppercase();
     match exchange {
-        "Binance" => Some(format!("https://www.binance.com/en/trade/{}USDT", symbol_upper)),
-        "Coinbase" => Some(format!("https://www.coinbase.com/advanced-trade/spot/{}-USD", symbol_upper)),
-        "Upbit" => Some(format!("https://upbit.com/exchange?code=CRIX.UPBIT.KRW-{}", symbol_upper)),
-        "Bithumb" => Some(format!("https://www.bithumb.com/trade/order/{}_KRW", symbol_upper)),
-        "Bybit" => Some(format!("https://www.bybit.com/en/trade/spot/{}/USDT", symbol_upper)),
+        "Binance" => Some(format!(
+            "https://www.binance.com/en/trade/{}USDT",
+            symbol_upper
+        )),
+        "Coinbase" => Some(format!(
+            "https://www.coinbase.com/advanced-trade/spot/{}-USD",
+            symbol_upper
+        )),
+        "Upbit" => Some(format!(
+            "https://upbit.com/exchange?code=CRIX.UPBIT.KRW-{}",
+            symbol_upper
+        )),
+        "Bithumb" => Some(format!(
+            "https://www.bithumb.com/trade/order/{}_KRW",
+            symbol_upper
+        )),
+        "Bybit" => Some(format!(
+            "https://www.bybit.com/en/trade/spot/{}/USDT",
+            symbol_upper
+        )),
         "GateIO" => Some(format!("https://www.gate.io/trade/{}_USDT", symbol_upper)),
-        "Kraken" => Some(format!("https://pro.kraken.com/app/trade/{}-usd", symbol.to_lowercase())),
-        "Okx" => Some(format!("https://www.okx.com/trade-spot/{}-usdt", symbol.to_lowercase())),
+        "Kraken" => Some(format!(
+            "https://pro.kraken.com/app/trade/{}-usd",
+            symbol.to_lowercase()
+        )),
+        "Okx" => Some(format!(
+            "https://www.okx.com/trade-spot/{}-usdt",
+            symbol.to_lowercase()
+        )),
         _ => None,
     }
 }
@@ -466,11 +495,7 @@ fn format_timestamp(timestamp_ms: u64) -> String {
 }
 
 /// Format price for display with raw price and USD equivalent.
-fn format_price_display(
-    raw_price: Option<f64>,
-    usd_price: f64,
-    quote: &str,
-) -> String {
+fn format_price_display(raw_price: Option<f64>, usd_price: f64, quote: &str) -> String {
     if let Some(raw) = raw_price {
         let raw_str = match quote {
             "KRW" => format_krw_price(raw),
@@ -559,7 +584,9 @@ pub fn format_alert_message(
             let notional_value = size * source_price;
             msg.push_str(&format!(
                 "\n\n<b>Optimal Trade:</b>\n  Size: {:.4} {} ({})\n  Expected Profit: {}",
-                size, symbol, format_usd_value(notional_value),
+                size,
+                symbol,
+                format_usd_value(notional_value),
                 format_usd_value(profit)
             ));
         }

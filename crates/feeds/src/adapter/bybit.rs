@@ -209,7 +209,17 @@ impl BybitAdapter {
     /// - is_snapshot=false: Delta update (apply changes to existing orderbook)
     pub fn parse_orderbook_full(
         json: &str,
-    ) -> Result<(PriceTick, String, String, Vec<(f64, f64)>, Vec<(f64, f64)>, bool), FeedError> {
+    ) -> Result<
+        (
+            PriceTick,
+            String,
+            String,
+            Vec<(f64, f64)>,
+            Vec<(f64, f64)>,
+            bool,
+        ),
+        FeedError,
+    > {
         let msg: BybitOrderbookMessage = serde_json::from_str(json)?;
 
         let is_snapshot = msg.msg_type == "snapshot";

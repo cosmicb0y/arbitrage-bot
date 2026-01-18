@@ -177,11 +177,7 @@ mod tests {
         aggregator.update(create_test_tick(Exchange::Binance, 1, 50000.0));
         aggregator.update(create_test_tick(Exchange::Coinbase, 1, 50500.0));
 
-        let premium = aggregator.calculate_premium(
-            Exchange::Binance,
-            Exchange::Coinbase,
-            1,
-        );
+        let premium = aggregator.calculate_premium(Exchange::Binance, Exchange::Coinbase, 1);
 
         // Premium = (50500 - 50000) / 50000 * 10000 = 100 bps (1%)
         assert!(premium.is_some());

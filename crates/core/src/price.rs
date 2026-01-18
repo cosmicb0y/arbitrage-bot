@@ -55,27 +55,27 @@ impl Sub for FixedPoint {
 #[repr(C, packed)]
 pub struct PriceTick {
     /// Exchange where this price was observed
-    pub exchange: Exchange,      // 2 bytes
+    pub exchange: Exchange, // 2 bytes
     /// Internal pair ID for fast lookup
-    pub pair_id: u32,            // 4 bytes
+    pub pair_id: u32, // 4 bytes
     /// Quote currency (USD, USDT, USDC, KRW, etc.)
-    quote_currency: u8,          // 1 byte
+    quote_currency: u8, // 1 byte
     /// Current price (fixed-point 18 decimals)
-    price: u64,                  // 8 bytes
+    price: u64, // 8 bytes
     /// 24h trading volume
-    pub volume_24h: u64,         // 8 bytes
+    pub volume_24h: u64, // 8 bytes
     /// Best bid price
-    bid: u64,                    // 8 bytes
+    bid: u64, // 8 bytes
     /// Best ask price
-    ask: u64,                    // 8 bytes
+    ask: u64, // 8 bytes
     /// Best bid size (quantity available at best bid)
-    bid_size: u64,               // 8 bytes
+    bid_size: u64, // 8 bytes
     /// Best ask size (quantity available at best ask)
-    ask_size: u64,               // 8 bytes
+    ask_size: u64, // 8 bytes
     /// Timestamp in milliseconds
-    pub timestamp_ms: u64,       // 8 bytes
+    pub timestamp_ms: u64, // 8 bytes
     /// Liquidity (TVL for DEX, depth for CEX)
-    pub liquidity: u64,          // 8 bytes
+    pub liquidity: u64, // 8 bytes
 }
 // Total: 71 bytes
 

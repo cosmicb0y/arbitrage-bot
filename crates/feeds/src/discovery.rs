@@ -195,7 +195,10 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Binance: fetched {} markets (USDT/USDC/BUSD + stablecoin pairs)", markets.len());
+        debug!(
+            "Binance: fetched {} markets (USDT/USDC/BUSD + stablecoin pairs)",
+            markets.len()
+        );
 
         Ok(ExchangeMarkets {
             markets,
@@ -240,7 +243,10 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Coinbase: fetched {} markets (USD/USDT/USDC)", markets.len());
+        debug!(
+            "Coinbase: fetched {} markets (USD/USDT/USDC)",
+            markets.len()
+        );
 
         Ok(ExchangeMarkets {
             markets,
@@ -397,7 +403,10 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Bybit: fetched {} markets (USDT/USDC + stablecoin pairs)", markets.len());
+        debug!(
+            "Bybit: fetched {} markets (USDT/USDC + stablecoin pairs)",
+            markets.len()
+        );
 
         Ok(ExchangeMarkets {
             markets,
@@ -451,7 +460,10 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("OKX: fetched {} markets (USDT/USDC + stablecoin pairs)", markets.len());
+        debug!(
+            "OKX: fetched {} markets (USDT/USDC + stablecoin pairs)",
+            markets.len()
+        );
 
         Ok(ExchangeMarkets {
             markets,
@@ -497,7 +509,10 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Gate.io: fetched {} markets (USDT/USDC/USD + stablecoin pairs)", markets.len());
+        debug!(
+            "Gate.io: fetched {} markets (USDT/USDC/USD + stablecoin pairs)",
+            markets.len()
+        );
 
         Ok(ExchangeMarkets {
             markets,
@@ -554,7 +569,10 @@ impl MarketDiscovery {
             })
             .collect();
 
-        debug!("Kraken: fetched {} markets (USD/USDT + stablecoin pairs)", markets.len());
+        debug!(
+            "Kraken: fetched {} markets (USD/USDT + stablecoin pairs)",
+            markets.len()
+        );
 
         Ok(ExchangeMarkets {
             markets,
@@ -678,22 +696,24 @@ impl MarketDiscovery {
         for base in &all_bases {
             // Check if this symbol has mappings with different canonical names
             let has_mappings = symbol_mappings
-                .map(|m| m.mappings.iter().any(|mapping| mapping.symbol.eq_ignore_ascii_case(base)))
+                .map(|m| {
+                    m.mappings
+                        .iter()
+                        .any(|mapping| mapping.symbol.eq_ignore_ascii_case(base))
+                })
                 .unwrap_or(false);
 
             if has_mappings {
                 // Group by canonical_name instead of original symbol
                 // This handles cases like GTC -> GTC(Gitcoin) vs GTC -> GTC(Game.com)
-                let mut canonical_groups: HashMap<String, Vec<(String, MarketInfo)>> = HashMap::new();
+                let mut canonical_groups: HashMap<String, Vec<(String, MarketInfo)>> =
+                    HashMap::new();
 
                 for ex in exchanges {
                     // Check if this symbol should be excluded for this exchange
                     if let Some(mappings) = symbol_mappings {
                         if mappings.is_excluded(ex, base) {
-                            debug!(
-                                "Excluding {}/{} from arbitrage (symbol mapping)",
-                                ex, base
-                            );
+                            debug!("Excluding {}/{} from arbitrage (symbol mapping)", ex, base);
                             excluded_count += 1;
                             continue;
                         }
@@ -756,7 +776,10 @@ impl MarketDiscovery {
         }
 
         // Count by exchange availability
-        let all_count = common.values().filter(|v| v.len() == exchanges.len()).count();
+        let all_count = common
+            .values()
+            .filter(|v| v.len() == exchanges.len())
+            .count();
         let partial_count = common.len() - all_count;
 
         if excluded_count > 0 || remapped_count > 0 {
@@ -783,7 +806,8 @@ impl MarketDiscovery {
 
         // Build by_quote map: group by (base, quote_category)
         // This allows comparing USDT markets separately from USDC markets
-        let by_quote = Self::build_by_quote_map(all_markets, exchanges, min_exchanges, symbol_mappings);
+        let by_quote =
+            Self::build_by_quote_map(all_markets, exchanges, min_exchanges, symbol_mappings);
 
         CommonMarkets {
             common,
@@ -944,8 +968,7 @@ mod tests {
         );
 
         // find_common_markets returns only markets on ALL exchanges
-        let common =
-            MarketDiscovery::find_common_markets(&all_markets, &["Binance", "Coinbase"]);
+        let common = MarketDiscovery::find_common_markets(&all_markets, &["Binance", "Coinbase"]);
 
         assert_eq!(common.common.len(), 1);
         assert!(common.common.contains_key("BTC"));

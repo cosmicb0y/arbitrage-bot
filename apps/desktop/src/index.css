@@ -1,6 +1,75 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* WTS Dark Theme CSS Variables */
+:root {
+  --wts-background: #0a0a0f;
+  --wts-background-secondary: #111118;
+  --wts-background-tertiary: #1a1a24;
+  --wts-foreground: #e4e4e7;
+  --wts-foreground-muted: #71717a;
+  --wts-border: #27272a;
+  --wts-success: #22c55e;
+  --wts-destructive: #ef4444;
+  --wts-warning: #f59e0b;
+  --wts-accent: #3b82f6;
+}
+
+/* WTS Grid Layout */
+.wts-grid {
+  display: grid;
+  grid-template-columns: 25% 35% 40%;
+  grid-template-rows: 40px 60% 1fr;
+  grid-template-areas:
+    "header  header     header"
+    "console orderbook  order"
+    "console balances   openOrders";
+  height: 100vh;
+  gap: 4px;
+  padding: 4px;
+}
+
+/* WTS Grid Area Classes */
+.wts-area-header { grid-area: header; }
+.wts-area-console { grid-area: console; }
+.wts-area-orderbook { grid-area: orderbook; }
+.wts-area-balances { grid-area: balances; }
+.wts-area-order { grid-area: order; }
+.wts-area-openOrders { grid-area: openOrders; }
+
+/* WTS Panel Base Styles */
+.wts-panel {
+  background-color: var(--wts-background-secondary);
+  border: 1px solid var(--wts-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.wts-panel-header {
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--wts-foreground-muted);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--wts-border);
+}
+
+.wts-panel-content {
+  padding: 8px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--wts-foreground-muted);
+}
+
+/* WTS Utility Classes */
+.bg-wts-background { background-color: var(--wts-background); }
+.bg-wts-secondary { background-color: var(--wts-background-secondary); }
+.text-wts-foreground { color: var(--wts-foreground); }
+.text-wts-muted { color: var(--wts-foreground-muted); }
+.border-wts { border-color: var(--wts-border); }
 
 body {
   margin: 0;

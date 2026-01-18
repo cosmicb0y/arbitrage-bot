@@ -270,13 +270,13 @@ impl GateIOAdapter {
     > {
         #[derive(Debug, Deserialize)]
         struct GateIOObuResult {
-            s: String,                    // "ob.BTC_USDT.50"
+            s: String, // "ob.BTC_USDT.50"
             #[serde(default)]
-            full: bool,                   // true for snapshot, absent/false for delta
+            full: bool, // true for snapshot, absent/false for delta
             #[serde(default)]
-            b: Vec<[String; 2]>,          // bids (optional in delta updates)
+            b: Vec<[String; 2]>, // bids (optional in delta updates)
             #[serde(default)]
-            a: Vec<[String; 2]>,          // asks (optional in delta updates)
+            a: Vec<[String; 2]>, // asks (optional in delta updates)
         }
 
         #[derive(Debug, Deserialize)]
@@ -297,7 +297,9 @@ impl GateIOAdapter {
         let is_snapshot = msg.result.full;
 
         // Extract currency_pair from s field: "ob.BTC_USDT.50" -> "BTC_USDT"
-        let currency_pair = msg.result.s
+        let currency_pair = msg
+            .result
+            .s
             .strip_prefix("ob.")
             .and_then(|s| s.rsplit_once('.'))
             .map(|(pair, _depth)| pair.to_string())
@@ -331,7 +333,9 @@ impl GateIOAdapter {
         // For delta updates, empty bids/asks is valid (no changes on that side)
         // For snapshots, we need at least some data
         if is_snapshot && (bid == 0.0 || ask == 0.0) {
-            return Err(FeedError::ParseError("Empty bids or asks in snapshot".to_string()));
+            return Err(FeedError::ParseError(
+                "Empty bids or asks in snapshot".to_string(),
+            ));
         }
 
         Ok((

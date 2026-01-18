@@ -159,8 +159,12 @@ pub struct ExchangeRateData {
     pub timestamp: u64,
 }
 
-fn default_usdt_usd() -> f64 { 1.0 }
-fn default_usdc_usd() -> f64 { 1.0 }
+fn default_usdt_usd() -> f64 {
+    1.0
+}
+fn default_usdc_usd() -> f64 {
+    1.0
+}
 
 /// Market info for a single exchange.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -532,19 +536,17 @@ mod tests {
     #[test]
     fn test_prices_update() {
         let state = AppState::new();
-        let prices = vec![
-            PriceData {
-                exchange: "Binance".to_string(),
-                symbol: "BTC".to_string(),
-                pair_id: 1,
-                price: 50000.0,
-                bid: 49999.0,
-                ask: 50001.0,
-                volume_24h: 1000000.0,
-                timestamp: 0,
-                quote: Some("USDT".to_string()),
-            },
-        ];
+        let prices = vec![PriceData {
+            exchange: "Binance".to_string(),
+            symbol: "BTC".to_string(),
+            pair_id: 1,
+            price: 50000.0,
+            bid: 49999.0,
+            ask: 50001.0,
+            volume_24h: 1000000.0,
+            timestamp: 0,
+            quote: Some("USDT".to_string()),
+        }];
         state.update_prices(prices);
         assert_eq!(state.get_prices().len(), 1);
     }

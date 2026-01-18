@@ -60,7 +60,16 @@ fn process_text_message(text: &str, tx: &FeedSender, orderbook_cache: &Orderbook
     if let Ok((code, bid, ask, bid_size, ask_size, bids, asks)) =
         UpbitAdapter::parse_orderbook_full(text)
     {
-        process_orderbook(&code, bid, ask, bid_size, ask_size, Some((bids, asks)), tx, orderbook_cache);
+        process_orderbook(
+            &code,
+            bid,
+            ask,
+            bid_size,
+            ask_size,
+            Some((bids, asks)),
+            tx,
+            orderbook_cache,
+        );
     } else if let Ok(upbit_msg) = UpbitAdapter::parse_message(text) {
         match upbit_msg {
             UpbitMessage::Orderbook {
@@ -70,7 +79,16 @@ fn process_text_message(text: &str, tx: &FeedSender, orderbook_cache: &Orderbook
                 bid_size,
                 ask_size,
             } => {
-                process_orderbook(&code, bid, ask, bid_size, ask_size, None, tx, orderbook_cache);
+                process_orderbook(
+                    &code,
+                    bid,
+                    ask,
+                    bid_size,
+                    ask_size,
+                    None,
+                    tx,
+                    orderbook_cache,
+                );
             }
             UpbitMessage::Ticker { code, price } => {
                 process_ticker(&code, price, tx, orderbook_cache);
@@ -84,7 +102,16 @@ fn process_binary_message(data: &[u8], tx: &FeedSender, orderbook_cache: &Orderb
     // Try full orderbook parse first for depth walking
     match UpbitAdapter::parse_orderbook_full_binary(data) {
         Ok((code, bid, ask, bid_size, ask_size, bids, asks)) => {
-            process_orderbook(&code, bid, ask, bid_size, ask_size, Some((bids, asks)), tx, orderbook_cache);
+            process_orderbook(
+                &code,
+                bid,
+                ask,
+                bid_size,
+                ask_size,
+                Some((bids, asks)),
+                tx,
+                orderbook_cache,
+            );
         }
         Err(_) => {
             // Not a full orderbook - try ticker/orderbook parsing
@@ -97,7 +124,16 @@ fn process_binary_message(data: &[u8], tx: &FeedSender, orderbook_cache: &Orderb
                         bid_size,
                         ask_size,
                     } => {
-                        process_orderbook(&code, bid, ask, bid_size, ask_size, None, tx, orderbook_cache);
+                        process_orderbook(
+                            &code,
+                            bid,
+                            ask,
+                            bid_size,
+                            ask_size,
+                            None,
+                            tx,
+                            orderbook_cache,
+                        );
                     }
                     UpbitMessage::Ticker { code, price } => {
                         process_ticker(&code, price, tx, orderbook_cache);
@@ -198,10 +234,13 @@ fn process_ticker(
     // Extract symbol from code
     if let Some(symbol) = UpbitAdapter::extract_base_symbol(code) {
         // Get bid/ask from orderbook cache, default to price if not available
-        let (bid, ask, bid_size, ask_size) = orderbook_cache
-            .get(code)
-            .map(|r| *r.value())
-            .unwrap_or((price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0)));
+        let (bid, ask, bid_size, ask_size) =
+            orderbook_cache.get(code).map(|r| *r.value()).unwrap_or((
+                price,
+                price,
+                FixedPoint::from_f64(0.0),
+                FixedPoint::from_f64(0.0),
+            ));
 
         let parsed = ParsedTick::price(
             Exchange::Upbit,

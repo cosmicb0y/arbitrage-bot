@@ -1,8 +1,12 @@
 //! Application state management.
 
 use crate::config::AppConfig;
-use arbitrage_core::{symbol_to_pair_id, ArbitrageOpportunity, Exchange, FixedPoint, OptimalSizeReason, QuoteCurrency};
-use arbitrage_engine::{DetectorConfig, FeeManager, OpportunityDetector, OrderbookCache, PremiumMatrix};
+use arbitrage_core::{
+    symbol_to_pair_id, ArbitrageOpportunity, Exchange, FixedPoint, OptimalSizeReason, QuoteCurrency,
+};
+use arbitrage_engine::{
+    DetectorConfig, FeeManager, OpportunityDetector, OrderbookCache, PremiumMatrix,
+};
 use arbitrage_feeds::{CommonMarkets, PriceAggregator};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -383,12 +387,7 @@ impl AppState {
     /// Update reference crypto prices for deriving stablecoin rates.
     /// Uses BTC as reference: BTC/USD, BTC/USDT, BTC/USDC prices.
     /// Call this for exchanges like Bybit that have USD markets but no direct stablecoin/USD pairs.
-    pub fn update_exchange_ref_crypto_price(
-        &self,
-        exchange: Exchange,
-        quote: &str,
-        price: f64,
-    ) {
+    pub fn update_exchange_ref_crypto_price(&self, exchange: Exchange, quote: &str, price: f64) {
         let mut entry = self.stablecoin_prices.entry(exchange).or_default();
         let prices = entry.value_mut();
 
@@ -435,7 +434,7 @@ impl AppState {
             QuoteCurrency::USDC => self.get_usdc_usd_for_exchange(exchange),
             QuoteCurrency::USD => 1.0,
             QuoteCurrency::BUSD => 1.0, // BUSD is pegged to USD
-            QuoteCurrency::KRW => 1.0, // KRW conversion handled separately
+            QuoteCurrency::KRW => 1.0,  // KRW conversion handled separately
         }
     }
 
@@ -467,13 +466,30 @@ impl AppState {
 
     /// Update price from a feed with default quote (USD).
     pub async fn update_price(&self, exchange: Exchange, pair_id: u32, price: FixedPoint) {
-        self.update_price_with_quote(exchange, pair_id, price, QuoteCurrency::USD).await;
+        self.update_price_with_quote(exchange, pair_id, price, QuoteCurrency::USD)
+            .await;
     }
 
     /// Update price from a feed with specified quote currency.
     /// Uses mid price as bid/ask when only price is available.
-    pub async fn update_price_with_quote(&self, exchange: Exchange, pair_id: u32, price: FixedPoint, quote: QuoteCurrency) {
-        self.update_price_with_bid_ask(exchange, pair_id, price, price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0), quote).await;
+    pub async fn update_price_with_quote(
+        &self,
+        exchange: Exchange,
+        pair_id: u32,
+        price: FixedPoint,
+        quote: QuoteCurrency,
+    ) {
+        self.update_price_with_bid_ask(
+            exchange,
+            pair_id,
+            price,
+            price,
+            price,
+            FixedPoint::from_f64(0.0),
+            FixedPoint::from_f64(0.0),
+            quote,
+        )
+        .await;
     }
 
     /// Update price from a feed with bid/ask from orderbook.
@@ -490,7 +506,9 @@ impl AppState {
         quote: QuoteCurrency,
     ) {
         // Update price aggregator
-        let tick = arbitrage_core::PriceTick::with_depth(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
+        let tick = arbitrage_core::PriceTick::with_depth(
+            exchange, pair_id, price, bid, ask, bid_size, ask_size, quote,
+        );
         self.prices.update(tick);
 
         // Update detector with bid/ask for accurate premium calculation (lock-free)
@@ -514,7 +532,9 @@ impl AppState {
                     .or_insert((bid_size, ask_size));
             }
         }
-        self.detector.update_price_with_bid_ask(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
+        self.detector.update_price_with_bid_ask(
+            exchange, pair_id, price, bid, ask, bid_size, ask_size, quote,
+        );
 
         self.stats.record_price_update();
     }
@@ -534,7 +554,9 @@ impl AppState {
         quote: QuoteCurrency,
     ) {
         // Update price aggregator
-        let tick = arbitrage_core::PriceTick::with_depth(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
+        let tick = arbitrage_core::PriceTick::with_depth(
+            exchange, pair_id, price, bid, ask, bid_size, ask_size, quote,
+        );
         self.prices.update(tick);
 
         // OPTIMIZATION: Use entry() API for atomic read-modify-write
@@ -557,7 +579,9 @@ impl AppState {
         // Update detector with bid/ask for accurate premium calculation (lock-free)
         // Register symbol if not already registered
         self.detector.get_or_register_pair_id(symbol);
-        self.detector.update_price_with_bid_ask(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
+        self.detector.update_price_with_bid_ask(
+            exchange, pair_id, price, bid, ask, bid_size, ask_size, quote,
+        );
 
         self.stats.record_price_update();
     }
@@ -592,7 +616,9 @@ impl AppState {
         quote: QuoteCurrency,
     ) {
         // Update price aggregator with USD-normalized prices
-        let tick = arbitrage_core::PriceTick::with_depth(exchange, pair_id, price, bid, ask, bid_size, ask_size, quote);
+        let tick = arbitrage_core::PriceTick::with_depth(
+            exchange, pair_id, price, bid, ask, bid_size, ask_size, quote,
+        );
         self.prices.update(tick);
 
         // Update depth cache
@@ -613,7 +639,9 @@ impl AppState {
 
         // Update detector with bid/ask and raw prices (lock-free)
         self.detector.get_or_register_pair_id(symbol);
-        self.detector.update_price_with_bid_ask_and_raw(exchange, pair_id, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote);
+        self.detector.update_price_with_bid_ask_and_raw(
+            exchange, pair_id, price, bid, ask, raw_bid, raw_ask, bid_size, ask_size, quote,
+        );
 
         self.stats.record_price_update();
 
@@ -647,7 +675,10 @@ impl AppState {
         asks: &[(f64, f64)],
     ) {
         let key = (exchange, pair_id);
-        let mut entry = self.orderbook_cache.entry(key).or_insert_with(OrderbookCache::default);
+        let mut entry = self
+            .orderbook_cache
+            .entry(key)
+            .or_insert_with(OrderbookCache::default);
         entry.update_snapshot_f64(bids, asks);
     }
 
@@ -676,18 +707,31 @@ impl AppState {
 
     /// Get best bid and ask prices from orderbook cache.
     /// Returns (best_bid_price, best_ask_price, best_bid_size, best_ask_size) if available.
-    pub fn get_best_bid_ask(&self, exchange: Exchange, pair_id: u32) -> Option<(f64, f64, f64, f64)> {
-        self.orderbook_cache.get(&(exchange, pair_id)).and_then(|cache| {
-            let (bid_price, bid_size) = cache.best_bid()?;
-            let (ask_price, ask_size) = cache.best_ask()?;
-            Some((bid_price.to_f64(), ask_price.to_f64(), bid_size.to_f64(), ask_size.to_f64()))
-        })
+    pub fn get_best_bid_ask(
+        &self,
+        exchange: Exchange,
+        pair_id: u32,
+    ) -> Option<(f64, f64, f64, f64)> {
+        self.orderbook_cache
+            .get(&(exchange, pair_id))
+            .and_then(|cache| {
+                let (bid_price, bid_size) = cache.best_bid()?;
+                let (ask_price, ask_size) = cache.best_ask()?;
+                Some((
+                    bid_price.to_f64(),
+                    ask_price.to_f64(),
+                    bid_size.to_f64(),
+                    ask_size.to_f64(),
+                ))
+            })
     }
 
     /// Get orderbook for an exchange and pair.
     #[allow(dead_code)]
     pub fn get_orderbook(&self, exchange: Exchange, pair_id: u32) -> Option<OrderbookCache> {
-        self.orderbook_cache.get(&(exchange, pair_id)).map(|v| v.clone())
+        self.orderbook_cache
+            .get(&(exchange, pair_id))
+            .map(|v| v.clone())
     }
 
     /// Clear all orderbook and depth cache for a specific exchange.
@@ -695,7 +739,10 @@ impl AppState {
         let exchange_str = format!("{:?}", exchange);
         self.orderbook_cache.retain(|key, _| key.0 != exchange);
         self.depth_cache.retain(|key, _| key.0 != exchange_str);
-        tracing::info!("{:?}: Orderbook cache cleared (No OB until snapshot)", exchange);
+        tracing::info!(
+            "{:?}: Orderbook cache cleared (No OB until snapshot)",
+            exchange
+        );
     }
 
     /// Clear all cached data for a specific exchange (orderbooks, depth, and detector prices).
@@ -757,7 +804,16 @@ impl AppState {
         symbol: &str,
         price: FixedPoint,
     ) {
-        self.update_price_for_symbol_with_bid_ask(exchange, symbol, price, price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0)).await;
+        self.update_price_for_symbol_with_bid_ask(
+            exchange,
+            symbol,
+            price,
+            price,
+            price,
+            FixedPoint::from_f64(0.0),
+            FixedPoint::from_f64(0.0),
+        )
+        .await;
     }
 
     /// Update price for a symbol with bid/ask from orderbook.
@@ -775,12 +831,22 @@ impl AppState {
         let pair_id = symbol_to_pair_id(symbol);
 
         // Update price aggregator
-        let tick = arbitrage_core::PriceTick::new(exchange, pair_id, price, bid, ask).with_sizes(bid_size, ask_size);
+        let tick = arbitrage_core::PriceTick::new(exchange, pair_id, price, bid, ask)
+            .with_sizes(bid_size, ask_size);
         self.prices.update(tick);
 
         // Update detector with bid/ask (registers symbol if needed) - lock-free
         self.detector.get_or_register_pair_id(symbol);
-        self.detector.update_price_with_bid_ask(exchange, pair_id, price, bid, ask, bid_size, ask_size, arbitrage_core::QuoteCurrency::USD);
+        self.detector.update_price_with_bid_ask(
+            exchange,
+            pair_id,
+            price,
+            bid,
+            ask,
+            bid_size,
+            ask_size,
+            arbitrage_core::QuoteCurrency::USD,
+        );
 
         self.stats.record_price_update();
     }
@@ -808,7 +874,9 @@ impl AppState {
         let usd_krw = crate::exchange_rate::get_api_rate().or(usdt_krw);
 
         // Detection is now lock-free (DashMap internally)
-        let mut opps = self.detector.detect_with_all_rates(pair_id, usd_krw, usdt_krw, usdc_krw);
+        let mut opps = self
+            .detector
+            .detect_with_all_rates(pair_id, usd_krw, usdt_krw, usdc_krw);
 
         // OPTIMIZATION: Collect all fee data upfront, then release lock immediately
         let fee_data: Vec<_> = {
@@ -854,20 +922,26 @@ impl AppState {
                 };
 
                 // Get the appropriate KRW rate based on overseas quote
-                let get_krw_rate_for_quote = |exchange: Exchange, quote: QuoteCurrency| -> Option<u64> {
-                    match quote {
-                        QuoteCurrency::USDT => self.get_usdt_krw_for_exchange(exchange).map(|p| p.0),
-                        QuoteCurrency::USDC => self.get_usdc_krw_for_exchange(exchange).map(|p| p.0),
-                        _ => self.get_usdt_krw_for_exchange(exchange).map(|p| p.0),
-                    }
-                };
+                let get_krw_rate_for_quote =
+                    |exchange: Exchange, quote: QuoteCurrency| -> Option<u64> {
+                        match quote {
+                            QuoteCurrency::USDT => {
+                                self.get_usdt_krw_for_exchange(exchange).map(|p| p.0)
+                            }
+                            QuoteCurrency::USDC => {
+                                self.get_usdc_krw_for_exchange(exchange).map(|p| p.0)
+                            }
+                            _ => self.get_usdt_krw_for_exchange(exchange).map(|p| p.0),
+                        }
+                    };
 
                 // OPTIMIZATION: In-place KRW conversion to avoid extra heap allocation
                 if source_is_krw {
                     match get_krw_rate_for_quote(opp.source_exchange, overseas_quote) {
                         Some(rate) if rate > 0 => {
                             for (price, _) in buy_asks.iter_mut() {
-                                *price = (*price as u128 * FixedPoint::SCALE as u128 / rate as u128) as u64;
+                                *price = (*price as u128 * FixedPoint::SCALE as u128 / rate as u128)
+                                    as u64;
                             }
                         }
                         _ => {
@@ -881,7 +955,8 @@ impl AppState {
                     match get_krw_rate_for_quote(opp.target_exchange, overseas_quote) {
                         Some(rate) if rate > 0 => {
                             for (price, _) in sell_bids.iter_mut() {
-                                *price = (*price as u128 * FixedPoint::SCALE as u128 / rate as u128) as u64;
+                                *price = (*price as u128 * FixedPoint::SCALE as u128 / rate as u128)
+                                    as u64;
                             }
                         }
                         _ => {
@@ -901,11 +976,7 @@ impl AppState {
                 };
 
                 // Calculate optimal size using depth walking algorithm
-                let result = calculate_optimal_size(
-                    &buy_asks,
-                    &sell_bids,
-                    fees,
-                );
+                let result = calculate_optimal_size(&buy_asks, &sell_bids, fees);
 
                 opp.optimal_size = result.amount;
                 opp.optimal_profit = result.profit;

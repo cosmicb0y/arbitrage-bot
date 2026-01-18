@@ -450,7 +450,8 @@ impl PremiumMatrix {
             return 0;
         }
         let before = self.prices.len();
-        self.prices.retain(|_, entry| !entry.is_stale(self.max_staleness_ms));
+        self.prices
+            .retain(|_, entry| !entry.is_stale(self.max_staleness_ms));
         before - self.prices.len()
     }
 
@@ -904,7 +905,19 @@ impl PremiumMatrix {
         self.all_premiums_with_depth()
             .into_iter()
             .map(
-                |(buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, _, _, premium, _, _)| {
+                |(
+                    buy_ex,
+                    sell_ex,
+                    buy_quote,
+                    sell_quote,
+                    buy_ask,
+                    sell_bid,
+                    _,
+                    _,
+                    premium,
+                    _,
+                    _,
+                )| {
                     (
                         buy_ex, sell_ex, buy_quote, sell_quote, buy_ask, sell_bid, premium,
                     )

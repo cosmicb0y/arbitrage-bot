@@ -30,8 +30,8 @@ pub struct NetworkNameMapping {
 impl NetworkNameMapping {
     /// Load from JSON file.
     pub fn load_from_file(path: &str) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
 
         let raw: HashMap<String, HashMap<String, Option<String>>> = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse {}: {}", path, e))?;
@@ -57,11 +57,16 @@ impl NetworkNameMapping {
     /// Get canonical network name for an exchange's network ID.
     pub fn get_canonical(&self, exchange: &str, network_id: &str) -> Option<String> {
         // Try exact match first
-        if let Some(canonical) = self.reverse.get(&(exchange.to_string(), network_id.to_string())) {
+        if let Some(canonical) = self
+            .reverse
+            .get(&(exchange.to_string(), network_id.to_string()))
+        {
             return Some(canonical.clone());
         }
         // Try lowercase
-        self.reverse.get(&(exchange.to_string(), network_id.to_lowercase())).cloned()
+        self.reverse
+            .get(&(exchange.to_string(), network_id.to_lowercase()))
+            .cloned()
     }
 
     /// Check if two exchanges share a common network for transfers.
@@ -109,7 +114,11 @@ pub fn load_network_mapping() -> Option<NetworkNameMapping> {
 
     for path in &paths {
         if let Ok(mapping) = NetworkNameMapping::load_from_file(path) {
-            debug!("Loaded network name mapping from {} ({} networks)", path, mapping.mappings.len());
+            debug!(
+                "Loaded network name mapping from {} ({} networks)",
+                path,
+                mapping.mappings.len()
+            );
             return Some(mapping);
         }
     }
@@ -146,7 +155,10 @@ pub fn find_common_networks_for_asset(
 
     // If cache is empty, we don't have wallet status data yet
     if cached.is_empty() {
-        tracing::trace!("Wallet status cache is empty, cannot determine transfer path for {}", asset);
+        tracing::trace!(
+            "Wallet status cache is empty, cannot determine transfer path for {}",
+            asset
+        );
         return (Vec::new(), Vec::new(), Vec::new());
     }
 
@@ -155,10 +167,13 @@ pub fn find_common_networks_for_asset(
         .iter()
         .find(|e| e.exchange == source_exchange)
         .and_then(|e| e.wallet_status.iter().find(|a| a.asset == asset))
-        .map(|a| a.networks.iter()
-            .filter(|n| n.withdraw_enabled)  // Only consider withdrawable networks
-            .map(|n| n.network.clone())
-            .collect())
+        .map(|a| {
+            a.networks
+                .iter()
+                .filter(|n| n.withdraw_enabled) // Only consider withdrawable networks
+                .map(|n| n.network.clone())
+                .collect()
+        })
         .unwrap_or_default();
 
     // Find target exchange networks for this asset (deposit-enabled only)
@@ -166,24 +181,36 @@ pub fn find_common_networks_for_asset(
         .iter()
         .find(|e| e.exchange == target_exchange)
         .and_then(|e| e.wallet_status.iter().find(|a| a.asset == asset))
-        .map(|a| a.networks.iter()
-            .filter(|n| n.deposit_enabled)  // Only consider depositable networks
-            .map(|n| n.network.clone())
-            .collect())
+        .map(|a| {
+            a.networks
+                .iter()
+                .filter(|n| n.deposit_enabled) // Only consider depositable networks
+                .map(|n| n.network.clone())
+                .collect()
+        })
         .unwrap_or_default();
 
     // Find common networks using mapping
     let common = if let Some(ref mapping) = mapping {
-        mapping.find_common_networks(source_exchange, target_exchange, &source_networks, &target_networks)
+        mapping.find_common_networks(
+            source_exchange,
+            target_exchange,
+            &source_networks,
+            &target_networks,
+        )
     } else {
         // Fallback: direct string matching (case-insensitive)
-        let source_set: HashSet<String> = source_networks.iter().map(|s| s.to_uppercase()).collect();
-        let target_set: HashSet<String> = target_networks.iter().map(|s| s.to_uppercase()).collect();
+        let source_set: HashSet<String> =
+            source_networks.iter().map(|s| s.to_uppercase()).collect();
+        let target_set: HashSet<String> =
+            target_networks.iter().map(|s| s.to_uppercase()).collect();
         source_set.intersection(&target_set).cloned().collect()
     };
 
     // Debug logging for troubleshooting
-    if tracing::enabled!(tracing::Level::DEBUG) && (source_networks.len() > 0 || target_networks.len() > 0) {
+    if tracing::enabled!(tracing::Level::DEBUG)
+        && (source_networks.len() > 0 || target_networks.len() > 0)
+    {
         tracing::debug!(
             "Network check for {} ({} -> {}): source_withdraw={:?}, target_deposit={:?}, common={:?}",
             asset, source_exchange, target_exchange, source_networks, target_networks, common
@@ -760,7 +787,13 @@ struct BybitCoinInfoResult {
     rows: Vec<BybitCoinInfo>,
 }
 
-fn sign_bybit(timestamp: u64, api_key: &str, recv_window: &str, query: &str, secret: &str) -> String {
+fn sign_bybit(
+    timestamp: u64,
+    api_key: &str,
+    recv_window: &str,
+    query: &str,
+    secret: &str,
+) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
@@ -817,13 +850,19 @@ async fn fetch_bybit_wallet_status() -> Result<ExchangeWalletStatus, String> {
         .map_err(|e| format!("Failed to parse Bybit coin info: {}", e))?;
 
     if response.ret_code != 0 {
-        return Err(format!("Bybit API error: {} - {}", response.ret_code, response.ret_msg));
+        return Err(format!(
+            "Bybit API error: {} - {}",
+            response.ret_code, response.ret_msg
+        ));
     }
 
-    let wallet_status: Vec<AssetWalletStatus> = response.result.rows
+    let wallet_status: Vec<AssetWalletStatus> = response
+        .result
+        .rows
         .into_iter()
         .map(|coin| {
-            let network_statuses: Vec<NetworkStatus> = coin.chains
+            let network_statuses: Vec<NetworkStatus> = coin
+                .chains
                 .into_iter()
                 .map(|chain| {
                     let deposit_enabled = chain.chain_deposit == "1";
@@ -846,7 +885,11 @@ async fn fetch_bybit_wallet_status() -> Result<ExchangeWalletStatus, String> {
 
             AssetWalletStatus {
                 asset: coin.coin.clone(),
-                name: if coin.coin_name.is_empty() { coin.coin } else { coin.coin_name },
+                name: if coin.coin_name.is_empty() {
+                    coin.coin
+                } else {
+                    coin.coin_name
+                },
                 networks: network_statuses,
                 can_deposit,
                 can_withdraw,
@@ -951,7 +994,11 @@ async fn fetch_gateio_wallet_status() -> Result<ExchangeWalletStatus, String> {
 
             AssetWalletStatus {
                 asset: c.currency.clone(),
-                name: if c.name.is_empty() { c.currency } else { c.name },
+                name: if c.name.is_empty() {
+                    c.currency
+                } else {
+                    c.name
+                },
                 networks: network_statuses,
                 can_deposit,
                 can_withdraw,
@@ -1061,26 +1108,79 @@ pub fn update_cache(statuses: Vec<ExchangeWalletStatus>) {
 /// Networks that are obviously the same across exchanges (no mapping needed).
 const OBVIOUS_NETWORKS: &[&str] = &[
     // Native chains - same name everywhere
-    "SOL", "solana", "Solana", "SOLANA",
-    "ETH", "ethereum", "Ethereum", "ETHEREUM", "ERC20",
-    "BTC", "bitcoin", "Bitcoin", "BITCOIN",
-    "TRX", "tron", "Tron", "TRON", "TRC20",
-    "MATIC", "polygon", "Polygon", "POLYGON",
-    "AVAX", "avalanche", "Avalanche", "AVAXC",
-    "BNB", "BSC", "BEP20", "bsc", "binancesmartchain",
-    "ARB", "ARBITRUM", "arbitrum", "Arbitrum",
-    "OP", "OPTIMISM", "optimism", "Optimism",
-    "BASE", "base", "Base",
-    "TON", "ton", "Ton",
-    "XRP", "ripple", "Ripple", "RIPPLE",
-    "DOGE", "dogecoin", "Dogecoin",
-    "LTC", "litecoin", "Litecoin",
-    "ADA", "cardano", "Cardano",
-    "DOT", "polkadot", "Polkadot",
-    "ATOM", "cosmos", "Cosmos",
-    "NEAR", "near", "Near",
-    "APT", "aptos", "Aptos",
-    "SUI", "sui", "Sui",
+    "SOL",
+    "solana",
+    "Solana",
+    "SOLANA",
+    "ETH",
+    "ethereum",
+    "Ethereum",
+    "ETHEREUM",
+    "ERC20",
+    "BTC",
+    "bitcoin",
+    "Bitcoin",
+    "BITCOIN",
+    "TRX",
+    "tron",
+    "Tron",
+    "TRON",
+    "TRC20",
+    "MATIC",
+    "polygon",
+    "Polygon",
+    "POLYGON",
+    "AVAX",
+    "avalanche",
+    "Avalanche",
+    "AVAXC",
+    "BNB",
+    "BSC",
+    "BEP20",
+    "bsc",
+    "binancesmartchain",
+    "ARB",
+    "ARBITRUM",
+    "arbitrum",
+    "Arbitrum",
+    "OP",
+    "OPTIMISM",
+    "optimism",
+    "Optimism",
+    "BASE",
+    "base",
+    "Base",
+    "TON",
+    "ton",
+    "Ton",
+    "XRP",
+    "ripple",
+    "Ripple",
+    "RIPPLE",
+    "DOGE",
+    "dogecoin",
+    "Dogecoin",
+    "LTC",
+    "litecoin",
+    "Litecoin",
+    "ADA",
+    "cardano",
+    "Cardano",
+    "DOT",
+    "polkadot",
+    "Polkadot",
+    "ATOM",
+    "cosmos",
+    "Cosmos",
+    "NEAR",
+    "near",
+    "Near",
+    "APT",
+    "aptos",
+    "Aptos",
+    "SUI",
+    "sui",
+    "Sui",
 ];
 
 /// Save all network names per asset across exchanges to a JSON file.
@@ -1102,9 +1202,9 @@ pub fn save_network_mappings(statuses: &[ExchangeWalletStatus]) {
                 .iter()
                 .map(|n| n.network.clone())
                 .filter(|net| {
-                    !OBVIOUS_NETWORKS.iter().any(|&obvious| {
-                        net.eq_ignore_ascii_case(obvious)
-                    })
+                    !OBVIOUS_NETWORKS
+                        .iter()
+                        .any(|&obvious| net.eq_ignore_ascii_case(obvious))
                 })
                 .collect();
 
@@ -1133,7 +1233,11 @@ pub fn save_network_mappings(statuses: &[ExchangeWalletStatus]) {
             if let Err(e) = file.write_all(json.as_bytes()) {
                 warn!("Failed to write network mappings: {}", e);
             } else {
-                debug!("Saved network mappings to {} ({} assets need mapping)", path, multi_exchange_assets.len());
+                debug!(
+                    "Saved network mappings to {} ({} assets need mapping)",
+                    path,
+                    multi_exchange_assets.len()
+                );
             }
         }
         Err(e) => {
@@ -1151,7 +1255,6 @@ pub async fn run_wallet_status_updater(broadcast_tx: BroadcastSender) {
         let statuses = fetch_all_wallet_status().await;
 
         if !statuses.is_empty() {
-
             // Save network mappings on first run for cross-exchange transfer mapping
             if first_run {
                 save_network_mappings(&statuses);

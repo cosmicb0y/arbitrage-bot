@@ -77,7 +77,16 @@ fn process_text_message(text: &str, tx: &FeedSender, orderbook_cache: &Orderbook
                 bid_size,
                 ask_size,
             } => {
-                process_orderbook(&code, bid, ask, bid_size, ask_size, None, tx, orderbook_cache);
+                process_orderbook(
+                    &code,
+                    bid,
+                    ask,
+                    bid_size,
+                    ask_size,
+                    None,
+                    tx,
+                    orderbook_cache,
+                );
             }
             BithumbMessage::Ticker { code, price } => {
                 process_ticker(&code, price, tx, orderbook_cache);
@@ -113,7 +122,16 @@ fn process_binary_message(data: &[u8], tx: &FeedSender, orderbook_cache: &Orderb
                         bid_size,
                         ask_size,
                     } => {
-                        process_orderbook(&code, bid, ask, bid_size, ask_size, None, tx, orderbook_cache);
+                        process_orderbook(
+                            &code,
+                            bid,
+                            ask,
+                            bid_size,
+                            ask_size,
+                            None,
+                            tx,
+                            orderbook_cache,
+                        );
                     }
                     BithumbMessage::Ticker { code, price } => {
                         process_ticker(&code, price, tx, orderbook_cache);
@@ -215,10 +233,13 @@ fn process_ticker(
     // Extract symbol from code
     if let Some(symbol) = BithumbAdapter::extract_base_symbol(code) {
         // Get bid/ask from orderbook cache, default to price if not available
-        let (bid, ask, bid_size, ask_size) = orderbook_cache
-            .get(code)
-            .map(|r| *r.value())
-            .unwrap_or((price, price, FixedPoint::from_f64(0.0), FixedPoint::from_f64(0.0)));
+        let (bid, ask, bid_size, ask_size) =
+            orderbook_cache.get(code).map(|r| *r.value()).unwrap_or((
+                price,
+                price,
+                FixedPoint::from_f64(0.0),
+                FixedPoint::from_f64(0.0),
+            ));
 
         let parsed = ParsedTick::price(
             Exchange::Bithumb,

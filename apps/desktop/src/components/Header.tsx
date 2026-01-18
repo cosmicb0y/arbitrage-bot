@@ -1,4 +1,13 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useStats, useBotControl } from "../hooks/useTauri";
+
+async function openWts() {
+  try {
+    await invoke("wts_open_window");
+  } catch (error) {
+    console.error("Failed to open WTS:", error);
+  }
+}
 
 interface HeaderProps {
   activeTab: string;
@@ -69,6 +78,14 @@ function Header({ activeTab, onTabChange }: HeaderProps) {
               </span>
             </div>
           </div>
+
+          {/* WTS Open Button */}
+          <button
+            onClick={openWts}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-primary-600 hover:bg-primary-500 text-white"
+          >
+            WTS 열기
+          </button>
 
           {/* Bot Control */}
           <button

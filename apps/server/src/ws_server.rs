@@ -5,6 +5,7 @@
 use crate::exchange_rate;
 use crate::state::SharedState;
 use crate::wallet_status;
+use arbitrage_core::{Exchange, FixedPoint, PriceTick};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -20,7 +21,6 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
-use arbitrage_core::{Exchange, FixedPoint, PriceTick};
 
 /// Price data for WebSocket broadcast.
 #[derive(Debug, Clone, Serialize)]
@@ -327,7 +327,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<WsServerState>) {
         }
     }
     if !initial_opportunities.is_empty() {
-        if let Ok(json) = serde_json::to_string(&WsServerMessage::Opportunities(initial_opportunities)) {
+        if let Ok(json) =
+            serde_json::to_string(&WsServerMessage::Opportunities(initial_opportunities))
+        {
             let _ = sender.send(Message::Text(json)).await;
         }
     }
@@ -400,7 +402,9 @@ async fn collect_prices(state: &SharedState) -> Vec<WsPriceData> {
 
     for tick in all_ticks {
         // Get symbol from registry (lock-free), or compute from pair_id
-        let symbol = state.detector.pair_id_to_symbol(tick.pair_id())
+        let symbol = state
+            .detector
+            .pair_id_to_symbol(tick.pair_id())
             .unwrap_or_else(|| format!("PAIR_{}", tick.pair_id()));
 
         // Get quote currency from tick
@@ -443,10 +447,22 @@ fn collect_stats(state: &SharedState) -> WsStatsData {
 
 /// Collect current exchange rate if loaded.
 fn collect_exchange_rate(state: &SharedState) -> Option<WsExchangeRateData> {
-    let upbit_usdt_krw = state.get_upbit_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
-    let upbit_usdc_krw = state.get_upbit_usdc_krw().map(|p| p.to_f64()).unwrap_or(0.0);
-    let bithumb_usdt_krw = state.get_bithumb_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
-    let bithumb_usdc_krw = state.get_bithumb_usdc_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+    let upbit_usdt_krw = state
+        .get_upbit_usdt_krw()
+        .map(|p| p.to_f64())
+        .unwrap_or(0.0);
+    let upbit_usdc_krw = state
+        .get_upbit_usdc_krw()
+        .map(|p| p.to_f64())
+        .unwrap_or(0.0);
+    let bithumb_usdt_krw = state
+        .get_bithumb_usdt_krw()
+        .map(|p| p.to_f64())
+        .unwrap_or(0.0);
+    let bithumb_usdc_krw = state
+        .get_bithumb_usdc_krw()
+        .map(|p| p.to_f64())
+        .unwrap_or(0.0);
 
     exchange_rate::get_usd_krw_rate().map(|usd_krw| WsExchangeRateData {
         usd_krw,
@@ -475,12 +491,14 @@ fn collect_wallet_status() -> Option<WsWalletStatusData> {
         .into_iter()
         .map(|s| WsExchangeWalletStatus {
             exchange: s.exchange,
-            wallet_status: s.wallet_status
+            wallet_status: s
+                .wallet_status
                 .into_iter()
                 .map(|ws| WsAssetWalletStatus {
                     asset: ws.asset,
                     name: ws.name,
-                    networks: ws.networks
+                    networks: ws
+                        .networks
                         .into_iter()
                         .map(|n| WsNetworkStatus {
                             network: n.network,
@@ -513,68 +531,74 @@ fn collect_wallet_status() -> Option<WsWalletStatusData> {
 async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
     let opps = state.opportunities.read().await;
 
-    let result: Vec<WsOpportunityData> = opps.iter().map(|opp| {
-        let source_ex = format!("{:?}", opp.source_exchange);
-        let target_ex = format!("{:?}", opp.target_exchange);
-        let symbol = opp.asset.symbol.to_string();
+    let result: Vec<WsOpportunityData> = opps
+        .iter()
+        .map(|opp| {
+            let source_ex = format!("{:?}", opp.source_exchange);
+            let target_ex = format!("{:?}", opp.target_exchange);
+            let symbol = opp.asset.symbol.to_string();
 
-        // Check if wallet status is known for these exchanges
-        let wallet_status_known = wallet_status::is_wallet_status_known(&source_ex, &target_ex);
+            // Check if wallet status is known for these exchanges
+            let wallet_status_known = wallet_status::is_wallet_status_known(&source_ex, &target_ex);
 
-        // Find common networks for this opportunity
-        let (common_networks, _, _) = wallet_status::find_common_networks_for_asset(
-            &symbol,
-            &source_ex,
-            &target_ex,
-        );
-        let has_transfer_path = !common_networks.is_empty();
+            // Find common networks for this opportunity
+            let (common_networks, _, _) =
+                wallet_status::find_common_networks_for_asset(&symbol, &source_ex, &target_ex);
+            let has_transfer_path = !common_networks.is_empty();
 
-        // Get latest depth from cache (source = ask_size for buying, target = bid_size for selling)
-        let source_depth = state.get_depth(&source_ex, &symbol)
-            .map(|(_, ask_size)| ask_size.to_f64())
-            .unwrap_or_else(|| FixedPoint(opp.source_depth).to_f64());
-        let target_depth = state.get_depth(&target_ex, &symbol)
-            .map(|(bid_size, _)| bid_size.to_f64())
-            .unwrap_or_else(|| FixedPoint(opp.target_depth).to_f64());
+            // Get latest depth from cache (source = ask_size for buying, target = bid_size for selling)
+            let source_depth = state
+                .get_depth(&source_ex, &symbol)
+                .map(|(_, ask_size)| ask_size.to_f64())
+                .unwrap_or_else(|| FixedPoint(opp.source_depth).to_f64());
+            let target_depth = state
+                .get_depth(&target_ex, &symbol)
+                .map(|(bid_size, _)| bid_size.to_f64())
+                .unwrap_or_else(|| FixedPoint(opp.target_depth).to_f64());
 
-        // Convert UsdlikePremium to WsUsdlikePremium
-        let usdlike_premium = opp.usdlike_premium.map(|p| WsUsdlikePremium {
-            bps: p.bps,
-            quote: p.quote.as_str().to_string(),
-        });
+            // Convert UsdlikePremium to WsUsdlikePremium
+            let usdlike_premium = opp.usdlike_premium.map(|p| WsUsdlikePremium {
+                bps: p.bps,
+                quote: p.quote.as_str().to_string(),
+            });
 
-        WsOpportunityData {
-            id: opp.id,
-            symbol,
-            source_exchange: source_ex,
-            target_exchange: target_ex,
-            source_quote: opp.source_quote.as_str().to_string(),
-            target_quote: opp.target_quote.as_str().to_string(),
-            premium_bps: opp.premium_bps,
-            usdlike_premium,
-            kimchi_premium_bps: opp.kimchi_premium_bps,
-            source_price: FixedPoint(opp.source_price).to_f64(),
-            target_price: FixedPoint(opp.target_price).to_f64(),
-            net_profit_bps: (opp.net_profit_estimate / 100) as i32,
-            confidence_score: opp.confidence_score,
-            timestamp: opp.discovered_at_ms,
-            common_networks,
-            has_transfer_path,
-            wallet_status_known,
-            source_depth,
-            target_depth,
-            optimal_size: FixedPoint(opp.optimal_size).to_f64(),
-            optimal_profit: FixedPoint(opp.optimal_profit as u64).to_f64(),
-            optimal_size_reason: Some(match opp.optimal_size_reason {
-                arbitrage_core::OptimalSizeReason::Ok => "ok".to_string(),
-                arbitrage_core::OptimalSizeReason::NoOrderbook => "no_orderbook".to_string(),
-                arbitrage_core::OptimalSizeReason::NotProfitable => "not_profitable".to_string(),
-                arbitrage_core::OptimalSizeReason::NoConversionRate => "no_conversion_rate".to_string(),
-            }),
-            source_raw_price: FixedPoint(opp.source_raw_price).to_f64(),
-            target_raw_price: FixedPoint(opp.target_raw_price).to_f64(),
-        }
-    }).collect();
+            WsOpportunityData {
+                id: opp.id,
+                symbol,
+                source_exchange: source_ex,
+                target_exchange: target_ex,
+                source_quote: opp.source_quote.as_str().to_string(),
+                target_quote: opp.target_quote.as_str().to_string(),
+                premium_bps: opp.premium_bps,
+                usdlike_premium,
+                kimchi_premium_bps: opp.kimchi_premium_bps,
+                source_price: FixedPoint(opp.source_price).to_f64(),
+                target_price: FixedPoint(opp.target_price).to_f64(),
+                net_profit_bps: (opp.net_profit_estimate / 100) as i32,
+                confidence_score: opp.confidence_score,
+                timestamp: opp.discovered_at_ms,
+                common_networks,
+                has_transfer_path,
+                wallet_status_known,
+                source_depth,
+                target_depth,
+                optimal_size: FixedPoint(opp.optimal_size).to_f64(),
+                optimal_profit: FixedPoint(opp.optimal_profit as u64).to_f64(),
+                optimal_size_reason: Some(match opp.optimal_size_reason {
+                    arbitrage_core::OptimalSizeReason::Ok => "ok".to_string(),
+                    arbitrage_core::OptimalSizeReason::NoOrderbook => "no_orderbook".to_string(),
+                    arbitrage_core::OptimalSizeReason::NotProfitable => {
+                        "not_profitable".to_string()
+                    }
+                    arbitrage_core::OptimalSizeReason::NoConversionRate => {
+                        "no_conversion_rate".to_string()
+                    }
+                }),
+                source_raw_price: FixedPoint(opp.source_raw_price).to_f64(),
+                target_raw_price: FixedPoint(opp.target_raw_price).to_f64(),
+            }
+        })
+        .collect();
 
     result
 }
@@ -609,13 +633,28 @@ async fn collect_common_markets(state: &SharedState) -> Option<WsCommonMarketsDa
 }
 
 /// Broadcast a single price update (event-driven).
-pub fn broadcast_price(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, symbol: &str, tick: &PriceTick) {
+pub fn broadcast_price(
+    tx: &BroadcastSender,
+    exchange: Exchange,
+    pair_id: u32,
+    symbol: &str,
+    tick: &PriceTick,
+) {
     broadcast_price_with_quote_and_usd(tx, exchange, pair_id, symbol, None, tick, None, None, None);
 }
 
 /// Broadcast a single price update with quote currency (event-driven).
-pub fn broadcast_price_with_quote(tx: &BroadcastSender, exchange: Exchange, pair_id: u32, symbol: &str, quote: Option<&str>, tick: &PriceTick) {
-    broadcast_price_with_quote_and_usd(tx, exchange, pair_id, symbol, quote, tick, None, None, None);
+pub fn broadcast_price_with_quote(
+    tx: &BroadcastSender,
+    exchange: Exchange,
+    pair_id: u32,
+    symbol: &str,
+    quote: Option<&str>,
+    tick: &PriceTick,
+) {
+    broadcast_price_with_quote_and_usd(
+        tx, exchange, pair_id, symbol, quote, tick, None, None, None,
+    );
 }
 
 /// Broadcast a single price update with quote currency and USD-converted prices (event-driven).
@@ -655,7 +694,11 @@ pub fn broadcast_stats(tx: &BroadcastSender, state: &SharedState) {
 }
 
 /// Broadcast a new opportunity to all clients.
-pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &arbitrage_core::ArbitrageOpportunity) {
+pub fn broadcast_opportunity(
+    tx: &BroadcastSender,
+    state: &SharedState,
+    opp: &arbitrage_core::ArbitrageOpportunity,
+) {
     let source_ex = format!("{:?}", opp.source_exchange);
     let target_ex = format!("{:?}", opp.target_exchange);
     let symbol = opp.asset.symbol.to_string();
@@ -664,11 +707,8 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
     let wallet_status_known = wallet_status::is_wallet_status_known(&source_ex, &target_ex);
 
     // Find common networks for this opportunity
-    let (common_networks, _, _) = wallet_status::find_common_networks_for_asset(
-        &symbol,
-        &source_ex,
-        &target_ex,
-    );
+    let (common_networks, _, _) =
+        wallet_status::find_common_networks_for_asset(&symbol, &source_ex, &target_ex);
     let has_transfer_path = !common_networks.is_empty();
 
     // Get latest depth from cache (source = ask_size for buying, target = bid_size for selling)
@@ -731,10 +771,22 @@ pub fn broadcast_opportunity(tx: &BroadcastSender, state: &SharedState, opp: &ar
 
 /// Broadcast exchange rate update to all clients.
 pub fn broadcast_exchange_rate(tx: &BroadcastSender, state: &SharedState, usd_krw: f64) {
-    let upbit_usdt_krw = state.get_upbit_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
-    let upbit_usdc_krw = state.get_upbit_usdc_krw().map(|p| p.to_f64()).unwrap_or(0.0);
-    let bithumb_usdt_krw = state.get_bithumb_usdt_krw().map(|p| p.to_f64()).unwrap_or(0.0);
-    let bithumb_usdc_krw = state.get_bithumb_usdc_krw().map(|p| p.to_f64()).unwrap_or(0.0);
+    let upbit_usdt_krw = state
+        .get_upbit_usdt_krw()
+        .map(|p| p.to_f64())
+        .unwrap_or(0.0);
+    let upbit_usdc_krw = state
+        .get_upbit_usdc_krw()
+        .map(|p| p.to_f64())
+        .unwrap_or(0.0);
+    let bithumb_usdt_krw = state
+        .get_bithumb_usdt_krw()
+        .map(|p| p.to_f64())
+        .unwrap_or(0.0);
+    let bithumb_usdc_krw = state
+        .get_bithumb_usdc_krw()
+        .map(|p| p.to_f64())
+        .unwrap_or(0.0);
 
     let rate_data = WsExchangeRateData {
         usd_krw,
@@ -755,10 +807,7 @@ pub fn broadcast_exchange_rate(tx: &BroadcastSender, state: &SharedState, usd_kr
 }
 
 /// Broadcast common markets to all clients.
-pub fn broadcast_common_markets(
-    tx: &BroadcastSender,
-    common: &arbitrage_feeds::CommonMarkets,
-) {
+pub fn broadcast_common_markets(tx: &BroadcastSender, common: &arbitrage_feeds::CommonMarkets) {
     let mut markets_map = std::collections::HashMap::new();
 
     for (base, exchange_markets) in &common.common {
@@ -795,12 +844,14 @@ pub fn broadcast_wallet_status(
         .into_iter()
         .map(|s| WsExchangeWalletStatus {
             exchange: s.exchange,
-            wallet_status: s.wallet_status
+            wallet_status: s
+                .wallet_status
                 .into_iter()
                 .map(|ws| WsAssetWalletStatus {
                     asset: ws.asset,
                     name: ws.name,
-                    networks: ws.networks
+                    networks: ws
+                        .networks
                         .into_iter()
                         .map(|n| WsNetworkStatus {
                             network: n.network,

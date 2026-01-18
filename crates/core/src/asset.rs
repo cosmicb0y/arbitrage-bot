@@ -227,11 +227,19 @@ mod tests {
         let pair = TradingPair::new(base, quote, Exchange::Binance);
 
         // Same pair should have same ID
-        let pair2 = TradingPair::new(Asset::eth(), Asset::native("USDT", Chain::Ethereum, 6), Exchange::Binance);
+        let pair2 = TradingPair::new(
+            Asset::eth(),
+            Asset::native("USDT", Chain::Ethereum, 6),
+            Exchange::Binance,
+        );
         assert_eq!(pair.id(), pair2.id());
 
         // Different exchange should have different ID
-        let pair3 = TradingPair::new(Asset::eth(), Asset::native("USDT", Chain::Ethereum, 6), Exchange::Coinbase);
+        let pair3 = TradingPair::new(
+            Asset::eth(),
+            Asset::native("USDT", Chain::Ethereum, 6),
+            Exchange::Coinbase,
+        );
         assert_ne!(pair.id(), pair3.id());
     }
 }
