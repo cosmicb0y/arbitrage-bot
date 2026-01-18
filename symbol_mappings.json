@@ -41,6 +41,13 @@
       "canonical_name": "VELO(Velodrome)",
       "exclude": false,
       "notes": "https://velodrome.finance/"
+    },
+    {
+      "exchange": "Bybit",
+      "symbol": "U",
+      "canonical_name": "U(The Union Network)",
+      "exclude": false,
+      "notes": "https://union.build/"
     }
   ]
 }

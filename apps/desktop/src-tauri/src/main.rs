@@ -9,6 +9,7 @@ mod credentials;
 mod exchange_client;
 mod state;
 mod symbol_mapping;
+mod wts;
 
 use state::AppState;
 use std::sync::Arc;

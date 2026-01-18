@@ -1,0 +1,138 @@
+# Sprint Status - arbitrage-bot
+# generated: 2026-01-18
+# project: arbitrage-bot
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-01-18
+project: arbitrage-bot
+tracking_system: file-system
+story_location: "_bmad-output/implementation-artifacts"
+
+development_status:
+  # ============================================================================
+  # FEATURE: Runtime Dynamic Market Subscription (epics.md)
+  # ============================================================================
+
+  # Epic 1: 구독 관리 인프라
+  epic-1: in-progress
+  1-1-subscriptionchange-data-structure: done
+  1-2-subscriptionmanager-struct: review
+  1-3-wsclient-subscription-channel: review
+  1-4-server-channel-wiring: done
+  epic-1-retrospective: optional
+
+  # Epic 2: 거래소별 동적 구독 구현
+  epic-2: done
+  2-1-binance-dynamic-subscription: done
+  2-2-coinbase-dynamic-subscription: done
+  2-3-bybit-dynamic-subscription: done
+  2-4-gateio-dynamic-subscription: done
+  2-5-upbit-dynamic-subscription: done
+  2-6-bithumb-dynamic-subscription: done
+  epic-2-retrospective: optional
+
+  # Epic 3: 에러 처리 및 복원력
+  epic-3: done
+  3-1-exponential-backoff-retry: done
+  3-2-max-retry-graceful-failure: done
+  3-3-reconnect-full-resubscribe: done
+  3-4-exchange-ratelimit-compliance: done
+  3-5-batch-processing-ratelimit: done
+  epic-3-retrospective: optional
+
+  # Epic 4: 로깅 및 운영 가시성
+  epic-4: done
+  4-1-subscription-success-info-log: done
+  4-2-subscription-failure-warn-log: done
+  4-3-retry-attempt-info-log: done
+  4-4-max-retry-exceeded-error-log: done
+  epic-4-retrospective: optional
+
+  # Epic 5: 기회 탐지 통합
+  epic-5: backlog
+  5-1-new-market-price-data-verification: backlog
+  5-2-opportunitydetector-new-market-integration: backlog
+  epic-5-retrospective: optional
+
+  # ============================================================================
+  # FEATURE: Bloomberg Terminal Style WTS (wts-epics.md)
+  # ============================================================================
+
+  # WTS Epic 1: WTS 기반 인프라 및 창 시스템
+  wts-epic-1: in-progress
+  wts-1-1-project-structure-zustand-setup: done
+  wts-1-2-tauri-multiwindow-wts-open: backlog
+  wts-1-3-six-panel-grid-layout: backlog
+  wts-1-4-exchange-tab-selection: backlog
+  wts-1-5-connection-status-api-failure: backlog
+  wts-1-6-console-panel-basic-structure: backlog
+  wts-epic-1-retrospective: optional
+
+  # WTS Epic 2: 잔고 조회 및 오더북 실시간 표시
+  wts-epic-2: backlog
+  wts-2-1-upbit-api-auth-balance-backend: backlog
+  wts-2-2-balance-panel-ui-state: backlog
+  wts-2-3-balance-manual-auto-refresh: backlog
+  wts-2-4-market-selection: backlog
+  wts-2-5-realtime-orderbook-websocket: backlog
+  wts-2-6-orderbook-panel-ui-click-interaction: backlog
+  wts-epic-2-retrospective: optional
+
+  # WTS Epic 3: 주문 실행 시스템
+  wts-epic-3: backlog
+  wts-3-1-order-api-rust-backend: backlog
+  wts-3-2-order-panel-ui-qty-price-input: backlog
+  wts-3-3-market-order-buy-sell: backlog
+  wts-3-4-limit-order-buy-sell: backlog
+  wts-3-5-order-confirm-dialog: backlog
+  wts-3-6-console-log-order-result: backlog
+  wts-3-7-order-error-ratelimit-handling: backlog
+  wts-epic-3-retrospective: optional
+
+  # WTS Epic 4: 입금 기능
+  wts-epic-4: backlog
+  wts-4-1-deposit-api-rust-backend: backlog
+  wts-4-2-deposit-tab-ui-asset-network: backlog
+  wts-4-3-deposit-address-display-copy: backlog
+  wts-4-4-deposit-address-async-generation: backlog
+  wts-epic-4-retrospective: optional
+
+  # WTS Epic 5: 출금 기능
+  wts-epic-5: backlog
+  wts-5-1-withdraw-api-rust-backend: backlog
+  wts-5-2-withdraw-tab-ui-form: backlog
+  wts-5-3-withdraw-confirm-dialog: backlog
+  wts-5-4-withdraw-execute-result: backlog
+  wts-5-5-2fa-withdraw-limit-guide: backlog
+  wts-5-6-withdraw-error-network-handling: backlog
+  wts-epic-5-retrospective: optional
