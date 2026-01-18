@@ -1,4 +1,5 @@
 import { useWtsStore } from '../stores';
+import { Badge } from '../../components/ui/badge';
 
 interface ExchangePanelProps {
   className?: string;
@@ -18,16 +19,11 @@ export function ExchangePanel({ className = '' }: ExchangePanelProps) {
       </div>
       <div
         data-testid="connection-status"
-        className="flex items-center gap-2"
+        className="flex items-center"
       >
-        <span
-          className={`w-2 h-2 rounded-full ${
-            connectionStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'
-          }`}
-        />
-        <span className="text-wts-muted text-sm">
+        <Badge variant={connectionStatus === 'connected' ? 'success' : 'destructive'}>
           {connectionStatus === 'connected' ? '연결됨' : '연결 안됨'}
-        </span>
+        </Badge>
       </div>
     </div>
   );

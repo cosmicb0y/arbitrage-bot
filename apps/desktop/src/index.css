@@ -4,8 +4,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* WTS Dark Theme CSS Variables */
+/* WTS Dark Theme & Shadcn Variables */
 :root {
+  /* WTS Legacy */
   --wts-background: #0a0a0f;
   --wts-background-secondary: #111118;
   --wts-background-tertiary: #1a1a24;
@@ -16,13 +17,36 @@
   --wts-destructive: #ef4444;
   --wts-warning: #f59e0b;
   --wts-accent: #3b82f6;
+
+  /* Shadcn / Story Alignment */
+  --background: #0a0a0f;
+  --background-secondary: #111118;
+  --foreground: #e4e4e7;
+  --card: #111118;
+  --card-foreground: #e4e4e7;
+  --popover: #0a0a0f;
+  --popover-foreground: #e4e4e7;
+  --primary: #e4e4e7;
+  --primary-foreground: #0a0a0f;
+  --secondary: #27272a;
+  --secondary-foreground: #e4e4e7;
+  --muted: #27272a;
+  --muted-foreground: #71717a;
+  --accent: #27272a;
+  --accent-foreground: #e4e4e7;
+  --destructive: #ef4444;
+  --destructive-foreground: #e4e4e7;
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #d4d4d8;
+  --radius: 0.5rem;
 }
 
 /* WTS Grid Layout */
 .wts-grid {
   display: grid;
   grid-template-columns: 25% 35% 40%;
-  grid-template-rows: 40px 60% 1fr;
+  grid-template-rows: 40px 60% 40%;
   grid-template-areas:
     "header  header     header"
     "console orderbook  order"
@@ -30,6 +54,7 @@
   height: 100vh;
   gap: 4px;
   padding: 4px;
+  background-color: var(--background);
 }
 
 /* WTS Grid Area Classes */
@@ -42,9 +67,9 @@
 
 /* WTS Panel Base Styles */
 .wts-panel {
-  background-color: var(--wts-background-secondary);
-  border: 1px solid var(--wts-border);
-  border-radius: 4px;
+  background-color: var(--background-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
@@ -52,24 +77,40 @@
   font-family: 'Inter', sans-serif;
   font-size: 14px;
   font-weight: 600;
-  color: var(--wts-foreground-muted);
+  color: var(--muted-foreground);
   padding: 8px 12px;
-  border-bottom: 1px solid var(--wts-border);
+  border-bottom: 1px solid var(--border);
 }
 
 .wts-panel-content {
   padding: 8px 12px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
-  color: var(--wts-foreground-muted);
+  color: var(--muted-foreground);
 }
 
 /* WTS Utility Classes */
-.bg-wts-background { background-color: var(--wts-background); }
-.bg-wts-secondary { background-color: var(--wts-background-secondary); }
-.text-wts-foreground { color: var(--wts-foreground); }
-.text-wts-muted { color: var(--wts-foreground-muted); }
-.border-wts { border-color: var(--wts-border); }
+.bg-wts-background { background-color: var(--background); }
+.bg-wts-secondary { background-color: var(--background-secondary); }
+.text-wts-foreground { color: var(--foreground); }
+.text-wts-muted { color: var(--muted-foreground); }
+.border-wts { border-color: var(--border); }
+
+/* Shadcn Utilities (Manual shim since tailwind.config.js is untouched) */
+@layer utilities {
+  .bg-primary { background-color: var(--primary); }
+  .text-primary-foreground { color: var(--primary-foreground); }
+  .bg-secondary { background-color: var(--secondary); }
+  .text-secondary-foreground { color: var(--secondary-foreground); }
+  .bg-destructive { background-color: var(--destructive); }
+  .text-destructive-foreground { color: var(--destructive-foreground); }
+  .bg-muted { background-color: var(--muted); }
+  .text-muted-foreground { color: var(--muted-foreground); }
+  .bg-card { background-color: var(--card); }
+  .text-card-foreground { color: var(--card-foreground); }
+  .border-border { border-color: var(--border); }
+  .ring-ring { --tw-ring-color: var(--ring); }
+}
 
 body {
   margin: 0;
@@ -77,6 +118,8 @@ body {
     Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: var(--background);
+  color: var(--foreground);
 }
 
 /* Custom scrollbar */

@@ -92,7 +92,7 @@ development_status:
   wts-epic-1: in-progress
   wts-1-1-project-structure-zustand-setup: done
   wts-1-2-tauri-multiwindow-wts-open: done
-  wts-1-3-six-panel-grid-layout: review
+  wts-1-3-six-panel-grid-layout: done
   wts-1-4-exchange-tab-selection: ready-for-dev
   wts-1-5-connection-status-api-failure: backlog
   wts-1-6-console-panel-basic-structure: backlog

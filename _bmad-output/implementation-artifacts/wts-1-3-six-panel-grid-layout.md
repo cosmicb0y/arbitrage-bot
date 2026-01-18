@@ -1,6 +1,6 @@
 # Story WTS-1.3: 6패널 그리드 레이아웃 구현
 
-Status: review
+Status: done
 
 ## Story
 
@@ -250,6 +250,8 @@ Claude Opus 4.5 (claude-opus-4-5-20251101)
 - 그리드 영역 클래스 (wts-area-*) 및 패널 베이스 스타일 (wts-panel) 정의
 - 연결 상태 표시기 구현 (연결됨/연결 안됨)
 - 모든 Acceptance Criteria 충족 확인
+- 리뷰 수정: shadcn Badge 적용 및 테마 토큰 정합화
+- 리뷰 수정: 그리드 행 비율 40px/60%/40% 반영
 
 ### File List
 
@@ -261,13 +263,17 @@ Claude Opus 4.5 (claude-opus-4-5-20251101)
 - apps/desktop/src/wts/panels/OrderPanel.tsx
 - apps/desktop/src/wts/panels/OpenOrdersPanel.tsx
 - apps/desktop/src/wts/panels/index.ts
+- apps/desktop/src/components/ui/badge.tsx
+- apps/desktop/src/lib/utils.ts
 
 **변경 파일:**
 - apps/desktop/src/wts/WtsWindow.tsx - 6패널 그리드 레이아웃으로 교체
 - apps/desktop/src/wts/__tests__/WtsWindow.test.tsx - 레이아웃 테스트 추가
 - apps/desktop/src/wts/__tests__/index.test.tsx - 새 레이아웃에 맞게 테스트 수정
 - apps/desktop/src/index.css - WTS 다크 테마 CSS 변수 및 그리드 스타일 추가
+- apps/desktop/src/wts/panels/ExchangePanel.tsx - 연결 상태 Badge 적용
 
 ## Change Log
 
 - 2026-01-18: Story WTS-1.3 구현 완료 - 6패널 그리드 레이아웃, 다크 테마, 플레이스홀더 패널
+- 2026-01-18: 리뷰 수정 - shadcn Badge 적용, 테마 토큰/그리드 비율 정합화
