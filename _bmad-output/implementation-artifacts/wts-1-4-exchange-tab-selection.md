@@ -1,6 +1,6 @@
 # Story WTS-1.4: 거래소 탭 및 선택 기능
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -17,31 +17,31 @@ So that **원하는 거래소로 빠르게 전환할 수 있다**.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: ExchangePanel 거래소 탭 UI 구현 (AC: #1, #3)
-  - [ ] Subtask 1.1: 6개 거래소 탭 버튼 렌더링 (Upbit, Bithumb, Binance, Coinbase, Bybit, GateIO)
-  - [ ] Subtask 1.2: 활성화된 탭 스타일 (흰색 텍스트, 하단 보더 또는 배경 하이라이트)
-  - [ ] Subtask 1.3: 비활성화된 탭 스타일 (opacity: 0.5, "Coming Soon" 툴팁)
-  - [ ] Subtask 1.4: 탭 간 간격 및 레이아웃 조정 (UX 디자인 준수)
+- [x] Task 1: ExchangePanel 거래소 탭 UI 구현 (AC: #1, #3)
+  - [x] Subtask 1.1: 6개 거래소 탭 버튼 렌더링 (Upbit, Bithumb, Binance, Coinbase, Bybit, GateIO)
+  - [x] Subtask 1.2: 활성화된 탭 스타일 (흰색 텍스트, 하단 보더 또는 배경 하이라이트)
+  - [x] Subtask 1.3: 비활성화된 탭 스타일 (opacity: 0.5, "Coming Soon" 툴팁)
+  - [x] Subtask 1.4: 탭 간 간격 및 레이아웃 조정 (UX 디자인 준수)
 
-- [ ] Task 2: Zustand 스토어 연동 (AC: #2)
-  - [ ] Subtask 2.1: Exchange 타입 확장 (6개 거래소 타입 정의)
-  - [ ] Subtask 2.2: 탭 클릭 시 `setExchange()` 호출
-  - [ ] Subtask 2.3: 활성화된 거래소 목록 상태 추가 (MVP: upbit만 활성)
+- [x] Task 2: Zustand 스토어 연동 (AC: #2)
+  - [x] Subtask 2.1: Exchange 타입 확장 (6개 거래소 타입 정의)
+  - [x] Subtask 2.2: 탭 클릭 시 `setExchange()` 호출
+  - [x] Subtask 2.3: 활성화된 거래소 목록 상태 추가 (MVP: upbit만 활성)
 
-- [ ] Task 3: 키보드 단축키 구현 (AC: #4)
-  - [ ] Subtask 3.1: 전역 키보드 이벤트 리스너 (키 1-6)
-  - [ ] Subtask 3.2: 활성화된 거래소만 전환 허용
-  - [ ] Subtask 3.3: 비활성화된 거래소 전환 시도 시 무시 또는 콘솔 로그
+- [x] Task 3: 키보드 단축키 구현 (AC: #4)
+  - [x] Subtask 3.1: 전역 키보드 이벤트 리스너 (키 1-6)
+  - [x] Subtask 3.2: 활성화된 거래소만 전환 허용
+  - [x] Subtask 3.3: 비활성화된 거래소 전환 시도 시 무시 또는 콘솔 로그
 
-- [ ] Task 4: 콘솔 로그 연동 (AC: #2)
-  - [ ] Subtask 4.1: 거래소 전환 시 콘솔에 INFO 로그 기록
-  - [ ] Subtask 4.2: 콘솔 로그 형식: `[INFO] 거래소 전환: {exchange}`
+- [x] Task 4: 콘솔 로그 연동 (AC: #2)
+  - [x] Subtask 4.1: 거래소 전환 시 콘솔에 INFO 로그 기록
+  - [x] Subtask 4.2: 콘솔 로그 형식: `[INFO] 거래소 전환: {exchange}`
 
-- [ ] Task 5: 테스트 작성 (AC: #1, #2, #3, #4)
-  - [ ] Subtask 5.1: 탭 렌더링 테스트 (6개 탭 존재 확인)
-  - [ ] Subtask 5.2: 탭 클릭 시 스토어 업데이트 테스트
-  - [ ] Subtask 5.3: 활성/비활성 탭 스타일 테스트
-  - [ ] Subtask 5.4: 키보드 단축키 동작 테스트
+- [x] Task 5: 테스트 작성 (AC: #1, #2, #3, #4)
+  - [x] Subtask 5.1: 탭 렌더링 테스트 (6개 탭 존재 확인)
+  - [x] Subtask 5.2: 탭 클릭 시 스토어 업데이트 테스트
+  - [x] Subtask 5.3: 활성/비활성 탭 스타일 테스트
+  - [x] Subtask 5.4: 키보드 단축키 동작 테스트
 
 ## Dev Notes
 
@@ -355,11 +355,43 @@ apps/desktop/src/wts/
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.5 (claude-opus-4-5-20251101)
 
 ### Debug Log References
 
+- 기존 WtsWindow.test.tsx에서 `displays selected exchange` 테스트가 UI 변경으로 실패 → 테스트 수정 완료
+
 ### Completion Notes List
 
+- Exchange 타입을 6개 거래소로 확장 (upbit, bithumb, binance, coinbase, bybit, gateio)
+- ENABLED_EXCHANGES, EXCHANGE_META, EXCHANGE_ORDER 상수 추가
+- ExchangePanel에 6개 거래소 탭 버튼 UI 구현
+- 활성/비활성 탭 스타일 구현 (MVP: Upbit만 활성)
+- 키보드 단축키 1-6 구현 (입력 필드에서는 비활성화)
+- 거래소 전환 시 콘솔 로그 연동 (INFO 레벨)
+- 19개 유닛 테스트 작성 및 전체 통과 (45 tests total)
+- TypeScript 컴파일 성공
+- 모든 Acceptance Criteria 충족
+- enabledExchanges 상태 및 setter 추가
+- 비활성 탭에 "Coming Soon" 가시 텍스트 추가
+- 연결 상태 connecting 표시 추가
+- 콘솔 로그 메시지 형식 `[INFO]` 반영
+- ExchangePanel/WtsWindow/wtsStore/index 테스트 업데이트
+- pnpm test (vitest run) 통과
+- 스토리 범위 외 Git 변경사항은 유지됨
+
 ### File List
+
+- `apps/desktop/src/wts/types.ts` (변경) - Exchange 타입 확장, 메타데이터/활성 거래소 상태
+- `apps/desktop/src/wts/stores/wtsStore.ts` (변경) - enabledExchanges 상태 및 setter 추가
+- `apps/desktop/src/wts/panels/ExchangePanel.tsx` (변경) - 탭 UI, 키보드 단축키, 콘솔 로그 연동, 상태 표시 확장
+- `apps/desktop/src/wts/__tests__/panels/ExchangePanel.test.tsx` (변경) - 탭/로그/상태 테스트 업데이트
+- `apps/desktop/src/wts/__tests__/WtsWindow.test.tsx` (변경) - 스토어 목 업데이트
+- `apps/desktop/src/wts/__tests__/stores/wtsStore.test.ts` (변경) - enabledExchanges 테스트 추가
+- `apps/desktop/src/wts/__tests__/index.test.tsx` (변경) - 스토어 목 업데이트
+
+## Change Log
+
+- 2026-01-19: Story WTS-1.4 구현 완료 - 거래소 탭 선택 기능 구현
+- 2026-01-19: 코드 리뷰 수정 - 활성 거래소 상태/Connecting 표시/Coming Soon 텍스트/테스트 보강
 

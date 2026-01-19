@@ -1,6 +1,6 @@
 # Story 5.1: 새 마켓 가격 데이터 수신 확인
 
-Status: ready-for-dev
+Status: completed
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -20,30 +20,30 @@ So that **구독이 성공적으로 완료되었음을 검증할 수 있다**.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: FeedHandler 새 마켓 파싱 검증 (AC: #1)
-  - [ ] Subtask 1.1: 동적 구독된 마켓의 심볼이 기존 FeedHandler에서 올바르게 파싱되는지 단위 테스트 작성
-  - [ ] Subtask 1.2: 거래소별 어댑터(BinanceAdapter, UpbitAdapter 등)가 새 심볼을 처리할 수 있는지 확인
-  - [ ] Subtask 1.3: pair_id 매핑이 동적으로 생성되는지 검증 (`symbol_to_pair_id` 함수 활용)
+- [x] Task 1: FeedHandler 새 마켓 파싱 검증 (AC: #1)
+  - [x] Subtask 1.1: 동적 구독된 마켓의 심볼이 기존 FeedHandler에서 올바르게 파싱되는지 단위 테스트 작성
+  - [x] Subtask 1.2: 거래소별 어댑터(BinanceAdapter, UpbitAdapter 등)가 새 심볼을 처리할 수 있는지 확인
+  - [x] Subtask 1.3: pair_id 매핑이 동적으로 생성되는지 검증 (`symbol_to_pair_id` 함수 활용)
 
-- [ ] Task 2: PriceAggregator 저장 검증 (AC: #2)
-  - [ ] Subtask 2.1: `PriceAggregator.update()` 호출 시 새 마켓 가격이 저장되는지 테스트
-  - [ ] Subtask 2.2: `get_price(exchange, pair_id)` 로 새 마켓 가격 조회 가능 확인
-  - [ ] Subtask 2.3: 동시 다중 거래소 가격 업데이트 시 데이터 정합성 검증
+- [x] Task 2: PriceAggregator 저장 검증 (AC: #2)
+  - [x] Subtask 2.1: `PriceAggregator.update()` 호출 시 새 마켓 가격이 저장되는지 테스트
+  - [x] Subtask 2.2: `get_price(exchange, pair_id)` 로 새 마켓 가격 조회 가능 확인
+  - [x] Subtask 2.3: 동시 다중 거래소 가격 업데이트 시 데이터 정합성 검증
 
-- [ ] Task 3: End-to-End 구독 흐름 타이밍 검증 (AC: #3)
-  - [ ] Subtask 3.1: MarketDiscovery → SubscriptionManager → WsClient → FeedHandler 전체 흐름 타이밍 측정 로직 추가
-  - [ ] Subtask 3.2: 구독 완료 시간이 10초 이내인지 검증하는 통합 테스트 작성
-  - [ ] Subtask 3.3: 타이밍 초과 시 WARN 로그 출력
+- [x] Task 3: End-to-End 구독 흐름 타이밍 검증 (AC: #3)
+  - [x] Subtask 3.1: MarketDiscovery → SubscriptionManager → WsClient → FeedHandler 전체 흐름 타이밍 측정 로직 추가
+  - [x] Subtask 3.2: 구독 완료 시간이 10초 이내인지 검증하는 통합 테스트 작성
+  - [x] Subtask 3.3: 타이밍 초과 시 WARN 로그 출력
 
-- [ ] Task 4: OpportunityDetector 통합 (AC: #4)
-  - [ ] Subtask 4.1: `OpportunityDetector.register_symbol()` 호출로 새 마켓 등록 확인
-  - [ ] Subtask 4.2: `update_price_with_bid_ask()` 호출 시 PremiumMatrix 자동 생성 검증
-  - [ ] Subtask 4.3: 새 마켓의 `get_matrix(pair_id)` 조회 가능 확인
+- [x] Task 4: OpportunityDetector 통합 (AC: #4)
+  - [x] Subtask 4.1: `OpportunityDetector.register_symbol()` 호출로 새 마켓 등록 확인
+  - [x] Subtask 4.2: `update_price_with_bid_ask()` 호출 시 PremiumMatrix 자동 생성 검증
+  - [x] Subtask 4.3: 새 마켓의 `get_matrix(pair_id)` 조회 가능 확인
 
-- [ ] Task 5: 구독 성공 INFO 로깅 (AC: #5)
-  - [ ] Subtask 5.1: `tracing::info!` 매크로를 사용한 구독 성공 로깅 구현
-  - [ ] Subtask 5.2: 로그 포맷이 `[INFO] New market subscribed: {symbol} on [{exchanges}]` 형식 준수 확인
-  - [ ] Subtask 5.3: 기존 Epic 4 로깅 패턴과 일관성 유지
+- [x] Task 5: 구독 성공 INFO 로깅 (AC: #5)
+  - [x] Subtask 5.1: `tracing::info!` 매크로를 사용한 구독 성공 로깅 구현
+  - [x] Subtask 5.2: 로그 포맷이 `[INFO] New market subscribed: {symbol} on [{exchanges}]` 형식 준수 확인
+  - [x] Subtask 5.3: 기존 Epic 4 로깅 패턴과 일관성 유지
 
 ## Dev Notes
 
@@ -167,11 +167,40 @@ pub async fn update_subscriptions(&self, exchange: Exchange, new_markets: &[Stri
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.5 (claude-opus-4-5-20251101)
 
 ### Debug Log References
 
 ### Completion Notes List
 
+- ✅ Task 1 완료: FeedHandler 새 마켓 파싱 검증
+  - BinanceAdapter/UpbitAdapter에 동적 마켓 파싱 테스트 7개 추가
+  - symbol_to_pair_id() 함수를 사용한 동적 pair_id 생성 검증
+  - 새 심볼(DOGE, XRP, SHIB, PEPE) 파싱 테스트 통과
+- ✅ Task 2 완료: PriceAggregator 저장 검증
+  - 동적 마켓 가격 저장/조회 테스트 4개 추가
+  - 멀티스레드 동시 업데이트 데이터 정합성 검증
+  - DashMap 기반 lock-free 동작 확인
+- ✅ Task 3 완료: End-to-End 구독 흐름 타이밍 검증
+  - SubscriptionEvent에 elapsed_ms 필드 추가
+  - subscribed_with_timing() 생성자 추가
+  - is_within_timing_threshold() 메서드로 NFR3 (10초) 검증
+  - 타이밍 초과 시 WARN 로그 출력 구현
+  - 타이밍 관련 단위 테스트 5개 추가
+- ✅ Task 4 완료: OpportunityDetector 통합
+  - register_symbol(), get_or_register_pair_id() 동작 검증
+  - update_price_with_bid_ask() 시 PremiumMatrix 자동 생성 확인
+  - get_matrix(), registered_pair_ids(), pair_id_to_symbol() 테스트 추가
+- ✅ Task 5 완료: 구독 성공 INFO 로깅
+  - SubscriptionEvent.log() 메서드로 `[INFO] New market subscribed: {symbol} on [{exchanges}]` 포맷 로깅
+  - tracing::info! 매크로 사용, Epic 4 로깅 패턴과 일관성 유지
+  - 로깅 포맷 테스트 2개 추가
+
 ### File List
+
+- crates/feeds/src/adapter/binance.rs (테스트 추가)
+- crates/feeds/src/adapter/upbit.rs (테스트 추가)
+- crates/feeds/src/aggregator.rs (테스트 추가)
+- crates/feeds/src/subscription.rs (타이밍 기능 및 테스트 추가)
+- crates/engine/src/detector.rs (테스트 추가 및 수정)
 
