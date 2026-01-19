@@ -112,9 +112,13 @@ pub async fn run_exchange_rate_updater(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_get_usd_krw_rate() {
+        let _guard = TEST_LOCK.lock().unwrap();
         EXCHANGE_RATE.store(1400_50, Ordering::Relaxed);
         RATE_LOADED.store(true, Ordering::Relaxed);
         let rate = get_usd_krw_rate();
@@ -124,6 +128,9 @@ mod tests {
 
     #[test]
     fn test_rate_not_loaded() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        EXCHANGE_RATE.store(0, Ordering::Relaxed);
+        API_RATE.store(0, Ordering::Relaxed);
         RATE_LOADED.store(false, Ordering::Relaxed);
         let rate = get_usd_krw_rate();
         assert!(rate.is_none());

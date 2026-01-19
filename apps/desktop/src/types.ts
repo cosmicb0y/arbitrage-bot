@@ -34,6 +34,7 @@ export interface UsdlikePremium {
 export interface ArbitrageOpportunity {
   id: number;
   symbol: string;
+  pair_id: number;
   source_exchange: string;
   target_exchange: string;
   // Quote currency at source exchange (e.g., "USDT", "USDC", "KRW")

@@ -196,6 +196,9 @@ pub struct ArbitrageOpportunity {
     /// Quote currency at target exchange (e.g., USDT, USDC, KRW)
     pub target_quote: QuoteCurrency,
     pub asset: Asset,
+    /// Pair ID for the market (symbol_to_pair_id)
+    #[serde(default)]
+    pub pair_id: u32,
     pub source_price: u64,
     pub target_price: u64,
     /// Orderbook depth at source (ask size - how much we can buy)
@@ -375,6 +378,7 @@ impl ArbitrageOpportunity {
             source_quote,
             target_quote,
             asset,
+            pair_id: 0,
             source_price: source_price.0,
             target_price: target_price.0,
             source_depth: 0,
@@ -412,6 +416,12 @@ impl ArbitrageOpportunity {
     pub fn with_depth(mut self, source_depth: FixedPoint, target_depth: FixedPoint) -> Self {
         self.source_depth = source_depth.0;
         self.target_depth = target_depth.0;
+        self
+    }
+
+    /// Set pair_id for the opportunity (builder pattern).
+    pub fn with_pair_id(mut self, pair_id: u32) -> Self {
+        self.pair_id = pair_id;
         self
     }
 

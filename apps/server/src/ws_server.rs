@@ -74,6 +74,7 @@ pub struct WsUsdlikePremium {
 pub struct WsOpportunityData {
     pub id: u64,
     pub symbol: String,
+    pub pair_id: u32,
     pub source_exchange: String,
     pub target_exchange: String,
     /// Quote currency at source exchange (e.g., "USDT", "USDC", "KRW")
@@ -565,6 +566,7 @@ async fn collect_opportunities(state: &SharedState) -> Vec<WsOpportunityData> {
             WsOpportunityData {
                 id: opp.id,
                 symbol,
+                pair_id: opp.pair_id,
                 source_exchange: source_ex,
                 target_exchange: target_ex,
                 source_quote: opp.source_quote.as_str().to_string(),
@@ -734,6 +736,7 @@ pub fn broadcast_opportunity(
     let ws_opp = WsOpportunityData {
         id: opp.id,
         symbol,
+        pair_id: opp.pair_id,
         source_exchange: source_ex,
         target_exchange: target_ex,
         source_quote: opp.source_quote.as_str().to_string(),
@@ -880,6 +883,43 @@ pub fn broadcast_wallet_status(
     };
 
     let _ = tx.send(WsServerMessage::WalletStatus(data));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+    use crate::state::create_state;
+    use arbitrage_core::{ArbitrageOpportunity, Asset};
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn test_broadcast_opportunity_includes_pair_id() {
+        let (state, _rx) = create_state(AppConfig::default());
+        let (tx, mut rx) = broadcast::channel(1);
+
+        let asset = Asset::from_symbol("DOGE");
+        let opp = ArbitrageOpportunity::new(
+            1,
+            Exchange::Binance,
+            Exchange::Coinbase,
+            asset,
+            FixedPoint::from_f64(0.10),
+            FixedPoint::from_f64(0.12),
+        )
+        .with_pair_id(42);
+
+        broadcast_opportunity(&tx, &state, &opp);
+
+        let msg = rx.recv().await.expect("opportunity broadcast");
+        match msg {
+            WsServerMessage::Opportunity(data) => {
+                assert_eq!(data.pair_id, 42);
+                assert_eq!(data.symbol, "DOGE");
+            }
+            _ => panic!("unexpected message type"),
+        }
+    }
 }
 
 /// Broadcast premium matrix for a symbol to all clients.

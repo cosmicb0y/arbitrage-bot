@@ -280,6 +280,7 @@ struct UpbitNetworkStatus {
 async fn fetch_upbit_wallet_status() -> Result<ExchangeWalletStatus, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
+        .no_proxy()
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 
@@ -392,6 +393,7 @@ struct CoinbaseNetwork {
 async fn fetch_coinbase_wallet_status() -> Result<ExchangeWalletStatus, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
+        .no_proxy()
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 
