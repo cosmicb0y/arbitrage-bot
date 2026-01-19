@@ -74,3 +74,13 @@ pub enum OrderSide {
     Buy,
     Sell,
 }
+
+/// 연결 체크 결과 (Tauri 명령 응답)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionCheckResult {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}

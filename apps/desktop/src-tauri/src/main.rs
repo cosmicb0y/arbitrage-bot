@@ -71,6 +71,8 @@ fn main() {
             commands::remove_symbol_mapping,
             commands::save_symbol_mappings,
             wts::wts_open_window,
+            wts::wts_check_connection,
+            wts::wts_get_balance,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

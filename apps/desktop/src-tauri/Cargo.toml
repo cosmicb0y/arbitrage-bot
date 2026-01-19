@@ -35,6 +35,11 @@ hex = "0.4"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 rand = "0.8"
 
+# JWT for Upbit API authentication
+jsonwebtoken = "9"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+
 # Utilities
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
