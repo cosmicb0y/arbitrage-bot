@@ -1,6 +1,9 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useBalanceStore } from '../stores/balanceStore';
 import { useWtsStore } from '../stores/wtsStore';
+import { useConsoleStore } from '../stores/consoleStore';
 import { formatCrypto, formatKrw, formatNumber } from '../utils/formatters';
 import type { BalanceEntry } from '../types';
 
@@ -24,6 +27,49 @@ export function BalancePanel({ className = '' }: BalancePanelProps) {
     if (connectionStatus === 'connected') {
       fetchBalance();
     }
+  }, [connectionStatus, selectedExchange, fetchBalance]);
+
+  // 수동 갱신 핸들러
+  const handleManualRefresh = () => {
+    useConsoleStore.getState().addLog('INFO', 'BALANCE', '수동 잔고 갱신 요청');
+    fetchBalance();
+  };
+
+  // 자동 갱신 이벤트 리스너 (주문 체결 시)
+  const unlistenRef = useRef<UnlistenFn | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+    if (connectionStatus !== 'connected') {
+      return () => {
+        isActive = false;
+      };
+    }
+
+    const setupListener = async () => {
+      const unlisten = await listen('wts:order:filled', () => {
+        useConsoleStore.getState().addLog('INFO', 'BALANCE', '주문 체결로 인한 자동 잔고 갱신');
+        fetchBalance();
+      });
+      if (!isActive) {
+        unlisten();
+        return;
+      }
+      if (unlistenRef.current) {
+        unlistenRef.current();
+      }
+      unlistenRef.current = unlisten;
+    };
+
+    setupListener();
+
+    return () => {
+      isActive = false;
+      if (unlistenRef.current) {
+        unlistenRef.current();
+        unlistenRef.current = null;
+      }
+    };
   }, [connectionStatus, selectedExchange, fetchBalance]);
 
   // 0 잔고 필터링
@@ -54,15 +100,27 @@ export function BalancePanel({ className = '' }: BalancePanelProps) {
     >
       <div className="wts-panel-header flex justify-between items-center">
         <span>Balances</span>
-        <label className="flex items-center gap-1 text-xs cursor-pointer">
-          <input
-            type="checkbox"
-            checked={hideZeroBalances}
-            onChange={(e) => setHideZeroBalances(e.target.checked)}
-            className="w-3 h-3"
-          />
-          <span className="text-wts-muted">0 잔고 숨기기</span>
-        </label>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleManualRefresh}
+            disabled={isLoading}
+            className="p-1 hover:bg-wts-tertiary rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="잔고 새로고침"
+          >
+            <RefreshCw
+              className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`}
+            />
+          </button>
+          <label className="flex items-center gap-1 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              checked={hideZeroBalances}
+              onChange={(e) => setHideZeroBalances(e.target.checked)}
+              className="w-3 h-3"
+            />
+            <span className="text-wts-muted">0 잔고 숨기기</span>
+          </label>
+        </div>
       </div>
       <div className="wts-panel-content flex-1 overflow-y-auto">
         {isLoading ? (

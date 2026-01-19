@@ -1,17 +1,26 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { listen } from '@tauri-apps/api/event';
 import { BalancePanel } from '../../panels/BalancePanel';
 import { useBalanceStore } from '../../stores/balanceStore';
 import { useWtsStore } from '../../stores/wtsStore';
+import { useConsoleStore } from '../../stores/consoleStore';
 import type { BalanceEntry } from '../../types';
+
+// Mock Tauri event API
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(),
+}));
 
 // Mock stores
 vi.mock('../../stores/balanceStore');
 vi.mock('../../stores/wtsStore');
+vi.mock('../../stores/consoleStore');
 
 describe('BalancePanel', () => {
   const mockFetchBalance = vi.fn();
   const mockSetHideZeroBalances = vi.fn();
+  const mockAddLog = vi.fn();
 
   const mockBalances: BalanceEntry[] = [
     {
@@ -43,6 +52,10 @@ describe('BalancePanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+    // Default mock for listen
+    const mockUnlisten = vi.fn();
+    vi.mocked(listen).mockResolvedValue(mockUnlisten);
+
     // Default WTS store mock
     vi.mocked(useWtsStore).mockReturnValue({
       selectedExchange: 'upbit',
@@ -59,6 +72,18 @@ describe('BalancePanel', () => {
       fetchBalance: mockFetchBalance,
       setHideZeroBalances: mockSetHideZeroBalances,
     } as ReturnType<typeof useBalanceStore>);
+
+    // Default console store mock
+    vi.mocked(useConsoleStore).mockReturnValue({
+      logs: [],
+      addLog: mockAddLog,
+      clearLogs: vi.fn(),
+    } as ReturnType<typeof useConsoleStore>);
+
+    // Mock getState to return addLog
+    (useConsoleStore as unknown as { getState: () => { addLog: typeof mockAddLog } }).getState = () => ({
+      addLog: mockAddLog,
+    });
   });
 
   describe('rendering', () => {
@@ -309,6 +334,65 @@ describe('BalancePanel', () => {
     });
   });
 
+  describe('refresh button', () => {
+    it('should render refresh button with aria-label', () => {
+      render(<BalancePanel />);
+      expect(screen.getByLabelText('잔고 새로고침')).toBeTruthy();
+    });
+
+    it('should call fetchBalance when refresh button is clicked', async () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        connectionStatus: 'connected',
+      } as ReturnType<typeof useWtsStore>);
+
+      render(<BalancePanel />);
+
+      // Clear the initial call from useEffect
+      mockFetchBalance.mockClear();
+
+      const refreshButton = screen.getByLabelText('잔고 새로고침');
+      fireEvent.click(refreshButton);
+
+      expect(mockFetchBalance).toHaveBeenCalledTimes(1);
+    });
+
+    it('should disable refresh button when isLoading is true', () => {
+      vi.mocked(useBalanceStore).mockReturnValue({
+        balances: [],
+        previousBalances: [],
+        isLoading: true,
+        hideZeroBalances: false,
+        error: null,
+        fetchBalance: mockFetchBalance,
+        setHideZeroBalances: mockSetHideZeroBalances,
+      } as ReturnType<typeof useBalanceStore>);
+
+      render(<BalancePanel />);
+
+      const refreshButton = screen.getByLabelText('잔고 새로고침');
+      expect(refreshButton).toHaveProperty('disabled', true);
+    });
+
+    it('should show spinning animation on refresh icon when loading', () => {
+      vi.mocked(useBalanceStore).mockReturnValue({
+        balances: [],
+        previousBalances: [],
+        isLoading: true,
+        hideZeroBalances: false,
+        error: null,
+        fetchBalance: mockFetchBalance,
+        setHideZeroBalances: mockSetHideZeroBalances,
+      } as ReturnType<typeof useBalanceStore>);
+
+      render(<BalancePanel />);
+
+      const refreshButton = screen.getByLabelText('잔고 새로고침');
+      const icon = refreshButton.querySelector('svg');
+      expect(icon?.classList.contains('animate-spin')).toBe(true);
+    });
+  });
+
   describe('balance change highlight', () => {
     it('should highlight row and display change amount when balance changes', () => {
       vi.mocked(useBalanceStore).mockReturnValue({
@@ -344,6 +428,154 @@ describe('BalancePanel', () => {
       expect(screen.getByText('+0.1 BTC')).toBeTruthy();
       const row = screen.getByText('BTC').closest('tr');
       expect(row?.className).toContain('animate-highlight-green');
+    });
+  });
+
+  describe('auto refresh event listener', () => {
+    it('should set up event listener for wts:order:filled when connected', async () => {
+      const mockUnlisten = vi.fn();
+      vi.mocked(listen).mockResolvedValue(mockUnlisten);
+
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        connectionStatus: 'connected',
+      } as ReturnType<typeof useWtsStore>);
+
+      render(<BalancePanel />);
+
+      await waitFor(() => {
+        expect(listen).toHaveBeenCalledWith('wts:order:filled', expect.any(Function));
+      });
+    });
+
+    it('should clean up event listener on unmount', async () => {
+      const mockUnlisten = vi.fn();
+      vi.mocked(listen).mockResolvedValue(mockUnlisten);
+
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        connectionStatus: 'connected',
+      } as ReturnType<typeof useWtsStore>);
+
+      const { unmount } = render(<BalancePanel />);
+
+      // Wait for listener to be set up
+      await waitFor(() => {
+        expect(listen).toHaveBeenCalled();
+      });
+
+      // Unmount component
+      unmount();
+
+      // Verify cleanup was called
+      await waitFor(() => {
+        expect(mockUnlisten).toHaveBeenCalled();
+      });
+    });
+
+    it('should not set up event listener when disconnected', async () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        connectionStatus: 'disconnected',
+      } as ReturnType<typeof useWtsStore>);
+
+      render(<BalancePanel />);
+
+      // Small wait to ensure useEffect has had time to run
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(listen).not.toHaveBeenCalled();
+    });
+
+    it('should call fetchBalance when order:filled event is received', async () => {
+      let eventCallback: ((event: unknown) => void) | undefined;
+      vi.mocked(listen).mockImplementation(async (eventName, callback) => {
+        if (eventName === 'wts:order:filled') {
+          eventCallback = callback;
+        }
+        return vi.fn();
+      });
+
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        connectionStatus: 'connected',
+      } as ReturnType<typeof useWtsStore>);
+
+      render(<BalancePanel />);
+
+      // Wait for listener to be set up
+      await waitFor(() => {
+        expect(listen).toHaveBeenCalledWith('wts:order:filled', expect.any(Function));
+      });
+
+      // Clear initial fetchBalance call
+      mockFetchBalance.mockClear();
+
+      // Simulate order:filled event
+      if (eventCallback) {
+        eventCallback({ payload: {} });
+      }
+
+      expect(mockFetchBalance).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('console logging', () => {
+    it('should log INFO message when manual refresh button is clicked', async () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        connectionStatus: 'connected',
+      } as ReturnType<typeof useWtsStore>);
+
+      render(<BalancePanel />);
+
+      // Clear any logs from initial render
+      mockAddLog.mockClear();
+
+      const refreshButton = screen.getByLabelText('잔고 새로고침');
+      fireEvent.click(refreshButton);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'BALANCE',
+        '수동 잔고 갱신 요청'
+      );
+    });
+
+    it('should log INFO message when auto refresh is triggered by order:filled event', async () => {
+      let eventCallback: ((event: unknown) => void) | undefined;
+      vi.mocked(listen).mockImplementation(async (eventName, callback) => {
+        if (eventName === 'wts:order:filled') {
+          eventCallback = callback;
+        }
+        return vi.fn();
+      });
+
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        connectionStatus: 'connected',
+      } as ReturnType<typeof useWtsStore>);
+
+      render(<BalancePanel />);
+
+      // Wait for listener to be set up
+      await waitFor(() => {
+        expect(listen).toHaveBeenCalledWith('wts:order:filled', expect.any(Function));
+      });
+
+      // Clear any logs from initial render
+      mockAddLog.mockClear();
+
+      // Simulate order:filled event
+      if (eventCallback) {
+        eventCallback({ payload: {} });
+      }
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'BALANCE',
+        '주문 체결로 인한 자동 잔고 갱신'
+      );
     });
   });
 });
