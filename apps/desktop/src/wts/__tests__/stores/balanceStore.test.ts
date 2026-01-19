@@ -19,6 +19,8 @@ describe('balanceStore', () => {
       isLoading: false,
       lastUpdated: null,
       hideZeroBalances: false,
+      autoRefreshEnabled: true,
+      pendingRefresh: false,
       error: null,
     });
     useConsoleStore.setState({ logs: [] });
@@ -53,6 +55,21 @@ describe('balanceStore', () => {
       const { setHideZeroBalances } = useBalanceStore.getState();
       setHideZeroBalances(false);
       expect(useBalanceStore.getState().hideZeroBalances).toBe(false);
+    });
+  });
+
+  describe('auto refresh toggle', () => {
+    it('should disable auto refresh', () => {
+      const { disableAutoRefresh } = useBalanceStore.getState();
+      disableAutoRefresh();
+      expect(useBalanceStore.getState().autoRefreshEnabled).toBe(false);
+    });
+
+    it('should enable auto refresh', () => {
+      useBalanceStore.setState({ autoRefreshEnabled: false });
+      const { enableAutoRefresh } = useBalanceStore.getState();
+      enableAutoRefresh();
+      expect(useBalanceStore.getState().autoRefreshEnabled).toBe(true);
     });
   });
 

@@ -17,9 +17,17 @@ export interface BalanceState {
   lastUpdated: number | null;
   /** 0 잔고 숨기기 옵션 */
   hideZeroBalances: boolean;
+  /** 자동 갱신 활성화 여부 */
+  autoRefreshEnabled: boolean;
+  /** 대기 중인 잔고 갱신 요청 */
+  pendingRefresh: boolean;
   /** 에러 메시지 */
   error: string | null;
 
+  /** 자동 갱신 활성화 */
+  enableAutoRefresh: () => void;
+  /** 자동 갱신 비활성화 */
+  disableAutoRefresh: () => void;
   /** 잔고 조회 */
   fetchBalance: () => Promise<void>;
   /** 0 잔고 숨기기 옵션 설정 */
@@ -36,9 +44,18 @@ export const useBalanceStore = create<BalanceState>()((set, get) => ({
   isLoading: false,
   lastUpdated: null,
   hideZeroBalances: false,
+  autoRefreshEnabled: true,
+  pendingRefresh: false,
   error: null,
 
+  enableAutoRefresh: () => set({ autoRefreshEnabled: true }),
+  disableAutoRefresh: () => set({ autoRefreshEnabled: false }),
   fetchBalance: async () => {
+    if (get().isLoading) {
+      set({ pendingRefresh: true });
+      return;
+    }
+
     set({ isLoading: true, error: null });
 
     try {
@@ -49,7 +66,6 @@ export const useBalanceStore = create<BalanceState>()((set, get) => ({
           previousBalances: state.balances,
           balances: result.data!,
           lastUpdated: Date.now(),
-          isLoading: false,
         }));
 
         useConsoleStore.getState().addLog(
@@ -59,7 +75,7 @@ export const useBalanceStore = create<BalanceState>()((set, get) => ({
         );
       } else {
         const errorMsg = result.error?.message || '알 수 없는 오류';
-        set({ error: errorMsg, isLoading: false });
+        set({ error: errorMsg });
 
         useConsoleStore.getState().addLog(
           'ERROR',
@@ -69,13 +85,19 @@ export const useBalanceStore = create<BalanceState>()((set, get) => ({
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      set({ error: errorMsg, isLoading: false });
+      set({ error: errorMsg });
 
       useConsoleStore.getState().addLog(
         'ERROR',
         'BALANCE',
         `잔고 조회 실패: ${errorMsg}`
       );
+    } finally {
+      set({ isLoading: false });
+      if (get().pendingRefresh) {
+        set({ pendingRefresh: false });
+        await get().fetchBalance();
+      }
     }
   },
 
