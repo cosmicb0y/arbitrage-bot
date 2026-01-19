@@ -101,6 +101,11 @@ export interface WtsState {
   /** 마켓 선택 */
   setMarket: (market: string | null) => void;
 
+  /** 사용 가능한 마켓 목록 */
+  availableMarkets: readonly Market[];
+  /** 마켓 목록 설정 */
+  setAvailableMarkets: (markets: readonly Market[]) => void;
+
   /** 연결 상태 */
   connectionStatus: ConnectionStatus;
   /** 연결 상태 설정 */
@@ -181,6 +186,37 @@ export interface OrderFormState {
   /** 가격 (지정가 주문 시) */
   price: string;
 }
+
+// ============================================================================
+// Market Types
+// ============================================================================
+
+/** 마켓 코드 (예: "KRW-BTC") */
+export type MarketCode = `${string}-${string}`;
+
+/** 마켓 정보 */
+export interface Market {
+  /** 마켓 코드 (예: "KRW-BTC") */
+  code: MarketCode;
+  /** 기준 화폐 (예: "BTC") */
+  base: string;
+  /** 결제 화폐 (예: "KRW") */
+  quote: string;
+  /** 표시명 (예: "비트코인") */
+  displayName?: string;
+}
+
+/** Upbit MVP 마켓 목록 */
+export const UPBIT_DEFAULT_MARKETS: readonly Market[] = [
+  { code: 'KRW-BTC', base: 'BTC', quote: 'KRW', displayName: '비트코인' },
+  { code: 'KRW-ETH', base: 'ETH', quote: 'KRW', displayName: '이더리움' },
+  { code: 'KRW-XRP', base: 'XRP', quote: 'KRW', displayName: '리플' },
+  { code: 'KRW-SOL', base: 'SOL', quote: 'KRW', displayName: '솔라나' },
+  { code: 'KRW-DOGE', base: 'DOGE', quote: 'KRW', displayName: '도지코인' },
+  { code: 'KRW-ADA', base: 'ADA', quote: 'KRW', displayName: '에이다' },
+  { code: 'KRW-AVAX', base: 'AVAX', quote: 'KRW', displayName: '아발란체' },
+  { code: 'KRW-DOT', base: 'DOT', quote: 'KRW', displayName: '폴카닷' },
+] as const;
 
 // ============================================================================
 // Constants
