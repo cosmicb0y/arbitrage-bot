@@ -1,6 +1,6 @@
 # Story WTS-2.2: 잔고 패널 UI 및 상태 관리
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -18,35 +18,35 @@ So that **거래 전 자산 상태를 파악할 수 있다**.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: balanceStore Zustand 스토어 생성 (AC: #3)
-  - [ ] Subtask 1.1: `apps/desktop/src/wts/stores/balanceStore.ts` 생성
-  - [ ] Subtask 1.2: BalanceState 인터페이스 정의 (balances, isLoading, lastUpdated, hideZeroBalances)
-  - [ ] Subtask 1.3: fetchBalance 액션 구현 (wts_get_balance 호출)
-  - [ ] Subtask 1.4: setHideZeroBalances 액션 구현
-  - [ ] Subtask 1.5: `stores/index.ts`에 export 추가
+- [x] Task 1: balanceStore Zustand 스토어 생성 (AC: #3)
+  - [x] Subtask 1.1: `apps/desktop/src/wts/stores/balanceStore.ts` 생성
+  - [x] Subtask 1.2: BalanceState 인터페이스 정의 (balances, isLoading, lastUpdated, hideZeroBalances)
+  - [x] Subtask 1.3: fetchBalance 액션 구현 (wts_get_balance 호출)
+  - [x] Subtask 1.4: setHideZeroBalances 액션 구현
+  - [x] Subtask 1.5: `stores/index.ts`에 export 추가
 
-- [ ] Task 2: BalancePanel 컴포넌트 구현 (AC: #1, #2)
-  - [ ] Subtask 2.1: `apps/desktop/src/wts/panels/BalancePanel.tsx` 전면 구현
-  - [ ] Subtask 2.2: balanceStore에서 데이터 구독
-  - [ ] Subtask 2.3: 자산별 행 렌더링 (currency, balance, locked, avg_buy_price)
-  - [ ] Subtask 2.4: KRW 평가금액 계산 및 표시 (balance * avg_buy_price)
-  - [ ] Subtask 2.5: 0 잔고 필터링 토글 버튼 추가
+- [x] Task 2: BalancePanel 컴포넌트 구현 (AC: #1, #2)
+  - [x] Subtask 2.1: `apps/desktop/src/wts/panels/BalancePanel.tsx` 전면 구현
+  - [x] Subtask 2.2: balanceStore에서 데이터 구독
+  - [x] Subtask 2.3: 자산별 행 렌더링 (currency, balance, locked, avg_buy_price)
+  - [x] Subtask 2.4: KRW 평가금액 계산 및 표시 (balance * avg_buy_price)
+  - [x] Subtask 2.5: 0 잔고 필터링 토글 버튼 추가
 
-- [ ] Task 3: 잔고 변화 하이라이트 애니메이션 (AC: #4)
-  - [ ] Subtask 3.1: 이전 잔고와 현재 잔고 비교 로직
-  - [ ] Subtask 3.2: 증가 시 녹색 하이라이트, 감소 시 빨강 하이라이트
-  - [ ] Subtask 3.3: 2000ms 후 하이라이트 제거 (transition 사용)
-  - [ ] Subtask 3.4: 변화량 표시 (+0.05 BTC / -100,000 KRW)
+- [x] Task 3: 잔고 변화 하이라이트 애니메이션 (AC: #4)
+  - [x] Subtask 3.1: 이전 잔고와 현재 잔고 비교 로직
+  - [x] Subtask 3.2: 증가 시 녹색 하이라이트, 감소 시 빨강 하이라이트
+  - [x] Subtask 3.3: 2000ms 후 하이라이트 제거 (transition 사용)
+  - [x] Subtask 3.4: 변화량 표시 (+0.05 BTC / -100,000 KRW)
 
-- [ ] Task 4: 에러 처리 및 콘솔 로깅 (AC: #5)
-  - [ ] Subtask 4.1: API 실패 시 consoleStore.addLog('ERROR', 'BALANCE', message)
-  - [ ] Subtask 4.2: 로딩 상태 표시 (스켈레톤 또는 스피너)
-  - [ ] Subtask 4.3: 빈 상태 메시지 ("잔고 없음")
+- [x] Task 4: 에러 처리 및 콘솔 로깅 (AC: #5)
+  - [x] Subtask 4.1: API 실패 시 consoleStore.addLog('ERROR', 'BALANCE', message)
+  - [x] Subtask 4.2: 로딩 상태 표시 (스켈레톤 또는 스피너)
+  - [x] Subtask 4.3: 빈 상태 메시지 ("잔고 없음")
 
-- [ ] Task 5: 테스트 작성 (AC: #1, #2, #3, #4, #5)
-  - [ ] Subtask 5.1: `__tests__/stores/balanceStore.test.ts` 생성
-  - [ ] Subtask 5.2: `__tests__/panels/BalancePanel.test.tsx` 생성
-  - [ ] Subtask 5.3: 잔고 렌더링, 필터링, 하이라이트 테스트
+- [x] Task 5: 테스트 작성 (AC: #1, #2, #3, #4, #5)
+  - [x] Subtask 5.1: `__tests__/stores/balanceStore.test.ts` 생성
+  - [x] Subtask 5.2: `__tests__/panels/BalancePanel.test.tsx` 생성
+  - [x] Subtask 5.3: 잔고 렌더링, 필터링, 하이라이트 테스트
 
 ## Dev Notes
 
@@ -525,10 +525,36 @@ describe('BalancePanel', () => {
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.5 (claude-opus-4-5-20251101)
 
 ### Debug Log References
 
 ### Completion Notes List
 
+- **Task 1:** balanceStore Zustand 스토어 생성 완료. BalanceState 인터페이스 정의, fetchBalance/setHideZeroBalances 액션 구현, previousBalances를 통한 변화 감지 기능 추가. consoleStore 연동하여 SUCCESS/ERROR 로그 기록.
+- **Task 2:** BalancePanel 컴포넌트 전면 구현. 테이블 형태로 자산별 currency, balance, locked, 평가금액 표시. hideZeroBalances 체크박스로 0 잔고 필터링. connectionStatus === 'connected' 시 자동 잔고 조회.
+- **Task 3:** 하이라이트 애니메이션 구현. 2000ms CSS 애니메이션 (highlightGreen/highlightRed), 증가 시 녹색, 감소 시 빨강 하이라이트 + 변화량 표시.
+- **Task 4:** 에러 처리 및 콘솔 로깅 구현. API 실패 시 consoleStore.addLog('ERROR', 'BALANCE', message), 로딩 시 스켈레톤 표시, 빈 상태 시 "잔고 없음" 메시지.
+- **Task 5:** 테스트 작성 완료. balanceStore.test.ts 12개 테스트, BalancePanel.test.tsx 17개 테스트, formatters.test.ts에 formatCrypto/formatKrw/formatNumber 테스트 12개 추가.
+- **Review Fixes:** 평균 매수가 컬럼 추가, 변화량 단위 표기(+BTC/-KRW), 잔고 변화 감지에 locked 포함, 거래소 전환 시 재조회, BalancePanel 변화량 하이라이트 테스트 보강.
+
 ### File List
+
+**신규 파일:**
+- apps/desktop/src/wts/stores/balanceStore.ts
+- apps/desktop/src/wts/__tests__/stores/balanceStore.test.ts
+- apps/desktop/src/wts/__tests__/panels/BalancePanel.test.tsx
+
+**변경 파일:**
+- apps/desktop/src/wts/stores/index.ts
+- apps/desktop/src/wts/panels/BalancePanel.tsx
+- apps/desktop/src/wts/utils/formatters.ts
+- apps/desktop/src/index.css
+- apps/desktop/src/wts/__tests__/utils/formatters.test.ts
+- _bmad-output/implementation-artifacts/wts-2-2-balance-panel-ui-state.md
+- _bmad-output/implementation-artifacts/sprint-status.yaml
+
+## Change Log
+
+- 2026-01-19: Story WTS-2.2 구현 완료 - balanceStore 생성, BalancePanel 전면 구현, 하이라이트 애니메이션 추가, 에러 처리 및 로깅, 테스트 40개 작성
+- 2026-01-19: 코드리뷰 수정 - 평균 매수가 표시, 변화량 표기/감지 보완, BalancePanel 테스트 보강
