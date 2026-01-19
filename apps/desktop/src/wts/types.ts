@@ -7,11 +7,54 @@
 // Exchange Types
 // ============================================================================
 
-/** 지원 거래소 (MVP: Upbit) */
-export type Exchange = 'upbit';
+/** 지원 거래소 (전체) */
+export type Exchange =
+  | 'upbit'
+  | 'bithumb'
+  | 'binance'
+  | 'coinbase'
+  | 'bybit'
+  | 'gateio';
+
+/** 활성화된 거래소 (MVP: Upbit만) */
+export const ENABLED_EXCHANGES: readonly Exchange[] = ['upbit'] as const;
+
+/** 거래소 메타데이터 */
+export interface ExchangeMeta {
+  name: string;
+  shortKey: string;
+  keyboardShortcut: number; // 1-6
+}
+
+/** 거래소 메타데이터 맵 */
+export const EXCHANGE_META: Record<Exchange, ExchangeMeta> = {
+  upbit: { name: 'Upbit', shortKey: 'UP', keyboardShortcut: 1 },
+  bithumb: { name: 'Bithumb', shortKey: 'BT', keyboardShortcut: 2 },
+  binance: { name: 'Binance', shortKey: 'BN', keyboardShortcut: 3 },
+  coinbase: { name: 'Coinbase', shortKey: 'CB', keyboardShortcut: 4 },
+  bybit: { name: 'Bybit', shortKey: 'BY', keyboardShortcut: 5 },
+  gateio: { name: 'GateIO', shortKey: 'GT', keyboardShortcut: 6 },
+};
+
+/** 거래소 순서 (탭 표시 순서) */
+export const EXCHANGE_ORDER: readonly Exchange[] = [
+  'upbit',
+  'bithumb',
+  'binance',
+  'coinbase',
+  'bybit',
+  'gateio',
+] as const;
 
 /** 연결 상태 */
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
+
+/** 연결 체크 결과 (Tauri 명령 응답) */
+export interface ConnectionCheckResult {
+  success: boolean;
+  latency?: number; // ms
+  error?: string;
+}
 
 // ============================================================================
 // Console Log Types
@@ -45,6 +88,9 @@ export interface ConsoleLogEntry {
 
 /** WTS 메인 상태 */
 export interface WtsState {
+  enabledExchanges: readonly Exchange[];
+  setEnabledExchanges: (exchanges: readonly Exchange[]) => void;
+
   /** 선택된 거래소 */
   selectedExchange: Exchange;
   /** 거래소 선택 */
@@ -59,6 +105,11 @@ export interface WtsState {
   connectionStatus: ConnectionStatus;
   /** 연결 상태 설정 */
   setConnectionStatus: (status: ConnectionStatus) => void;
+
+  /** 마지막 연결 에러 메시지 */
+  lastConnectionError: string | null;
+  /** 연결 에러 설정 */
+  setConnectionError: (error: string | null) => void;
 }
 
 /** 콘솔 상태 */
@@ -74,6 +125,39 @@ export interface ConsoleState {
   ) => void;
   /** 로그 초기화 */
   clearLogs: () => void;
+}
+
+// ============================================================================
+// Balance Types (Upbit API)
+// ============================================================================
+
+/** 잔고 엔트리 (Upbit API 응답) */
+export interface BalanceEntry {
+  /** 화폐 코드 (예: "BTC", "KRW") */
+  currency: string;
+  /** 가용 잔고 */
+  balance: string;
+  /** 잠금 잔고 (미체결 주문) */
+  locked: string;
+  /** 평균 매수가 */
+  avg_buy_price: string;
+  /** 평균 매수가 수정 여부 */
+  avg_buy_price_modified: boolean;
+  /** 평가 기준 화폐 (예: "KRW") */
+  unit_currency: string;
+}
+
+/** WTS API 에러 응답 */
+export interface WtsApiErrorResponse {
+  code: string;
+  message: string;
+}
+
+/** WTS API 응답 래퍼 */
+export interface WtsApiResult<T> {
+  success: boolean;
+  data?: T;
+  error?: WtsApiErrorResponse;
 }
 
 // ============================================================================
