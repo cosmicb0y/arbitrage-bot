@@ -102,7 +102,7 @@ development_status:
   wts-epic-2: in-progress
   wts-2-1-upbit-api-auth-balance-backend: done
   wts-2-2-balance-panel-ui-state: done
-  wts-2-3-balance-manual-auto-refresh: backlog
+  wts-2-3-balance-manual-auto-refresh: done
   wts-2-4-market-selection: backlog
   wts-2-5-realtime-orderbook-websocket: backlog
   wts-2-6-orderbook-panel-ui-click-interaction: backlog
