@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { formatLogTimestamp } from '../../utils/formatters';
+import {
+  formatLogTimestamp,
+  formatCrypto,
+  formatKrw,
+  formatNumber,
+} from '../../utils/formatters';
 
 describe('formatLogTimestamp', () => {
   it('should format timestamp as HH:mm:ss.SSS', () => {
@@ -43,5 +48,73 @@ describe('formatLogTimestamp', () => {
     const result = formatLogTimestamp(date.getTime());
 
     expect(result).toContain('.123');
+  });
+});
+
+describe('formatCrypto', () => {
+  it('should format crypto amount with trailing zeros removed', () => {
+    expect(formatCrypto(0.5)).toBe('0.5');
+    expect(formatCrypto(0.12345678)).toBe('0.12345678');
+    expect(formatCrypto(0.1)).toBe('0.1');
+    expect(formatCrypto(1.0)).toBe('1');
+  });
+
+  it('should handle zero', () => {
+    expect(formatCrypto(0)).toBe('0');
+  });
+
+  it('should handle NaN and Infinity', () => {
+    expect(formatCrypto(NaN)).toBe('0');
+    expect(formatCrypto(Infinity)).toBe('0');
+    expect(formatCrypto(-Infinity)).toBe('0');
+  });
+
+  it('should respect custom decimals parameter', () => {
+    expect(formatCrypto(0.123456789, 4)).toBe('0.1235');
+    expect(formatCrypto(0.1, 2)).toBe('0.1');
+  });
+});
+
+describe('formatKrw', () => {
+  it('should format KRW amount with ₩ prefix and thousand separators', () => {
+    expect(formatKrw(25000000)).toBe('₩25,000,000');
+    expect(formatKrw(1000)).toBe('₩1,000');
+    expect(formatKrw(100)).toBe('₩100');
+  });
+
+  it('should round decimal amounts', () => {
+    expect(formatKrw(1234.56)).toBe('₩1,235');
+    expect(formatKrw(1234.4)).toBe('₩1,234');
+  });
+
+  it('should handle zero', () => {
+    expect(formatKrw(0)).toBe('₩0');
+  });
+
+  it('should handle NaN and Infinity', () => {
+    expect(formatKrw(NaN)).toBe('₩0');
+    expect(formatKrw(Infinity)).toBe('₩0');
+  });
+});
+
+describe('formatNumber', () => {
+  it('should format number with thousand separators', () => {
+    expect(formatNumber(1000000)).toBe('1,000,000');
+    expect(formatNumber(1234)).toBe('1,234');
+    expect(formatNumber(100)).toBe('100');
+  });
+
+  it('should round decimal amounts', () => {
+    expect(formatNumber(1234.56)).toBe('1,235');
+    expect(formatNumber(1234.4)).toBe('1,234');
+  });
+
+  it('should handle zero', () => {
+    expect(formatNumber(0)).toBe('0');
+  });
+
+  it('should handle NaN and Infinity', () => {
+    expect(formatNumber(NaN)).toBe('0');
+    expect(formatNumber(Infinity)).toBe('0');
   });
 });
