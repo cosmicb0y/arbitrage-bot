@@ -7,6 +7,7 @@ use crate::error::FeedError;
 use arbitrage_core::FixedPoint;
 use futures_util::future::join_all;
 use std::collections::HashMap;
+use std::time::Duration;
 use tracing::debug;
 
 /// Orderbook entry: (bid, ask, bid_size, ask_size)
@@ -14,6 +15,13 @@ pub type OrderbookEntry = (FixedPoint, FixedPoint, FixedPoint, FixedPoint);
 
 /// Result type for orderbook fetch: symbol -> OrderbookEntry
 pub type OrderbookResult = HashMap<String, OrderbookEntry>;
+
+fn build_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .no_proxy()
+        .build()
+}
 
 /// Binance REST API orderbook fetcher.
 pub struct BinanceRestFetcher;
@@ -27,7 +35,15 @@ impl BinanceRestFetcher {
     async fn fetch_all_book_tickers() -> OrderbookResult {
         let url = format!("{}/api/v3/ticker/bookTicker", Self::BASE_URL);
 
-        let response = match reqwest::get(&url).await {
+        let client = match build_client() {
+            Ok(client) => client,
+            Err(e) => {
+                debug!("Binance: Failed to build HTTP client: {}", e);
+                return HashMap::new();
+            }
+        };
+
+        let response = match client.get(&url).send().await {
             Ok(r) => r,
             Err(e) => {
                 debug!("Binance: Failed to fetch book tickers: {}", e);
@@ -132,7 +148,11 @@ impl CoinbaseRestFetcher {
     pub async fn fetch_orderbook(product_id: &str) -> Result<OrderbookEntry, FeedError> {
         let url = format!("{}/products/{}/book?level=1", Self::BASE_URL, product_id);
 
-        let response = reqwest::get(&url)
+        let client = build_client().map_err(|e| FeedError::ConnectionFailed(e.to_string()))?;
+
+        let response = client
+            .get(&url)
+            .send()
             .await
             .map_err(|e| FeedError::ConnectionFailed(e.to_string()))?;
 

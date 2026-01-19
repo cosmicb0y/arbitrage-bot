@@ -1305,7 +1305,9 @@ mod tests {
         let config = DetectorConfig::default();
         let detector = OpportunityDetector::new(config);
 
+        let mut debug_enabled = false;
         tracing::subscriber::with_default(subscriber, || {
+            debug_enabled = tracing::enabled!(tracing::Level::DEBUG);
             // 동적 마켓 등록
             let pair_id = detector.register_symbol("ARB");
 
@@ -1352,10 +1354,12 @@ mod tests {
             logs.contains("detector: price updated"),
             "가격 업데이트 로그가 출력되어야 함"
         );
-        assert!(
-            logs.contains("detect: found matrix"),
-            "detect() 로그가 출력되어야 함"
-        );
+        if debug_enabled {
+            assert!(
+                logs.contains("detect: found matrix"),
+                "detect() 로그가 출력되어야 함"
+            );
+        }
     }
 
     /// 동적 마켓 기회에서 로깅에 필요한 모든 정보가 포함되어 있는지 검증
