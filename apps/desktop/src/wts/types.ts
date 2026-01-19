@@ -224,3 +224,43 @@ export const UPBIT_DEFAULT_MARKETS: readonly Market[] = [
 
 /** 콘솔 최대 로그 수 (FIFO) */
 export const MAX_CONSOLE_LOGS = 1000;
+
+// ============================================================================
+// Orderbook Types
+// ============================================================================
+
+/** 오더북 호가 엔트리 */
+export interface OrderbookEntry {
+  /** 가격 */
+  price: number;
+  /** 수량 */
+  size: number;
+}
+
+/** 오더북 상태 */
+export interface OrderbookData {
+  /** 매도 호가 (가격 오름차순) */
+  asks: OrderbookEntry[];
+  /** 매수 호가 (가격 내림차순) */
+  bids: OrderbookEntry[];
+  /** 타임스탬프 (ms) */
+  timestamp: number | null;
+}
+
+/** Upbit 오더북 단위 (API 응답) */
+export interface UpbitOrderbookUnit {
+  ask_price: number;
+  bid_price: number;
+  ask_size: number;
+  bid_size: number;
+}
+
+/** Upbit 오더북 WebSocket 응답 */
+export interface UpbitOrderbookResponse {
+  type: 'orderbook';
+  code: string;
+  timestamp: number;
+  total_ask_size: number;
+  total_bid_size: number;
+  orderbook_units: UpbitOrderbookUnit[];
+}

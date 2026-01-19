@@ -3,6 +3,10 @@ import {
   UPBIT_DEFAULT_MARKETS,
   type Market,
   type MarketCode,
+  type OrderbookEntry,
+  type OrderbookData,
+  type UpbitOrderbookResponse,
+  type UpbitOrderbookUnit,
 } from '../types';
 
 describe('Market Types', () => {
@@ -86,6 +90,87 @@ describe('Market Types', () => {
         expect(typeof market.displayName).toBe('string');
         expect(market.displayName!.length).toBeGreaterThan(0);
       });
+    });
+  });
+});
+
+describe('Orderbook Types', () => {
+  describe('OrderbookEntry', () => {
+    it('OrderbookEntry 타입은 price, size 필수 속성을 가진다', () => {
+      const entry: OrderbookEntry = {
+        price: 50100000,
+        size: 0.5,
+      };
+
+      expect(entry.price).toBe(50100000);
+      expect(entry.size).toBe(0.5);
+    });
+  });
+
+  describe('OrderbookData', () => {
+    it('OrderbookData 타입은 asks, bids, timestamp 속성을 가진다', () => {
+      const orderbook: OrderbookData = {
+        asks: [{ price: 50100000, size: 0.5 }],
+        bids: [{ price: 50000000, size: 0.8 }],
+        timestamp: 1704067200000,
+      };
+
+      expect(orderbook.asks).toHaveLength(1);
+      expect(orderbook.bids).toHaveLength(1);
+      expect(orderbook.timestamp).toBe(1704067200000);
+    });
+
+    it('OrderbookData의 timestamp는 null일 수 있다', () => {
+      const orderbook: OrderbookData = {
+        asks: [],
+        bids: [],
+        timestamp: null,
+      };
+
+      expect(orderbook.timestamp).toBeNull();
+    });
+  });
+
+  describe('UpbitOrderbookUnit', () => {
+    it('UpbitOrderbookUnit 타입은 ask_price, bid_price, ask_size, bid_size를 가진다', () => {
+      const unit: UpbitOrderbookUnit = {
+        ask_price: 50100000,
+        bid_price: 50000000,
+        ask_size: 0.5,
+        bid_size: 0.8,
+      };
+
+      expect(unit.ask_price).toBe(50100000);
+      expect(unit.bid_price).toBe(50000000);
+      expect(unit.ask_size).toBe(0.5);
+      expect(unit.bid_size).toBe(0.8);
+    });
+  });
+
+  describe('UpbitOrderbookResponse', () => {
+    it('UpbitOrderbookResponse 타입은 type, code, timestamp, total_ask_size, total_bid_size, orderbook_units를 가진다', () => {
+      const response: UpbitOrderbookResponse = {
+        type: 'orderbook',
+        code: 'KRW-BTC',
+        timestamp: 1704067200000,
+        total_ask_size: 10.12345678,
+        total_bid_size: 8.87654321,
+        orderbook_units: [
+          {
+            ask_price: 50100000,
+            bid_price: 50000000,
+            ask_size: 0.5,
+            bid_size: 0.8,
+          },
+        ],
+      };
+
+      expect(response.type).toBe('orderbook');
+      expect(response.code).toBe('KRW-BTC');
+      expect(response.timestamp).toBe(1704067200000);
+      expect(response.total_ask_size).toBe(10.12345678);
+      expect(response.total_bid_size).toBe(8.87654321);
+      expect(response.orderbook_units).toHaveLength(1);
     });
   });
 });

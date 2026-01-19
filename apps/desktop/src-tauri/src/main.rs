@@ -73,6 +73,7 @@ fn main() {
             wts::wts_open_window,
             wts::wts_check_connection,
             wts::wts_get_balance,
+            wts::wts_get_markets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

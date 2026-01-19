@@ -4,6 +4,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Upbit 마켓 정보 (API 응답)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpbitMarket {
+    /// 마켓 코드 (예: "KRW-BTC")
+    pub market: String,
+    /// 한글명 (예: "비트코인")
+    pub korean_name: String,
+    /// 영문명 (예: "Bitcoin")
+    pub english_name: String,
+    /// 유의 종목 여부 (CAUTION, NONE 등)
+    #[serde(default)]
+    pub market_warning: Option<String>,
+}
+
 /// 잔고 엔트리 (Upbit API 응답)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BalanceEntry {

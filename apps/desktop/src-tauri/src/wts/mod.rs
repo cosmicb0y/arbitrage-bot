@@ -6,7 +6,7 @@ pub mod types;
 pub mod upbit;
 
 pub use types::*;
-pub use upbit::{BalanceEntry, WtsApiResult};
+pub use upbit::{BalanceEntry, UpbitMarket, WtsApiResult};
 
 use std::time::Instant;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -91,6 +91,18 @@ pub async fn wts_check_connection(exchange: String) -> ConnectionCheckResult {
 pub async fn wts_get_balance() -> WtsApiResult<Vec<BalanceEntry>> {
     match upbit::get_balance().await {
         Ok(balances) => WtsApiResult::ok(balances),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+/// Upbit KRW 마켓 목록을 조회합니다.
+///
+/// # Returns
+/// * `WtsApiResult<Vec<UpbitMarket>>` - 성공 시 마켓 목록, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_get_markets() -> WtsApiResult<Vec<UpbitMarket>> {
+    match upbit::get_markets().await {
+        Ok(markets) => WtsApiResult::ok(markets),
         Err(e) => WtsApiResult::err(e),
     }
 }

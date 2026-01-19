@@ -3,7 +3,7 @@
 //! Upbit 거래소 REST API 호출 클라이언트
 
 use super::auth::generate_jwt_token;
-use super::types::{BalanceEntry, UpbitApiError};
+use super::types::{BalanceEntry, UpbitApiError, UpbitMarket};
 
 /// Upbit API 기본 URL
 const UPBIT_API_BASE: &str = "https://api.upbit.com/v1";
@@ -30,6 +30,50 @@ fn load_env() {
 
 #[cfg(test)]
 fn load_env() {}
+
+/// Upbit 마켓 목록을 조회합니다 (KRW 마켓만).
+///
+/// # Returns
+/// * `Ok(Vec<UpbitMarket>)` - KRW 마켓 목록
+/// * `Err(UpbitApiError)` - API 호출 실패 시 에러
+pub async fn get_markets() -> Result<Vec<UpbitMarket>, UpbitApiError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    let response = client
+        .get(format!("{}/market/all", UPBIT_API_BASE))
+        .query(&[("isDetails", "true")])
+        .send()
+        .await
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(UpbitApiError::RateLimitExceeded);
+    }
+
+    if !response.status().is_success() {
+        let status = response.status();
+        return Err(UpbitApiError::ApiError {
+            code: "http_error".to_string(),
+            message: format!("HTTP {}", status),
+        });
+    }
+
+    let all_markets: Vec<UpbitMarket> = response
+        .json()
+        .await
+        .map_err(|e| UpbitApiError::ParseError(e.to_string()))?;
+
+    // KRW 마켓만 필터링
+    let krw_markets: Vec<UpbitMarket> = all_markets
+        .into_iter()
+        .filter(|m| m.market.starts_with("KRW-"))
+        .collect();
+
+    Ok(krw_markets)
+}
 
 /// Upbit 잔고를 조회합니다.
 ///
