@@ -8,15 +8,24 @@ vi.mock('../stores', () => ({
   useWtsStore: vi.fn(),
 }));
 
+// Mock the hooks
+vi.mock('../hooks', () => ({
+  useConnectionCheck: vi.fn(() => ({ checkConnection: vi.fn() })),
+}));
+
 describe('WtsWindow', () => {
   beforeEach(() => {
     vi.mocked(useWtsStore).mockReturnValue({
+      enabledExchanges: ['upbit'],
+      setEnabledExchanges: vi.fn(),
       selectedExchange: 'upbit',
       connectionStatus: 'disconnected',
       selectedMarket: null,
       setExchange: vi.fn(),
       setMarket: vi.fn(),
       setConnectionStatus: vi.fn(),
+      lastConnectionError: null,
+      setConnectionError: vi.fn(),
     });
   });
 
@@ -86,9 +95,12 @@ describe('WtsWindow', () => {
       expect(screen.getByText('WTS')).toBeTruthy();
     });
 
-    it('displays selected exchange', () => {
+    it('displays selected exchange as active tab', () => {
       render(<WtsWindow />);
-      expect(screen.getByText(/upbit/i)).toBeTruthy();
+      // Exchange is now displayed as tab button with shortKey (UP for Upbit)
+      const upbitTab = screen.getByText('UP').closest('button');
+      expect(upbitTab).toBeTruthy();
+      expect(upbitTab?.className).toContain('text-wts-foreground');
     });
 
     it('displays connection status indicator', () => {
@@ -98,12 +110,16 @@ describe('WtsWindow', () => {
 
     it('shows connected status when connected', () => {
       vi.mocked(useWtsStore).mockReturnValue({
+        enabledExchanges: ['upbit'],
+        setEnabledExchanges: vi.fn(),
         selectedExchange: 'upbit',
         connectionStatus: 'connected',
         selectedMarket: null,
         setExchange: vi.fn(),
         setMarket: vi.fn(),
         setConnectionStatus: vi.fn(),
+        lastConnectionError: null,
+        setConnectionError: vi.fn(),
       });
       render(<WtsWindow />);
       const status = screen.getByTestId('connection-status');

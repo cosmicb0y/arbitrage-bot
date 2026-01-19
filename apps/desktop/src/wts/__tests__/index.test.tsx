@@ -8,15 +8,24 @@ vi.mock('../stores', () => ({
   useWtsStore: vi.fn(),
 }));
 
+// Mock the hooks
+vi.mock('../hooks', () => ({
+  useConnectionCheck: vi.fn(() => ({ checkConnection: vi.fn() })),
+}));
+
 describe('WtsApp', () => {
   beforeEach(() => {
     vi.mocked(useWtsStore).mockReturnValue({
+      enabledExchanges: ['upbit'],
+      setEnabledExchanges: vi.fn(),
       selectedExchange: 'upbit',
       connectionStatus: 'disconnected',
       selectedMarket: null,
       setExchange: vi.fn(),
       setMarket: vi.fn(),
       setConnectionStatus: vi.fn(),
+      lastConnectionError: null,
+      setConnectionError: vi.fn(),
     });
   });
 
