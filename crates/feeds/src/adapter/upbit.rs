@@ -538,4 +538,73 @@ mod tests {
         assert_eq!(UpbitAdapter::from_market_code("KRW-BTC"), "BTC/KRW");
         assert_eq!(UpbitAdapter::from_market_code("KRW-ETH"), "ETH/KRW");
     }
+
+    // Story 5.1: Dynamic subscription market parsing tests (AC: #1)
+    #[test]
+    fn test_dynamic_market_parse_ticker_new_symbol() {
+        // Test parsing a dynamically subscribed market (e.g., KRW-DOGE)
+        let json = r#"{
+            "type": "ticker",
+            "code": "KRW-DOGE",
+            "trade_price": 180.5,
+            "opening_price": 175.0,
+            "high_price": 185.0,
+            "low_price": 172.0,
+            "acc_trade_volume_24h": 50000000.0,
+            "timestamp": 1700000000000
+        }"#;
+
+        let pair_id = symbol_to_pair_id("DOGE");
+        let tick = UpbitAdapter::parse_ticker(json, pair_id).unwrap();
+
+        assert_eq!(tick.exchange(), Exchange::Upbit);
+        assert_eq!(tick.pair_id(), pair_id);
+        assert!((tick.price().to_f64() - 180.5).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_dynamic_market_parse_orderbook_new_symbol() {
+        // Test parsing orderbook for dynamically subscribed market
+        let json = r#"{
+            "type": "orderbook",
+            "code": "KRW-XRP",
+            "orderbook_units": [
+                {"ask_price": 750.0, "bid_price": 748.0, "ask_size": 10000.0, "bid_size": 15000.0},
+                {"ask_price": 752.0, "bid_price": 746.0, "ask_size": 8000.0, "bid_size": 12000.0}
+            ]
+        }"#;
+
+        let pair_id = symbol_to_pair_id("XRP");
+        let tick = UpbitAdapter::parse_orderbook(json, pair_id).unwrap();
+
+        assert_eq!(tick.exchange(), Exchange::Upbit);
+        assert_eq!(tick.pair_id(), pair_id);
+        assert!((tick.bid().to_f64() - 748.0).abs() < 0.1);
+        assert!((tick.ask().to_f64() - 750.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_dynamic_market_extract_base_symbol() {
+        // Test extract_base_symbol for dynamically discovered markets
+        assert_eq!(
+            UpbitAdapter::extract_base_symbol("KRW-DOGE"),
+            Some("DOGE".to_string())
+        );
+        assert_eq!(
+            UpbitAdapter::extract_base_symbol("KRW-XRP"),
+            Some("XRP".to_string())
+        );
+        assert_eq!(
+            UpbitAdapter::extract_base_symbol("KRW-SHIB"),
+            Some("SHIB".to_string())
+        );
+    }
+
+    #[test]
+    fn test_dynamic_market_symbol_to_pair_id() {
+        // Verify symbol_to_pair_id returns same pair_id across exchanges
+        let binance_pair_id = symbol_to_pair_id("DOGE");
+        let upbit_pair_id = symbol_to_pair_id("DOGE");
+        assert_eq!(binance_pair_id, upbit_pair_id);
+    }
 }

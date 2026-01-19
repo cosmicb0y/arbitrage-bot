@@ -211,4 +211,124 @@ mod tests {
         // Fresh price should not be stale
         assert!(!aggregator.is_stale(Exchange::Binance, 1, 5000));
     }
+
+    // Story 5.1: Dynamic market price storage tests (AC: #2)
+    #[test]
+    fn test_dynamic_market_price_storage() {
+        use arbitrage_core::symbol_to_pair_id;
+
+        let aggregator = PriceAggregator::new();
+
+        // Test storing a dynamically subscribed market (DOGE)
+        let doge_pair_id = symbol_to_pair_id("DOGE");
+        let tick = create_test_tick(Exchange::Binance, doge_pair_id, 0.12345);
+        aggregator.update(tick);
+
+        // Verify price is stored and retrievable
+        let stored = aggregator.get_price(Exchange::Binance, doge_pair_id);
+        assert!(stored.is_some());
+        assert!((stored.unwrap().price().to_f64() - 0.12345).abs() < 0.00001);
+    }
+
+    #[test]
+    fn test_dynamic_market_price_retrieval_by_pair_id() {
+        use arbitrage_core::symbol_to_pair_id;
+
+        let aggregator = PriceAggregator::new();
+
+        // Store prices for multiple dynamic markets
+        let xrp_pair_id = symbol_to_pair_id("XRP");
+        let shib_pair_id = symbol_to_pair_id("SHIB");
+
+        aggregator.update(create_test_tick(Exchange::Binance, xrp_pair_id, 0.55));
+        aggregator.update(create_test_tick(Exchange::Upbit, xrp_pair_id, 0.56));
+        aggregator.update(create_test_tick(Exchange::Binance, shib_pair_id, 0.00001));
+
+        // get_price with correct pair_id works
+        let xrp_binance = aggregator.get_price(Exchange::Binance, xrp_pair_id);
+        assert!(xrp_binance.is_some());
+        assert!((xrp_binance.unwrap().price().to_f64() - 0.55).abs() < 0.001);
+
+        let xrp_upbit = aggregator.get_price(Exchange::Upbit, xrp_pair_id);
+        assert!(xrp_upbit.is_some());
+        assert!((xrp_upbit.unwrap().price().to_f64() - 0.56).abs() < 0.001);
+
+        // Different pair_id returns different prices
+        let shib = aggregator.get_price(Exchange::Binance, shib_pair_id);
+        assert!(shib.is_some());
+        assert!((shib.unwrap().price().to_f64() - 0.00001).abs() < 0.000001);
+    }
+
+    #[test]
+    fn test_dynamic_market_concurrent_multi_exchange_update() {
+        use arbitrage_core::symbol_to_pair_id;
+        use std::sync::Arc;
+        use std::thread;
+
+        let aggregator = Arc::new(PriceAggregator::new());
+        let doge_pair_id = symbol_to_pair_id("DOGE");
+
+        // Simulate concurrent updates from multiple exchanges
+        let handles: Vec<_> = vec![
+            (Exchange::Binance, 0.123),
+            (Exchange::Coinbase, 0.124),
+            (Exchange::Upbit, 0.125),
+            (Exchange::Bybit, 0.126),
+        ]
+        .into_iter()
+        .map(|(exchange, price)| {
+            let agg = Arc::clone(&aggregator);
+            thread::spawn(move || {
+                let tick = PriceTick::new(
+                    exchange,
+                    doge_pair_id,
+                    FixedPoint::from_f64(price),
+                    FixedPoint::from_f64(price - 0.001),
+                    FixedPoint::from_f64(price + 0.001),
+                );
+                agg.update(tick);
+            })
+        })
+        .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Verify all exchanges have their prices stored correctly
+        let all_prices = aggregator.get_all_prices_for_pair(doge_pair_id);
+        assert_eq!(all_prices.len(), 4);
+
+        // Verify each exchange has correct price
+        for tick in &all_prices {
+            match tick.exchange() {
+                Exchange::Binance => assert!((tick.price().to_f64() - 0.123).abs() < 0.001),
+                Exchange::Coinbase => assert!((tick.price().to_f64() - 0.124).abs() < 0.001),
+                Exchange::Upbit => assert!((tick.price().to_f64() - 0.125).abs() < 0.001),
+                Exchange::Bybit => assert!((tick.price().to_f64() - 0.126).abs() < 0.001),
+                _ => panic!("Unexpected exchange"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_dynamic_market_price_update_overwrites() {
+        use arbitrage_core::symbol_to_pair_id;
+
+        let aggregator = PriceAggregator::new();
+        let pair_id = symbol_to_pair_id("DOGE");
+
+        // First update
+        aggregator.update(create_test_tick(Exchange::Binance, pair_id, 0.10));
+        let first = aggregator.get_price(Exchange::Binance, pair_id).unwrap();
+        assert!((first.price().to_f64() - 0.10).abs() < 0.001);
+
+        // Second update should overwrite
+        aggregator.update(create_test_tick(Exchange::Binance, pair_id, 0.15));
+        let second = aggregator.get_price(Exchange::Binance, pair_id).unwrap();
+        assert!((second.price().to_f64() - 0.15).abs() < 0.001);
+
+        // Should still only have 1 entry for this pair/exchange
+        assert_eq!(aggregator.len(), 1);
+    }
 }

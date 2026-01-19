@@ -458,4 +458,83 @@ mod tests {
             Some(("SOL".to_string(), "BUSD".to_string()))
         );
     }
+
+    // Story 5.1: Dynamic subscription market parsing tests (AC: #1)
+    #[test]
+    fn test_dynamic_market_parse_ticker_new_symbol() {
+        // Test parsing a dynamically subscribed market (e.g., DOGEUSDT)
+        let json = r#"{
+            "e": "24hrTicker",
+            "s": "DOGEUSDT",
+            "c": "0.12345",
+            "b": "0.12340",
+            "a": "0.12350",
+            "v": "1000000.00",
+            "E": 1700000000000
+        }"#;
+
+        // Use symbol_to_pair_id for dynamic pair_id generation
+        let pair_id = symbol_to_pair_id("DOGE");
+        let tick = BinanceAdapter::parse_ticker(json, pair_id).unwrap();
+
+        assert_eq!(tick.exchange(), Exchange::Binance);
+        assert_eq!(tick.pair_id(), pair_id);
+        assert!((tick.price().to_f64() - 0.12345).abs() < 0.00001);
+        assert!((tick.bid().to_f64() - 0.12340).abs() < 0.00001);
+        assert!((tick.ask().to_f64() - 0.12350).abs() < 0.00001);
+    }
+
+    #[test]
+    fn test_dynamic_market_parse_book_ticker_new_symbol() {
+        // Test parsing book ticker for dynamically subscribed market
+        let json = r#"{
+            "s": "XRPUSDT",
+            "b": "0.5500",
+            "B": "50000.0",
+            "a": "0.5510",
+            "A": "48000.0"
+        }"#;
+
+        let pair_id = symbol_to_pair_id("XRP");
+        let tick = BinanceAdapter::parse_book_ticker(json, pair_id).unwrap();
+
+        assert_eq!(tick.exchange(), Exchange::Binance);
+        assert_eq!(tick.pair_id(), pair_id);
+        assert!((tick.bid().to_f64() - 0.55).abs() < 0.0001);
+        assert!((tick.ask().to_f64() - 0.551).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_symbol_to_pair_id_consistency() {
+        // Verify symbol_to_pair_id returns consistent pair_id for the same symbol
+        let pair_id1 = symbol_to_pair_id("DOGE");
+        let pair_id2 = symbol_to_pair_id("DOGE");
+        assert_eq!(pair_id1, pair_id2);
+
+        // Different symbols should have different pair_ids
+        let doge_id = symbol_to_pair_id("DOGE");
+        let xrp_id = symbol_to_pair_id("XRP");
+        assert_ne!(doge_id, xrp_id);
+    }
+
+    #[test]
+    fn test_dynamic_market_extract_base_symbol() {
+        // Test extract_base_symbol for dynamically discovered markets
+        assert_eq!(
+            BinanceAdapter::extract_base_symbol("DOGEUSDT"),
+            Some("DOGE".to_string())
+        );
+        assert_eq!(
+            BinanceAdapter::extract_base_symbol("XRPUSDT"),
+            Some("XRP".to_string())
+        );
+        assert_eq!(
+            BinanceAdapter::extract_base_symbol("SHIBUSDT"),
+            Some("SHIB".to_string())
+        );
+        assert_eq!(
+            BinanceAdapter::extract_base_symbol("PEPEUSDT"),
+            Some("PEPE".to_string())
+        );
+    }
 }

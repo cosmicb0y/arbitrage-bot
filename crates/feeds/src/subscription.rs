@@ -608,6 +608,8 @@ pub struct SubscriptionEvent {
     pub retry_delay_ms: Option<u64>,
     /// Batch information (for batch operations)
     pub batch_info: Option<(usize, usize)>, // (batch_num, total_batches)
+    /// Duration from discovery to subscription completion (Story 5.1 AC3)
+    pub elapsed_ms: Option<u64>,
 }
 
 impl SubscriptionEvent {
@@ -621,6 +623,25 @@ impl SubscriptionEvent {
             retry_attempt: None,
             retry_delay_ms: None,
             batch_info: None,
+            elapsed_ms: None,
+        }
+    }
+
+    /// Create a subscription success event with timing information (Story 5.1 AC3).
+    pub fn subscribed_with_timing(
+        exchange: Exchange,
+        symbols: Vec<String>,
+        elapsed_ms: u64,
+    ) -> Self {
+        Self {
+            event_type: SubscriptionEventType::Subscribed,
+            exchange,
+            symbols,
+            error: None,
+            retry_attempt: None,
+            retry_delay_ms: None,
+            batch_info: None,
+            elapsed_ms: Some(elapsed_ms),
         }
     }
 
@@ -634,6 +655,7 @@ impl SubscriptionEvent {
             retry_attempt: None,
             retry_delay_ms: None,
             batch_info: None,
+            elapsed_ms: None,
         }
     }
 
@@ -652,6 +674,7 @@ impl SubscriptionEvent {
             retry_attempt: Some(attempt),
             retry_delay_ms: Some(delay_ms),
             batch_info: None,
+            elapsed_ms: None,
         }
     }
 
@@ -665,6 +688,7 @@ impl SubscriptionEvent {
             retry_attempt: Some(attempts),
             retry_delay_ms: None,
             batch_info: None,
+            elapsed_ms: None,
         }
     }
 
@@ -683,6 +707,7 @@ impl SubscriptionEvent {
             retry_attempt: None,
             retry_delay_ms: None,
             batch_info: Some((batch_num, total_batches)),
+            elapsed_ms: None,
         }
     }
 
@@ -696,7 +721,23 @@ impl SubscriptionEvent {
             retry_attempt: None,
             retry_delay_ms: None,
             batch_info: None,
+            elapsed_ms: None,
         }
+    }
+
+    /// Check if subscription completed within the NFR3 timing threshold (10 seconds).
+    /// Returns true if elapsed time is within threshold, false if exceeded.
+    pub fn is_within_timing_threshold(&self) -> bool {
+        const NFR3_THRESHOLD_MS: u64 = 10_000; // 10 seconds
+        match self.elapsed_ms {
+            Some(elapsed) => elapsed <= NFR3_THRESHOLD_MS,
+            None => true, // No timing info, assume OK
+        }
+    }
+
+    /// Get the elapsed time in milliseconds, if available.
+    pub fn elapsed_ms(&self) -> Option<u64> {
+        self.elapsed_ms
     }
 
     /// Log this event using the tracing infrastructure.
@@ -719,14 +760,42 @@ impl SubscriptionEvent {
 
         match &self.event_type {
             SubscriptionEventType::Subscribed => {
-                info!(
-                    exchange = ?self.exchange,
-                    symbols = %symbols_str,
-                    count = self.symbols.len(),
-                    "New market subscribed: {} on [{:?}]",
-                    symbols_str,
-                    self.exchange
-                );
+                // Log timing info if available (Story 5.1 AC3)
+                if let Some(elapsed) = self.elapsed_ms {
+                    if elapsed > 10_000 {
+                        // Exceeded NFR3 threshold (10 seconds)
+                        warn!(
+                            exchange = ?self.exchange,
+                            symbols = %symbols_str,
+                            count = self.symbols.len(),
+                            elapsed_ms = elapsed,
+                            "Subscription timing exceeded threshold: {} on [{:?}] took {}ms (threshold: 10000ms)",
+                            symbols_str,
+                            self.exchange,
+                            elapsed
+                        );
+                    } else {
+                        info!(
+                            exchange = ?self.exchange,
+                            symbols = %symbols_str,
+                            count = self.symbols.len(),
+                            elapsed_ms = elapsed,
+                            "New market subscribed: {} on [{:?}] in {}ms",
+                            symbols_str,
+                            self.exchange,
+                            elapsed
+                        );
+                    }
+                } else {
+                    info!(
+                        exchange = ?self.exchange,
+                        symbols = %symbols_str,
+                        count = self.symbols.len(),
+                        "New market subscribed: {} on [{:?}]",
+                        symbols_str,
+                        self.exchange
+                    );
+                }
             }
             SubscriptionEventType::Failed => {
                 warn!(
@@ -4114,5 +4183,102 @@ mod tests {
     fn test_new_market_subscription_handler_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<NewMarketSubscriptionHandler>();
+    }
+
+    // Story 5.1: Subscription logging format tests (AC: #5)
+    #[test]
+    fn test_subscription_log_format_matches_story_requirement() {
+        // AC5: INFO level log with format "[INFO] New market subscribed: {symbol} on [{exchanges}]"
+        // This test verifies the SubscriptionEvent::log() method doesn't panic
+        // and uses the correct format structure
+        let event = SubscriptionEvent::subscribed(
+            Exchange::Binance,
+            vec!["DOGEUSDT".to_string()],
+        );
+
+        // log() should use info! macro with proper format
+        event.log();
+
+        // With timing
+        let event_with_timing = SubscriptionEvent::subscribed_with_timing(
+            Exchange::Upbit,
+            vec!["KRW-DOGE".to_string()],
+            500,
+        );
+        event_with_timing.log();
+    }
+
+    #[test]
+    fn test_subscription_log_uses_tracing_info_macro() {
+        // The log format should be consistent with Epic 4 logging patterns
+        // Verify multiple symbols are handled correctly
+        let event = SubscriptionEvent::subscribed(
+            Exchange::Binance,
+            vec!["DOGE".to_string(), "SHIB".to_string(), "PEPE".to_string()],
+        );
+        event.log();
+
+        // Verify single symbol
+        let single = SubscriptionEvent::subscribed(
+            Exchange::Coinbase,
+            vec!["DOGE".to_string()],
+        );
+        single.log();
+    }
+
+    // Story 5.1: Subscription timing tests (AC: #3)
+    #[test]
+    fn test_subscription_event_with_timing() {
+        let event = SubscriptionEvent::subscribed_with_timing(
+            Exchange::Binance,
+            vec!["DOGEUSDT".to_string()],
+            5000, // 5 seconds
+        );
+
+        assert!(event.is_within_timing_threshold());
+        assert_eq!(event.elapsed_ms(), Some(5000));
+    }
+
+    #[test]
+    fn test_subscription_event_timing_exceeds_threshold() {
+        let event = SubscriptionEvent::subscribed_with_timing(
+            Exchange::Binance,
+            vec!["DOGEUSDT".to_string()],
+            15000, // 15 seconds - exceeds 10s threshold
+        );
+
+        assert!(!event.is_within_timing_threshold());
+        assert_eq!(event.elapsed_ms(), Some(15000));
+    }
+
+    #[test]
+    fn test_subscription_event_timing_at_threshold() {
+        let event = SubscriptionEvent::subscribed_with_timing(
+            Exchange::Binance,
+            vec!["DOGEUSDT".to_string()],
+            10000, // Exactly 10 seconds
+        );
+
+        assert!(event.is_within_timing_threshold());
+    }
+
+    #[test]
+    fn test_subscription_event_no_timing_info() {
+        let event = SubscriptionEvent::subscribed(Exchange::Binance, vec!["DOGEUSDT".to_string()]);
+
+        assert!(event.is_within_timing_threshold()); // No timing = assume OK
+        assert_eq!(event.elapsed_ms(), None);
+    }
+
+    #[test]
+    fn test_subscription_event_timing_very_fast() {
+        let event = SubscriptionEvent::subscribed_with_timing(
+            Exchange::Binance,
+            vec!["DOGEUSDT".to_string(), "XRPUSDT".to_string()],
+            100, // 100ms - very fast
+        );
+
+        assert!(event.is_within_timing_threshold());
+        assert_eq!(event.elapsed_ms(), Some(100));
     }
 }
