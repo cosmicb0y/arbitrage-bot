@@ -104,8 +104,8 @@ development_status:
   wts-2-2-balance-panel-ui-state: done
   wts-2-3-balance-manual-auto-refresh: done
   wts-2-4-market-selection: done
-  wts-2-5-realtime-orderbook-websocket: backlog
-  wts-2-6-orderbook-panel-ui-click-interaction: backlog
+  wts-2-5-realtime-orderbook-websocket: done
+  wts-2-6-orderbook-panel-ui-click-interaction: done
   wts-epic-2-retrospective: optional
 
   # WTS Epic 3: 주문 실행 시스템

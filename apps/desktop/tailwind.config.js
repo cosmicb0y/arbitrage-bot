@@ -6,6 +6,8 @@ export default {
       animation: {
         "row-flash": "row-flash 0.5s ease-out",
         "live-dot": "live-dot 0.6s ease-in-out infinite",
+        "flash-up": "flash-up 300ms ease-out",
+        "flash-down": "flash-down 300ms ease-out",
       },
       keyframes: {
         "row-flash": {
@@ -15,6 +17,14 @@ export default {
         "live-dot": {
           "0%, 100%": { opacity: "1", transform: "scale(1)" },
           "50%": { opacity: "0.4", transform: "scale(0.7)" },
+        },
+        "flash-up": {
+          "0%": { backgroundColor: "rgba(34, 197, 94, 0.3)" },
+          "100%": { backgroundColor: "transparent" },
+        },
+        "flash-down": {
+          "0%": { backgroundColor: "rgba(239, 68, 68, 0.3)" },
+          "100%": { backgroundColor: "transparent" },
         },
       },
       colors: {

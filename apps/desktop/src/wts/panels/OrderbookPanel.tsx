@@ -1,7 +1,9 @@
-import { useMemo, memo } from 'react';
+import { useMemo, memo, useRef, useEffect, useState, useCallback } from 'react';
 import { MarketSelector } from '../components/MarketSelector';
 import { useWtsStore } from '../stores/wtsStore';
 import { useOrderbookStore } from '../stores/orderbookStore';
+import { useOrderStore } from '../stores/orderStore';
+import { useConsoleStore } from '../stores/consoleStore';
 import { useUpbitOrderbookWs } from '../hooks/useUpbitOrderbookWs';
 import type { OrderbookEntry } from '../types';
 
@@ -19,26 +21,82 @@ function formatSize(size: number): string {
   return size.toFixed(8).replace(/\.?0+$/, '');
 }
 
+/**
+ * 가격 변동 플래시 애니메이션 훅
+ * @param currentPrice 현재 가격
+ * @returns 플래시 상태 ('up' | 'down' | null)
+ */
+function usePriceFlash(currentPrice: number): 'up' | 'down' | null {
+  const prevPriceRef = useRef<number>(currentPrice);
+  const [flash, setFlash] = useState<'up' | 'down' | null>(null);
+
+  useEffect(() => {
+    if (prevPriceRef.current !== currentPrice) {
+      if (currentPrice > prevPriceRef.current) {
+        setFlash('up');
+      } else if (currentPrice < prevPriceRef.current) {
+        setFlash('down');
+      }
+      prevPriceRef.current = currentPrice;
+
+      const timer = setTimeout(() => setFlash(null), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [currentPrice]);
+
+  return flash;
+}
+
 interface OrderbookRowProps {
   entry: OrderbookEntry;
   side: 'ask' | 'bid';
   maxSize: number;
+  onClick?: (price: number, side: 'ask' | 'bid') => void;
 }
 
 /**
  * 개별 호가 행 (메모이제이션)
+ * - 가격 변동 시 플래시 애니메이션 (300ms)
+ * - 호버 시 배경색 하이라이트
+ * - 클릭 시 주문 폼에 가격 자동 입력
  */
 const OrderbookRow = memo(function OrderbookRow({
   entry,
   side,
   maxSize,
+  onClick,
 }: OrderbookRowProps) {
+  const flash = usePriceFlash(entry.price);
   const depthWidth = maxSize > 0 ? (entry.size / maxSize) * 100 : 0;
   const colorClass = side === 'ask' ? 'text-destructive' : 'text-success';
   const bgClass = side === 'ask' ? 'bg-destructive/20' : 'bg-success/20';
 
+  const flashClass =
+    flash === 'up'
+      ? 'animate-flash-up'
+      : flash === 'down'
+        ? 'animate-flash-down'
+        : '';
+
+  const handleClick = () => {
+    onClick?.(entry.price, side);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleClick();
+    }
+  };
+
   return (
-    <div className="relative flex items-center h-6 px-2 text-xs font-mono">
+    <div
+      className={`relative flex items-center h-6 px-2 text-xs font-mono cursor-pointer hover:bg-wts-secondary/50 transition-colors ${flashClass}`}
+      onClick={handleClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+    >
       <div
         className={`absolute inset-y-0 ${side === 'ask' ? 'right-0' : 'left-0'} ${bgClass}`}
         style={{ width: `${depthWidth}%` }}
@@ -66,6 +124,10 @@ export function OrderbookPanel({ className = '' }: OrderbookPanelProps) {
     availableMarkets,
   } = useWtsStore();
   const { asks, bids, wsStatus, wsError } = useOrderbookStore();
+  const setPriceFromOrderbook = useOrderStore(
+    (state) => state.setPriceFromOrderbook
+  );
+  const addLog = useConsoleStore((state) => state.addLog);
 
   // WebSocket 연결 훅
   useUpbitOrderbookWs(selectedMarket, selectedExchange);
@@ -75,6 +137,21 @@ export function OrderbookPanel({ className = '' }: OrderbookPanelProps) {
     const allSizes = [...asks.map((a) => a.size), ...bids.map((b) => b.size)];
     return Math.max(...allSizes, 0.00000001);
   }, [asks, bids]);
+
+  // 호가 클릭 핸들러
+  const handleRowClick = useCallback(
+    (price: number, clickedSide: 'ask' | 'bid') => {
+      setPriceFromOrderbook(price, clickedSide);
+
+      const side = clickedSide === 'ask' ? '매수' : '매도';
+      addLog(
+        'INFO',
+        'ORDER',
+        `호가 선택: ${price.toLocaleString('ko-KR')} KRW (${side})`
+      );
+    },
+    [setPriceFromOrderbook, addLog]
+  );
 
   const isDisabled = connectionStatus !== 'connected';
   const isLoading = wsStatus === 'connecting';
@@ -127,12 +204,13 @@ export function OrderbookPanel({ className = '' }: OrderbookPanelProps) {
           <div className="flex flex-col">
             {/* 매도 호가 (역순: 높은 가격이 아래) */}
             <div className="flex flex-col-reverse">
-              {asks.slice(0, 15).map((entry) => (
+              {asks.slice(0, 15).map((entry, index) => (
                 <OrderbookRow
-                  key={`ask-${entry.price}`}
+                  key={`ask-${index}`}
                   entry={entry}
                   side="ask"
                   maxSize={maxSize}
+                  onClick={handleRowClick}
                 />
               ))}
             </div>
@@ -142,12 +220,13 @@ export function OrderbookPanel({ className = '' }: OrderbookPanelProps) {
 
             {/* 매수 호가 */}
             <div className="flex flex-col">
-              {bids.slice(0, 15).map((entry) => (
+              {bids.slice(0, 15).map((entry, index) => (
                 <OrderbookRow
-                  key={`bid-${entry.price}`}
+                  key={`bid-${index}`}
                   entry={entry}
                   side="bid"
                   maxSize={maxSize}
+                  onClick={handleRowClick}
                 />
               ))}
             </div>

@@ -1,13 +1,17 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { OrderbookPanel } from '../../panels/OrderbookPanel';
 import { useWtsStore } from '../../stores/wtsStore';
 import { useOrderbookStore } from '../../stores/orderbookStore';
+import { useOrderStore } from '../../stores/orderStore';
+import { useConsoleStore } from '../../stores/consoleStore';
 import { UPBIT_DEFAULT_MARKETS } from '../../types';
 
 // Mock stores
 vi.mock('../../stores/wtsStore');
 vi.mock('../../stores/orderbookStore');
+vi.mock('../../stores/orderStore');
+vi.mock('../../stores/consoleStore');
 
 // Mock useUpbitOrderbookWs hook
 vi.mock('../../hooks/useUpbitOrderbookWs', () => ({
@@ -16,6 +20,8 @@ vi.mock('../../hooks/useUpbitOrderbookWs', () => ({
 
 describe('OrderbookPanel', () => {
   const mockSetMarket = vi.fn();
+  const mockSetPriceFromOrderbook = vi.fn();
+  const mockAddLog = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -38,6 +44,31 @@ describe('OrderbookPanel', () => {
       clearOrderbook: vi.fn(),
       setWsStatus: vi.fn(),
       setWsError: vi.fn(),
+    });
+
+    vi.mocked(useOrderStore).mockImplementation((selector) => {
+      const state = {
+        orderType: 'limit' as const,
+        side: 'buy' as const,
+        price: '',
+        quantity: '',
+        setOrderType: vi.fn(),
+        setSide: vi.fn(),
+        setPrice: vi.fn(),
+        setQuantity: vi.fn(),
+        setPriceFromOrderbook: mockSetPriceFromOrderbook,
+        resetForm: vi.fn(),
+      };
+      return selector ? selector(state) : state;
+    });
+
+    vi.mocked(useConsoleStore).mockImplementation((selector) => {
+      const state = {
+        logs: [],
+        addLog: mockAddLog,
+        clearLogs: vi.fn(),
+      };
+      return selector ? selector(state) : state;
     });
   });
 
@@ -283,6 +314,50 @@ describe('OrderbookPanel', () => {
     });
   });
 
+  describe('가격 변동 플래시 애니메이션', () => {
+    it('가격 상승 시 플래시 클래스가 적용된다', async () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        selectedMarket: 'KRW-BTC',
+        setMarket: mockSetMarket,
+        connectionStatus: 'connected',
+        availableMarkets: UPBIT_DEFAULT_MARKETS,
+      } as ReturnType<typeof useWtsStore>);
+
+      const baseState = {
+        bids: [{ price: 50000000, size: 0.8 }],
+        timestamp: 1704067200000,
+        wsStatus: 'connected',
+        wsError: null,
+        setOrderbook: vi.fn(),
+        clearOrderbook: vi.fn(),
+        setWsStatus: vi.fn(),
+        setWsError: vi.fn(),
+      };
+
+      vi.mocked(useOrderbookStore).mockReturnValue({
+        asks: [{ price: 50100000, size: 0.5 }],
+        ...baseState,
+      });
+
+      const { rerender } = render(<OrderbookPanel />);
+
+      vi.mocked(useOrderbookStore).mockReturnValue({
+        asks: [{ price: 50200000, size: 0.5 }],
+        ...baseState,
+      });
+
+      rerender(<OrderbookPanel />);
+
+      await waitFor(() => {
+        const row = screen
+          .getByText('50,200,000')
+          .closest('[role="button"]');
+        expect(row?.classList.contains('animate-flash-up')).toBe(true);
+      });
+    });
+  });
+
   describe('WebSocket 연결 상태 인디케이터', () => {
     it('connected 상태에서 녹색 인디케이터가 표시된다', () => {
       vi.mocked(useWtsStore).mockReturnValue({
@@ -442,6 +517,163 @@ describe('OrderbookPanel', () => {
       render(<OrderbookPanel className="custom-class" />);
       const panel = screen.getByTestId('orderbook-panel');
       expect(panel.classList.contains('custom-class')).toBe(true);
+    });
+  });
+
+  describe('호가 클릭 상호작용', () => {
+    it('매도 호가(ask) 클릭 시 setPriceFromOrderbook이 올바른 인자로 호출된다', () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        selectedMarket: 'KRW-BTC',
+        setMarket: mockSetMarket,
+        connectionStatus: 'connected',
+        availableMarkets: UPBIT_DEFAULT_MARKETS,
+      } as ReturnType<typeof useWtsStore>);
+
+      vi.mocked(useOrderbookStore).mockReturnValue({
+        asks: [{ price: 50100000, size: 0.5 }],
+        bids: [{ price: 50000000, size: 0.8 }],
+        timestamp: 1704067200000,
+        wsStatus: 'connected',
+        wsError: null,
+        setOrderbook: vi.fn(),
+        clearOrderbook: vi.fn(),
+        setWsStatus: vi.fn(),
+        setWsError: vi.fn(),
+      });
+
+      render(<OrderbookPanel />);
+
+      // 매도 호가(ask) 행 클릭
+      const askRow = screen.getByText('50,100,000').closest('[role="button"]');
+      fireEvent.click(askRow!);
+
+      expect(mockSetPriceFromOrderbook).toHaveBeenCalledWith(50100000, 'ask');
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'ORDER',
+        expect.stringContaining('호가 선택')
+      );
+    });
+
+    it('매수 호가(bid) 클릭 시 setPriceFromOrderbook이 올바른 인자로 호출된다', () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        selectedMarket: 'KRW-BTC',
+        setMarket: mockSetMarket,
+        connectionStatus: 'connected',
+        availableMarkets: UPBIT_DEFAULT_MARKETS,
+      } as ReturnType<typeof useWtsStore>);
+
+      vi.mocked(useOrderbookStore).mockReturnValue({
+        asks: [{ price: 50100000, size: 0.5 }],
+        bids: [{ price: 50000000, size: 0.8 }],
+        timestamp: 1704067200000,
+        wsStatus: 'connected',
+        wsError: null,
+        setOrderbook: vi.fn(),
+        clearOrderbook: vi.fn(),
+        setWsStatus: vi.fn(),
+        setWsError: vi.fn(),
+      });
+
+      render(<OrderbookPanel />);
+
+      // 매수 호가(bid) 행 클릭
+      const bidRow = screen.getByText('50,000,000').closest('[role="button"]');
+      fireEvent.click(bidRow!);
+
+      expect(mockSetPriceFromOrderbook).toHaveBeenCalledWith(50000000, 'bid');
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'ORDER',
+        expect.stringContaining('호가 선택')
+      );
+    });
+
+    it('호가 행이 클릭 가능한 role="button"을 가진다', () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        selectedMarket: 'KRW-BTC',
+        setMarket: mockSetMarket,
+        connectionStatus: 'connected',
+        availableMarkets: UPBIT_DEFAULT_MARKETS,
+      } as ReturnType<typeof useWtsStore>);
+
+      vi.mocked(useOrderbookStore).mockReturnValue({
+        asks: [{ price: 50100000, size: 0.5 }],
+        bids: [{ price: 50000000, size: 0.8 }],
+        timestamp: 1704067200000,
+        wsStatus: 'connected',
+        wsError: null,
+        setOrderbook: vi.fn(),
+        clearOrderbook: vi.fn(),
+        setWsStatus: vi.fn(),
+        setWsError: vi.fn(),
+      });
+
+      render(<OrderbookPanel />);
+
+      // role="button"을 가진 요소 확인
+      const rows = screen.getAllByRole('button');
+      // MarketSelector 버튼(1) + 호가 행 2개 = 최소 3개
+      expect(rows.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('호가 행에 호버 스타일(cursor-pointer)이 적용된다', () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        selectedMarket: 'KRW-BTC',
+        setMarket: mockSetMarket,
+        connectionStatus: 'connected',
+        availableMarkets: UPBIT_DEFAULT_MARKETS,
+      } as ReturnType<typeof useWtsStore>);
+
+      vi.mocked(useOrderbookStore).mockReturnValue({
+        asks: [{ price: 50100000, size: 0.5 }],
+        bids: [{ price: 50000000, size: 0.8 }],
+        timestamp: 1704067200000,
+        wsStatus: 'connected',
+        wsError: null,
+        setOrderbook: vi.fn(),
+        clearOrderbook: vi.fn(),
+        setWsStatus: vi.fn(),
+        setWsError: vi.fn(),
+      });
+
+      render(<OrderbookPanel />);
+
+      const askRow = screen.getByText('50,100,000').closest('[role="button"]');
+      expect(askRow?.classList.contains('cursor-pointer')).toBe(true);
+    });
+
+    it('키보드 Enter 키로 호가 행을 선택할 수 있다', () => {
+      vi.mocked(useWtsStore).mockReturnValue({
+        selectedExchange: 'upbit',
+        selectedMarket: 'KRW-BTC',
+        setMarket: mockSetMarket,
+        connectionStatus: 'connected',
+        availableMarkets: UPBIT_DEFAULT_MARKETS,
+      } as ReturnType<typeof useWtsStore>);
+
+      vi.mocked(useOrderbookStore).mockReturnValue({
+        asks: [{ price: 50100000, size: 0.5 }],
+        bids: [{ price: 50000000, size: 0.8 }],
+        timestamp: 1704067200000,
+        wsStatus: 'connected',
+        wsError: null,
+        setOrderbook: vi.fn(),
+        clearOrderbook: vi.fn(),
+        setWsStatus: vi.fn(),
+        setWsError: vi.fn(),
+      });
+
+      render(<OrderbookPanel />);
+
+      const askRow = screen.getByText('50,100,000').closest('[role="button"]');
+      fireEvent.keyDown(askRow!, { key: 'Enter' });
+
+      expect(mockSetPriceFromOrderbook).toHaveBeenCalledWith(50100000, 'ask');
     });
   });
 });
