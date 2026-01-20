@@ -111,7 +111,7 @@ development_status:
   # WTS Epic 3: 주문 실행 시스템
   wts-epic-3: in-progress
   wts-3-1-order-api-rust-backend: done
-  wts-3-2-order-panel-ui-qty-price-input: backlog
+  wts-3-2-order-panel-ui-qty-price-input: done
   wts-3-3-market-order-buy-sell: backlog
   wts-3-4-limit-order-buy-sell: backlog
   wts-3-5-order-confirm-dialog: backlog
