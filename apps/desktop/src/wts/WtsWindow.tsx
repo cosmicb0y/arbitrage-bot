@@ -6,6 +6,7 @@ import {
   OrderPanel,
   OpenOrdersPanel,
 } from './panels';
+import { ToastContainer } from './components/ToastContainer';
 import { useConnectionCheck } from './hooks';
 import { useUpbitMarkets } from './hooks/useUpbitMarkets';
 
@@ -21,13 +22,16 @@ export function WtsWindow() {
   useUpbitMarkets();
 
   return (
-    <div className="wts-grid bg-wts-background text-wts-foreground">
-      <ExchangePanel />
-      <ConsolePanel />
-      <OrderbookPanel />
-      <BalancePanel />
-      <OrderPanel />
-      <OpenOrdersPanel />
-    </div>
+    <>
+      <div className="wts-grid bg-wts-background text-wts-foreground">
+        <ExchangePanel />
+        <ConsolePanel />
+        <OrderbookPanel />
+        <BalancePanel />
+        <OrderPanel />
+        <OpenOrdersPanel />
+      </div>
+      <ToastContainer />
+    </>
   );
 }

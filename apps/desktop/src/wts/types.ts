@@ -393,5 +393,8 @@ export const UPBIT_ORDER_ERROR_MESSAGES: Record<string, string> = {
  * @param fallback 기본 메시지 (매핑 없을 때)
  */
 export function getOrderErrorMessage(code: string, fallback?: string): string {
-  return UPBIT_ORDER_ERROR_MESSAGES[code] ?? fallback ?? code;
+  const mapped = UPBIT_ORDER_ERROR_MESSAGES[code];
+  if (mapped) return mapped;
+  if (fallback && /[가-힣]/.test(fallback)) return fallback;
+  return '알 수 없는 오류가 발생했습니다';
 }

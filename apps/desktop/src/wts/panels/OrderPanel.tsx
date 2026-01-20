@@ -1,8 +1,21 @@
+import { useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useOrderStore } from '../stores/orderStore';
 import { useBalanceStore } from '../stores/balanceStore';
 import { useWtsStore } from '../stores/wtsStore';
+import { useConsoleStore } from '../stores/consoleStore';
+import { useToastStore } from '../stores/toastStore';
 import { formatKrw, formatNumber } from '../utils/formatters';
-import type { OrderType, OrderSide } from '../types';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import type { OrderConfirmInfo } from '../components/ConfirmDialog';
+import type {
+  OrderType,
+  OrderSide,
+  OrderParams,
+  OrderResponse,
+  WtsApiResult,
+} from '../types';
+import { toUpbitSide, toUpbitOrderType, getOrderErrorMessage } from '../types';
 
 interface OrderPanelProps {
   className?: string;
@@ -72,8 +85,14 @@ function getAvailableBalance(
 export function OrderPanel({ className = '' }: OrderPanelProps) {
   const { orderType, side, price, quantity, setOrderType, setSide, setPrice, setQuantity } =
     useOrderStore();
-  const { balances } = useBalanceStore();
+  const { balances, fetchBalance } = useBalanceStore();
   const { selectedMarket } = useWtsStore();
+  const addLog = useConsoleStore((state) => state.addLog);
+  const showToast = useToastStore((state) => state.showToast);
+
+  // 주문 관련 상태
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const coin = getCoinFromMarket(selectedMarket);
   const krwBalance = getAvailableBalance(balances, 'KRW');
@@ -83,6 +102,13 @@ export function OrderPanel({ className = '' }: OrderPanelProps) {
 
   // 예상 총액 계산
   const calculateTotal = (): number => {
+    if (isMarket && side === 'buy') {
+      const priceNum = parseFloat(unformatPrice(price));
+      return Number.isFinite(priceNum) ? priceNum : 0;
+    }
+    if (isMarket && side === 'sell') {
+      return 0;
+    }
     const priceNum = parseFloat(unformatPrice(price));
     const qtyNum = parseFloat(quantity);
     if (!Number.isFinite(priceNum) || !Number.isFinite(qtyNum)) return 0;
@@ -140,17 +166,158 @@ export function OrderPanel({ className = '' }: OrderPanelProps) {
     setOrderType(type);
   };
 
-  // 매수/매도 버튼 클릭 핸들러
+  // 매수/매도 방향 버튼 클릭 핸들러
   const handleSideClick = (newSide: OrderSide) => {
     setSide(newSide);
   };
 
+  // 주문 제출 버튼 클릭 → 확인 다이얼로그 표시
+  const handleOrderClick = () => {
+    if (!selectedMarket) return;
+    if (isMarket && side === 'buy' && !price) return;
+    if (isMarket && side === 'sell' && !quantity) return;
+    setIsConfirmOpen(true);
+  };
+
+  // 주문 확인 → 실제 API 호출
+  const handleConfirmOrder = useCallback(async () => {
+    if (!selectedMarket || isSubmitting) return;
+
+    setIsSubmitting(true);
+
+    // 파라미터 빌드
+    const upbitSide = toUpbitSide(side);
+    const upbitOrdType = toUpbitOrderType(orderType, side);
+
+    const params: OrderParams = {
+      market: selectedMarket,
+      side: upbitSide,
+      ord_type: upbitOrdType,
+    };
+
+    // 시장가 매수: price(총액) 설정, volume 없음
+    if (isMarket && side === 'buy') {
+      params.price = unformatPrice(price);
+      addLog(
+        'INFO',
+        'ORDER',
+        `시장가 매수 주문 요청: ${selectedMarket}, ${formatKrw(parseFloat(unformatPrice(price)))}`
+      );
+    }
+    // 시장가 매도: volume 설정, price 없음
+    else if (isMarket && side === 'sell') {
+      params.volume = quantity;
+      addLog(
+        'INFO',
+        'ORDER',
+        `시장가 매도 주문 요청: ${selectedMarket}, ${quantity} ${coin}`
+      );
+    }
+    // 지정가: volume + price 모두 설정
+    else {
+      params.volume = quantity;
+      params.price = unformatPrice(price);
+      const sideLabel = side === 'buy' ? '매수' : '매도';
+      addLog(
+        'INFO',
+        'ORDER',
+        `지정가 ${sideLabel} 주문 요청: ${selectedMarket}, ${quantity} @ ${formatKrw(parseFloat(unformatPrice(price)))}`
+      );
+    }
+
+    try {
+      const result = await invoke<WtsApiResult<OrderResponse>>('wts_place_order', { params });
+
+      if (result.success && result.data) {
+        const sideLabel = side === 'buy' ? '매수' : '매도';
+        const executedVolume = result.data.executed_volume || result.data.volume || quantity;
+
+        addLog(
+          'SUCCESS',
+          'ORDER',
+          `주문 체결: ${sideLabel} ${executedVolume} ${coin} @ ${isMarket ? '시장가' : formatKrw(parseFloat(unformatPrice(price)))}`
+        );
+
+        showToast('success', '주문이 체결되었습니다');
+
+        // 잔고 갱신
+        setTimeout(() => {
+          fetchBalance();
+        }, 500);
+
+        // 폼 리셋
+        setQuantity('');
+        if (!isMarket) setPrice('');
+
+        setIsConfirmOpen(false);
+      } else {
+        const errorCode = result.error?.code || 'unknown';
+        const errorMsg = getOrderErrorMessage(errorCode, result.error?.message);
+
+        addLog('ERROR', 'ORDER', `주문 실패: ${errorMsg}`);
+        showToast('error', errorMsg);
+        setIsConfirmOpen(false);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      addLog('ERROR', 'ORDER', `주문 실패: ${errorMsg}`);
+      showToast('error', '주문 처리 중 오류가 발생했습니다');
+      setIsConfirmOpen(false);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [
+    selectedMarket,
+    isSubmitting,
+    side,
+    orderType,
+    isMarket,
+    price,
+    quantity,
+    coin,
+    addLog,
+    showToast,
+    fetchBalance,
+    setQuantity,
+    setPrice,
+  ]);
+
+  // 확인 다이얼로그용 주문 정보
+  const normalizedPrice = unformatPrice(price);
+  const orderConfirmInfo: OrderConfirmInfo = {
+    market: selectedMarket || '',
+    side,
+    orderType,
+    quantity: quantity ? quantity : undefined,
+    price: normalizedPrice ? normalizedPrice : undefined,
+    total: !isMarket ? total : undefined,
+  };
+
+  // 주문 버튼 비활성화 조건
+  const isOrderDisabled = (() => {
+    if (!selectedMarket) return true;
+    if (isSubmitting) return true;
+    if (isMarket && side === 'buy') {
+      const priceNum = parseFloat(unformatPrice(price)) || 0;
+      return priceNum <= 0;
+    }
+    if (isMarket && side === 'sell') {
+      const qtyNum = parseFloat(quantity) || 0;
+      return qtyNum <= 0;
+    }
+    // 지정가
+    const priceNum = parseFloat(unformatPrice(price)) || 0;
+    const qtyNum = parseFloat(quantity) || 0;
+    return priceNum <= 0 || qtyNum <= 0;
+  })();
+
   // 가격 필드 비활성화 조건: 시장가
-  const isPriceDisabled = isMarket;
+  const isPriceDisabled = isMarket && side === 'sell';
   // 가격 필드 placeholder
-  const pricePlaceholder = isMarket ? '시장가' : '가격 입력';
+  const pricePlaceholder =
+    isMarket && side === 'buy' ? '주문 금액 입력' : isMarket ? '시장가' : '가격 입력';
   // 가격 필드 라벨
-  const priceLabel = '가격';
+  const priceLabel = isMarket && side === 'buy' ? '주문 금액' : '가격';
   // 수량 필드 표시 조건: 항상 표시
   const showQuantityField = true;
 
@@ -302,8 +469,41 @@ export function OrderPanel({ className = '' }: OrderPanelProps) {
               <span className="font-mono">{coinBalance.toFixed(8).replace(/\.?0+$/, '')}</span>
             </div>
           </div>
+
+          {/* 주문 제출 버튼 */}
+          <button
+            data-testid="order-submit-btn"
+            onClick={handleOrderClick}
+            disabled={isOrderDisabled}
+            className={`w-full py-3 text-sm font-bold rounded transition-colors
+              ${
+                side === 'buy'
+                  ? 'bg-green-600 hover:bg-green-700 disabled:bg-green-800'
+                  : 'bg-red-600 hover:bg-red-700 disabled:bg-red-800'
+              }
+              text-white disabled:opacity-50 disabled:cursor-not-allowed
+            `}
+          >
+            {isSubmitting ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="animate-spin">⏳</span>
+                처리중...
+              </span>
+            ) : (
+              `${isMarket ? '시장가' : '지정가'} ${side === 'buy' ? '매수' : '매도'}`
+            )}
+          </button>
         </div>
       </div>
+
+      {/* 주문 확인 다이얼로그 */}
+      <ConfirmDialog
+        isOpen={isConfirmOpen}
+        orderInfo={orderConfirmInfo}
+        onConfirm={handleConfirmOrder}
+        onCancel={() => setIsConfirmOpen(false)}
+        isLoading={isSubmitting}
+      />
     </div>
   );
 }

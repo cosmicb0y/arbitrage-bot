@@ -1,15 +1,25 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OrderPanel } from '../../panels/OrderPanel';
 import { useOrderStore } from '../../stores/orderStore';
 import { useBalanceStore } from '../../stores/balanceStore';
 import { useWtsStore } from '../../stores/wtsStore';
+import { useConsoleStore } from '../../stores/consoleStore';
+import { useToastStore } from '../../stores/toastStore';
 import type { BalanceEntry } from '../../types';
+import { invoke } from '@tauri-apps/api/core';
+
+// Mock Tauri invoke
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
 
 // Mock stores
 vi.mock('../../stores/orderStore');
 vi.mock('../../stores/balanceStore');
 vi.mock('../../stores/wtsStore');
+vi.mock('../../stores/consoleStore');
+vi.mock('../../stores/toastStore');
 
 describe('OrderPanel', () => {
   const mockSetOrderType = vi.fn();
@@ -35,6 +45,10 @@ describe('OrderPanel', () => {
       unit_currency: 'KRW',
     },
   ];
+
+  const mockAddLog = vi.fn();
+  const mockShowToast = vi.fn();
+  const mockFetchBalance = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,7 +77,7 @@ describe('OrderPanel', () => {
       error: null,
       enableAutoRefresh: vi.fn(),
       disableAutoRefresh: vi.fn(),
-      fetchBalance: vi.fn(),
+      fetchBalance: mockFetchBalance,
       setHideZeroBalances: vi.fn(),
     });
 
@@ -80,6 +94,22 @@ describe('OrderPanel', () => {
       setConnectionStatus: vi.fn(),
       lastConnectionError: null,
       setConnectionError: vi.fn(),
+    });
+
+    // Mock consoleStore
+    vi.mocked(useConsoleStore).mockImplementation((selector) => {
+      if (typeof selector === 'function') {
+        return selector({ logs: [], addLog: mockAddLog, clearLogs: vi.fn() });
+      }
+      return { logs: [], addLog: mockAddLog, clearLogs: vi.fn() };
+    });
+
+    // Mock toastStore
+    vi.mocked(useToastStore).mockImplementation((selector) => {
+      if (typeof selector === 'function') {
+        return selector({ toasts: [], showToast: mockShowToast, removeToast: vi.fn(), clearToasts: vi.fn() });
+      }
+      return { toasts: [], showToast: mockShowToast, removeToast: vi.fn(), clearToasts: vi.fn() };
     });
   });
 
@@ -145,7 +175,7 @@ describe('OrderPanel', () => {
       expect(priceInput).toHaveProperty('disabled', true);
     });
 
-    it('시장가 매수 모드에서 가격 입력 필드가 비활성화되어야 한다 (AC #4)', () => {
+    it('시장가 매수 모드에서 가격 입력 필드가 활성화되어야 한다 (AC #4)', () => {
       vi.mocked(useOrderStore).mockReturnValue({
         orderType: 'market',
         side: 'buy',
@@ -161,8 +191,8 @@ describe('OrderPanel', () => {
 
       render(<OrderPanel />);
 
-      const priceInput = screen.getByLabelText('가격');
-      expect(priceInput).toHaveProperty('disabled', true);
+      const priceInput = screen.getByLabelText('주문 금액');
+      expect(priceInput).toHaveProperty('disabled', false);
     });
 
     it('현재 선택된 탭이 강조 표시되어야 한다', () => {
@@ -401,12 +431,12 @@ describe('OrderPanel', () => {
       expect(screen.getByText('잔고 초과')).toBeDefined();
     });
 
-    it('시장가 매도에서도 예상 총액이 계산되어 표시되어야 한다', () => {
+    it('시장가 매수에서 예상 총액이 주문 금액으로 표시되어야 한다', () => {
       vi.mocked(useOrderStore).mockReturnValue({
         orderType: 'market',
-        side: 'sell',
-        price: '50000000',
-        quantity: '0.01',
+        side: 'buy',
+        price: '100000',
+        quantity: '',
         setOrderType: mockSetOrderType,
         setSide: mockSetSide,
         setPrice: mockSetPrice,
@@ -417,7 +447,7 @@ describe('OrderPanel', () => {
 
       render(<OrderPanel />);
 
-      expect(screen.getByText('₩500,000')).toBeDefined();
+      expect(screen.getByText('₩100,000')).toBeDefined();
     });
   });
 
@@ -481,6 +511,298 @@ describe('OrderPanel', () => {
 
       const sellButton = screen.getByRole('button', { name: '매도' });
       expect(sellButton.className).toContain('bg-red-600');
+    });
+  });
+
+  describe('WTS-3.3: 주문 제출 버튼 (AC: #1, #7)', () => {
+    it('주문 제출 버튼이 표시되어야 한다', () => {
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toBeDefined();
+    });
+
+    it('지정가 매수 모드에서 버튼 텍스트가 "지정가 매수"여야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.01',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn').textContent).toContain('지정가 매수');
+    });
+
+    it('시장가 매도 모드에서 버튼 텍스트가 "시장가 매도"여야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'sell',
+        price: '',
+        quantity: '0.01',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn').textContent).toContain('시장가 매도');
+    });
+
+    it('시장가 매수 모드에서 price가 없으면 버튼이 비활성화되어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'buy',
+        price: '',
+        quantity: '',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', true);
+    });
+
+    it('시장가 매도 모드에서 quantity가 없으면 버튼이 비활성화되어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'sell',
+        price: '',
+        quantity: '',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', true);
+    });
+
+    it('시장가 매수 모드에서 price가 있으면 버튼이 활성화되어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'buy',
+        price: '100000',
+        quantity: '',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', false);
+    });
+
+    it('시장가 매도 모드에서 quantity가 있으면 버튼이 활성화되어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'sell',
+        price: '',
+        quantity: '0.01',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', false);
+    });
+
+    it('버튼 클릭 시 확인 다이얼로그가 표시되어야 한다 (AC #1)', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'buy',
+        price: '100000',
+        quantity: '',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      expect(screen.getByRole('dialog')).toBeDefined();
+      expect(screen.getByText('주문 확인')).toBeDefined();
+    });
+
+    it('매수 버튼은 녹색이어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'buy',
+        price: '100000',
+        quantity: '',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn').className).toContain('bg-green');
+    });
+
+    it('매도 버튼은 빨간색이어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'sell',
+        price: '',
+        quantity: '0.01',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn').className).toContain('bg-red');
+    });
+  });
+
+  describe('WTS-3.3: 주문 파라미터 빌드 (AC: #5, #6)', () => {
+    it('시장가 매수 주문 시 ord_type=price, side=bid, price가 전달되어야 한다', async () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'buy',
+        price: '100000',
+        quantity: '',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: {
+          uuid: 'order-1',
+          side: 'bid',
+          ord_type: 'price',
+          price: '100000',
+          state: 'done',
+          market: 'KRW-BTC',
+          created_at: '2026-01-19T00:00:00Z',
+          volume: null,
+          remaining_volume: null,
+          reserved_fee: '0',
+          remaining_fee: '0',
+          paid_fee: '0',
+          locked: '0',
+          executed_volume: '0.001',
+          trades_count: 1,
+        },
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '매수' }));
+
+      await waitFor(() => {
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('wts_place_order', {
+          params: {
+            market: 'KRW-BTC',
+            side: 'bid',
+            ord_type: 'price',
+            price: '100000',
+          },
+        });
+      });
+    });
+
+    it('시장가 매도 주문 시 ord_type=market, side=ask, volume이 전달되어야 한다', async () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'market',
+        side: 'sell',
+        price: '',
+        quantity: '0.01',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: {
+          uuid: 'order-2',
+          side: 'ask',
+          ord_type: 'market',
+          price: null,
+          state: 'done',
+          market: 'KRW-BTC',
+          created_at: '2026-01-19T00:00:00Z',
+          volume: '0.01',
+          remaining_volume: null,
+          reserved_fee: '0',
+          remaining_fee: '0',
+          paid_fee: '0',
+          locked: '0',
+          executed_volume: '0.01',
+          trades_count: 1,
+        },
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '매도' }));
+
+      await waitFor(() => {
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('wts_place_order', {
+          params: {
+            market: 'KRW-BTC',
+            side: 'ask',
+            ord_type: 'market',
+            volume: '0.01',
+          },
+        });
+      });
     });
   });
 });
