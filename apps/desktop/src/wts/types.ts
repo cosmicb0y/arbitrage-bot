@@ -166,13 +166,13 @@ export interface WtsApiResult<T> {
 }
 
 // ============================================================================
-// Order Form Types (Future Use)
+// Order Form Types (UI)
 // ============================================================================
 
-/** 주문 유형 */
+/** 주문 유형 (UI용) */
 export type OrderType = 'market' | 'limit';
 
-/** 주문 방향 */
+/** 주문 방향 (UI용) */
 export type OrderSide = 'buy' | 'sell';
 
 /** 주문 폼 상태 */
@@ -185,6 +185,99 @@ export interface OrderFormState {
   quantity: string;
   /** 가격 (지정가 주문 시) */
   price: string;
+}
+
+// ============================================================================
+// Order API Types (Upbit)
+// ============================================================================
+
+/** Upbit 주문 방향 (API용) */
+export type UpbitOrderSide = 'bid' | 'ask';
+
+/** Upbit 주문 유형 (API용) */
+export type UpbitOrderType = 'limit' | 'price' | 'market';
+
+/**
+ * 주문 요청 파라미터 (Tauri 명령)
+ *
+ * @description
+ * - limit (지정가): market, side, volume, price 모두 필요
+ * - price (시장가 매수): market, side='bid', price(총액) 필요, volume 없음
+ * - market (시장가 매도): market, side='ask', volume 필요, price 없음
+ */
+export interface OrderParams {
+  /** 마켓 코드 (예: "KRW-BTC") */
+  market: string;
+  /** 주문 방향: bid(매수) | ask(매도) */
+  side: UpbitOrderSide;
+  /** 주문 수량 (시장가 매도 또는 지정가) */
+  volume?: string;
+  /** 주문 가격 (시장가 매수: 총액, 지정가: 단가) */
+  price?: string;
+  /** 주문 유형 */
+  ord_type: UpbitOrderType;
+}
+
+/** 주문 응답 (Upbit API) */
+export interface OrderResponse {
+  /** 주문 고유 ID */
+  uuid: string;
+  /** 주문 방향 */
+  side: string;
+  /** 주문 유형 */
+  ord_type: string;
+  /** 주문 가격 */
+  price: string | null;
+  /** 주문 상태: wait, watch, done, cancel */
+  state: string;
+  /** 마켓 코드 */
+  market: string;
+  /** 주문 생성 시각 */
+  created_at: string;
+  /** 주문 수량 */
+  volume: string | null;
+  /** 미체결 수량 */
+  remaining_volume: string | null;
+  /** 예약 수수료 */
+  reserved_fee: string;
+  /** 미사용 수수료 */
+  remaining_fee: string;
+  /** 지불 수수료 */
+  paid_fee: string;
+  /** 잠금 금액/수량 */
+  locked: string;
+  /** 체결 수량 */
+  executed_volume: string;
+  /** 체결 횟수 */
+  trades_count: number;
+}
+
+// ============================================================================
+// Order Helpers
+// ============================================================================
+
+/**
+ * UI 주문 방향 → Upbit API 주문 방향 변환
+ */
+export function toUpbitSide(side: OrderSide): UpbitOrderSide {
+  return side === 'buy' ? 'bid' : 'ask';
+}
+
+/**
+ * UI 주문 유형 + 방향 → Upbit API 주문 유형 변환
+ *
+ * @description
+ * - 지정가 (limit): 'limit'
+ * - 시장가 매수: 'price' (총액 지정)
+ * - 시장가 매도: 'market' (수량 지정)
+ */
+export function toUpbitOrderType(
+  orderType: OrderType,
+  side: OrderSide
+): UpbitOrderType {
+  if (orderType === 'limit') return 'limit';
+  // 시장가: 매수는 'price', 매도는 'market'
+  return side === 'buy' ? 'price' : 'market';
 }
 
 // ============================================================================
@@ -263,4 +356,42 @@ export interface UpbitOrderbookResponse {
   total_ask_size: number;
   total_bid_size: number;
   orderbook_units: UpbitOrderbookUnit[];
+}
+
+// ============================================================================
+// Order Error Codes (Upbit)
+// ============================================================================
+
+/** Upbit 주문 관련 에러 코드 → 한국어 메시지 매핑 */
+export const UPBIT_ORDER_ERROR_MESSAGES: Record<string, string> = {
+  // 인증 관련
+  missing_api_key: 'API 키가 설정되지 않았습니다',
+  jwt_error: 'JWT 토큰 생성에 실패했습니다',
+  jwt_verification: 'JWT 인증에 실패했습니다',
+  no_authorization_ip: '허용되지 않은 IP입니다',
+  expired_access_key: '만료된 API 키입니다',
+  // 네트워크/서버
+  network_error: '네트워크 연결에 실패했습니다',
+  rate_limit: '요청이 너무 많습니다. 잠시 후 다시 시도하세요',
+  parse_error: '응답 파싱에 실패했습니다',
+  // 주문 관련
+  insufficient_funds_bid: '매수 가능 금액이 부족합니다',
+  insufficient_funds_ask: '매도 가능 수량이 부족합니다',
+  under_min_total_bid: '최소 주문금액(5,000원) 이상이어야 합니다',
+  under_min_total_ask: '최소 주문금액(5,000원) 이상이어야 합니다',
+  invalid_volume: '주문 수량이 올바르지 않습니다',
+  invalid_price: '주문 가격이 올바르지 않습니다',
+  market_does_not_exist: '존재하지 않는 마켓입니다',
+  invalid_side: '주문 방향이 올바르지 않습니다',
+  invalid_ord_type: '주문 유형이 올바르지 않습니다',
+  validation_error: '잘못된 요청입니다',
+};
+
+/**
+ * 에러 코드에 대한 한국어 메시지 반환
+ * @param code 에러 코드
+ * @param fallback 기본 메시지 (매핑 없을 때)
+ */
+export function getOrderErrorMessage(code: string, fallback?: string): string {
+  return UPBIT_ORDER_ERROR_MESSAGES[code] ?? fallback ?? code;
 }

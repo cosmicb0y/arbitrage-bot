@@ -6,7 +6,7 @@ pub mod types;
 pub mod upbit;
 
 pub use types::*;
-pub use upbit::{BalanceEntry, UpbitMarket, WtsApiResult};
+pub use upbit::{BalanceEntry, OrderParams, OrderResponse, UpbitMarket, WtsApiResult};
 
 use std::time::Instant;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -103,6 +103,21 @@ pub async fn wts_get_balance() -> WtsApiResult<Vec<BalanceEntry>> {
 pub async fn wts_get_markets() -> WtsApiResult<Vec<UpbitMarket>> {
     match upbit::get_markets().await {
         Ok(markets) => WtsApiResult::ok(markets),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+/// Upbit 주문을 실행합니다.
+///
+/// # Arguments
+/// * `params` - 주문 파라미터 (market, side, volume, price, ord_type)
+///
+/// # Returns
+/// * `WtsApiResult<OrderResponse>` - 성공 시 주문 결과, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_place_order(params: OrderParams) -> WtsApiResult<OrderResponse> {
+    match upbit::place_order(params).await {
+        Ok(order) => WtsApiResult::ok(order),
         Err(e) => WtsApiResult::err(e),
     }
 }
