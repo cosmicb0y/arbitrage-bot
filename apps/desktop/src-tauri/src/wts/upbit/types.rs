@@ -46,7 +46,7 @@ pub enum UpbitApiError {
     #[serde(rename = "network_error")]
     NetworkError(String),
     #[serde(rename = "rate_limit")]
-    RateLimitExceeded,
+    RateLimitExceeded { remaining_req: Option<String> },
     #[serde(rename = "api_error")]
     ApiError { code: String, message: String },
     #[serde(rename = "parse_error")]
@@ -60,8 +60,8 @@ impl UpbitApiError {
             Self::MissingApiKey => "API 키가 설정되지 않았습니다".to_string(),
             Self::JwtError(_) => "JWT 토큰 생성에 실패했습니다".to_string(),
             Self::NetworkError(_) => "네트워크 연결에 실패했습니다".to_string(),
-            Self::RateLimitExceeded => {
-                "요청이 너무 많습니다. 잠시 후 다시 시도하세요".to_string()
+            Self::RateLimitExceeded { .. } => {
+                "주문 요청이 너무 빠릅니다. 잠시 후 다시 시도하세요.".to_string()
             }
             Self::ApiError { code, message } => match code.as_str() {
                 // 인증 관련 에러
@@ -80,6 +80,13 @@ impl UpbitApiError {
                 "market_does_not_exist" => "존재하지 않는 마켓입니다".to_string(),
                 "invalid_side" => "주문 방향이 올바르지 않습니다".to_string(),
                 "invalid_ord_type" => "주문 유형이 올바르지 않습니다".to_string(),
+                // 입금 관련 에러 (WTS-4.1)
+                "deposit_address_not_found" => "입금 주소가 아직 생성되지 않았습니다".to_string(),
+                "invalid_currency" => "지원하지 않는 자산입니다".to_string(),
+                "invalid_net_type" => "지원하지 않는 네트워크입니다".to_string(),
+                "deposit_paused" => "현재 입금이 일시 중단되었습니다".to_string(),
+                "deposit_suspended" => "해당 자산의 입금이 중단되었습니다".to_string(),
+                "address_generation_failed" => "입금 주소 생성에 실패했습니다".to_string(),
                 _ => message.clone(),
             },
             Self::ParseError(_) => "응답 파싱에 실패했습니다".to_string(),
@@ -92,7 +99,7 @@ impl UpbitApiError {
             Self::MissingApiKey => "missing_api_key".to_string(),
             Self::JwtError(_) => "jwt_error".to_string(),
             Self::NetworkError(_) => "network_error".to_string(),
-            Self::RateLimitExceeded => "rate_limit".to_string(),
+            Self::RateLimitExceeded { .. } => "rate_limit".to_string(),
             Self::ApiError { code, .. } => code.clone(),
             Self::ParseError(_) => "parse_error".to_string(),
         }
@@ -114,6 +121,8 @@ pub struct WtsApiResult<T> {
 pub struct WtsApiErrorResponse {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
 }
 
 impl<T> WtsApiResult<T> {
@@ -128,12 +137,19 @@ impl<T> WtsApiResult<T> {
 
     /// 에러 응답 생성
     pub fn err(error: UpbitApiError) -> Self {
+        let detail = match &error {
+            UpbitApiError::RateLimitExceeded { remaining_req } => remaining_req
+                .as_ref()
+                .map(|value| serde_json::json!({ "remaining_req": value })),
+            _ => None,
+        };
         Self {
             success: false,
             data: None,
             error: Some(WtsApiErrorResponse {
                 code: error.code(),
                 message: error.to_korean_message(),
+                detail,
             }),
         }
     }
@@ -180,6 +196,93 @@ pub struct OrderParams {
     pub price: Option<String>,
     /// 주문 유형
     pub ord_type: UpbitOrderType,
+}
+
+// ============================================================================
+// Deposit API Types (Upbit)
+// ============================================================================
+
+/// 입금 주소 조회 파라미터
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepositAddressParams {
+    /// 자산 코드 (예: "BTC", "ETH")
+    pub currency: String,
+    /// 네트워크 타입 (예: "BTC", "ETH", "TRX" 등)
+    pub net_type: String,
+}
+
+/// 입금 주소 조회 응답
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepositAddressResponse {
+    /// 자산 코드
+    pub currency: String,
+    /// 네트워크 타입
+    pub net_type: String,
+    /// 입금 주소 (null일 수 있음 - 생성 중)
+    pub deposit_address: Option<String>,
+    /// 보조 주소 (일부 코인: XRP tag, EOS memo 등)
+    pub secondary_address: Option<String>,
+}
+
+/// 입금 가능 정보 조회 파라미터
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepositChanceParams {
+    /// 자산 코드
+    pub currency: String,
+    /// 네트워크 타입
+    pub net_type: String,
+}
+
+/// 네트워크 정보
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepositNetwork {
+    /// 네트워크 이름
+    pub name: String,
+    /// 네트워크 타입
+    pub net_type: String,
+    /// 우선순위
+    pub priority: i32,
+    /// 입금 상태
+    pub deposit_state: String,
+    /// 확인 횟수
+    pub confirm_count: i32,
+}
+
+/// 입금 가능 정보 응답
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepositChanceResponse {
+    /// 자산 코드
+    pub currency: String,
+    /// 네트워크 타입
+    pub net_type: String,
+    /// 네트워크 정보
+    pub network: DepositNetwork,
+    /// 입금 상태 (normal, paused 등)
+    pub deposit_state: String,
+    /// 최소 입금 수량
+    pub minimum: String,
+}
+
+/// 입금 주소 생성 파라미터
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateAddressParams {
+    /// 자산 코드 (예: "BTC", "ETH")
+    pub currency: String,
+    /// 네트워크 타입 (예: "BTC", "ETH", "TRX" 등)
+    pub net_type: String,
+}
+
+/// 입금 주소 생성 응답 (비동기)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GenerateAddressResponse {
+    /// 비동기 생성 중
+    Creating {
+        success: bool,
+        message: String,
+    },
+    /// 이미 존재하는 주소
+    Existing(DepositAddressResponse),
 }
 
 /// 주문 응답 (Upbit API)
@@ -243,10 +346,10 @@ mod tests {
 
     #[test]
     fn test_error_korean_message() {
-        let err = UpbitApiError::RateLimitExceeded;
+        let err = UpbitApiError::RateLimitExceeded { remaining_req: None };
         assert_eq!(
             err.to_korean_message(),
-            "요청이 너무 많습니다. 잠시 후 다시 시도하세요"
+            "주문 요청이 너무 빠릅니다. 잠시 후 다시 시도하세요."
         );
 
         let err = UpbitApiError::MissingApiKey;
@@ -507,5 +610,177 @@ mod tests {
         assert!(response.price.is_none());
         assert_eq!(response.state, "done");
         assert_eq!(response.trades_count, 1);
+    }
+
+    // ============================================================================
+    // Deposit Types Tests (WTS-4.1)
+    // ============================================================================
+
+    #[test]
+    fn test_deposit_address_params_serialize() {
+        let params = DepositAddressParams {
+            currency: "BTC".to_string(),
+            net_type: "BTC".to_string(),
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["currency"], "BTC");
+        assert_eq!(json["net_type"], "BTC");
+    }
+
+    #[test]
+    fn test_deposit_address_response_deserialize() {
+        let json = r#"{
+            "currency": "BTC",
+            "net_type": "BTC",
+            "deposit_address": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+            "secondary_address": null
+        }"#;
+
+        let response: DepositAddressResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.currency, "BTC");
+        assert_eq!(response.net_type, "BTC");
+        assert_eq!(
+            response.deposit_address,
+            Some("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string())
+        );
+        assert!(response.secondary_address.is_none());
+    }
+
+    #[test]
+    fn test_deposit_address_response_with_secondary() {
+        // XRP는 secondary_address (Destination Tag) 사용
+        let json = r#"{
+            "currency": "XRP",
+            "net_type": "XRP",
+            "deposit_address": "rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh",
+            "secondary_address": "123456789"
+        }"#;
+
+        let response: DepositAddressResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.currency, "XRP");
+        assert_eq!(response.secondary_address, Some("123456789".to_string()));
+    }
+
+    #[test]
+    fn test_deposit_address_response_null_address() {
+        // 주소가 아직 생성되지 않은 경우
+        let json = r#"{
+            "currency": "BTC",
+            "net_type": "BTC",
+            "deposit_address": null,
+            "secondary_address": null
+        }"#;
+
+        let response: DepositAddressResponse = serde_json::from_str(json).unwrap();
+        assert!(response.deposit_address.is_none());
+    }
+
+    #[test]
+    fn test_deposit_chance_response_deserialize() {
+        let json = r#"{
+            "currency": "BTC",
+            "net_type": "BTC",
+            "network": {
+                "name": "Bitcoin",
+                "net_type": "BTC",
+                "priority": 1,
+                "deposit_state": "normal",
+                "confirm_count": 3
+            },
+            "deposit_state": "normal",
+            "minimum": "0.001"
+        }"#;
+
+        let response: DepositChanceResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.currency, "BTC");
+        assert_eq!(response.net_type, "BTC");
+        assert_eq!(response.network.name, "Bitcoin");
+        assert_eq!(response.network.priority, 1);
+        assert_eq!(response.network.deposit_state, "normal");
+        assert_eq!(response.network.confirm_count, 3);
+        assert_eq!(response.deposit_state, "normal");
+        assert_eq!(response.minimum, "0.001");
+    }
+
+    #[test]
+    fn test_generate_address_response_creating() {
+        // 비동기 생성 중 응답
+        let json = r#"{
+            "success": true,
+            "message": "creating"
+        }"#;
+
+        let response: GenerateAddressResponse = serde_json::from_str(json).unwrap();
+        match response {
+            GenerateAddressResponse::Creating { success, message } => {
+                assert!(success);
+                assert_eq!(message, "creating");
+            }
+            _ => panic!("Expected Creating variant"),
+        }
+    }
+
+    #[test]
+    fn test_generate_address_response_existing() {
+        // 이미 존재하는 주소 응답
+        let json = r#"{
+            "currency": "BTC",
+            "net_type": "BTC",
+            "deposit_address": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+            "secondary_address": null
+        }"#;
+
+        let response: GenerateAddressResponse = serde_json::from_str(json).unwrap();
+        match response {
+            GenerateAddressResponse::Existing(addr) => {
+                assert_eq!(addr.currency, "BTC");
+                assert_eq!(
+                    addr.deposit_address,
+                    Some("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string())
+                );
+            }
+            _ => panic!("Expected Existing variant"),
+        }
+    }
+
+    #[test]
+    fn test_deposit_error_korean_messages() {
+        // 입금 관련 에러 메시지
+        let err = UpbitApiError::ApiError {
+            code: "deposit_address_not_found".to_string(),
+            message: "Deposit address not found".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "입금 주소가 아직 생성되지 않았습니다");
+
+        let err = UpbitApiError::ApiError {
+            code: "invalid_currency".to_string(),
+            message: "Invalid currency".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "지원하지 않는 자산입니다");
+
+        let err = UpbitApiError::ApiError {
+            code: "invalid_net_type".to_string(),
+            message: "Invalid net type".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "지원하지 않는 네트워크입니다");
+
+        let err = UpbitApiError::ApiError {
+            code: "deposit_paused".to_string(),
+            message: "Deposit paused".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "현재 입금이 일시 중단되었습니다");
+
+        let err = UpbitApiError::ApiError {
+            code: "deposit_suspended".to_string(),
+            message: "Deposit suspended".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "해당 자산의 입금이 중단되었습니다");
+
+        let err = UpbitApiError::ApiError {
+            code: "address_generation_failed".to_string(),
+            message: "Address generation failed".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "입금 주소 생성에 실패했습니다");
     }
 }

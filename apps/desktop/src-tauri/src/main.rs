@@ -75,6 +75,9 @@ fn main() {
             wts::wts_get_balance,
             wts::wts_get_markets,
             wts::wts_place_order,
+            wts::wts_get_deposit_address,
+            wts::wts_generate_deposit_address,
+            wts::wts_get_deposit_chance,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

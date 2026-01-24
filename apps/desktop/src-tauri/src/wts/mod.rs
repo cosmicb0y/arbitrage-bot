@@ -6,9 +6,12 @@ pub mod types;
 pub mod upbit;
 
 pub use types::*;
-pub use upbit::{BalanceEntry, OrderParams, OrderResponse, UpbitMarket, WtsApiResult};
+pub use upbit::{
+    BalanceEntry, DepositAddressParams, DepositAddressResponse, DepositChanceParams,
+    DepositChanceResponse, GenerateAddressResponse, OrderParams, OrderResponse, UpbitMarket,
+    WtsApiResult,
+};
 
-use std::time::Instant;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// WTS 창을 열거나 이미 열린 경우 포커스합니다.
@@ -47,34 +50,18 @@ pub async fn wts_open_window(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn wts_check_connection(exchange: String) -> ConnectionCheckResult {
     match exchange.as_str() {
-        "upbit" => {
-            let start = Instant::now();
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(5))
-                .build()
-                .unwrap_or_default();
-
-            match client.get("https://api.upbit.com/v1/market/all").send().await {
-                Ok(response) if response.status().is_success() => {
-                    let latency = start.elapsed().as_millis() as u64;
-                    ConnectionCheckResult {
-                        success: true,
-                        latency: Some(latency),
-                        error: None,
-                    }
-                }
-                Ok(response) => ConnectionCheckResult {
-                    success: false,
-                    latency: None,
-                    error: Some(format!("HTTP {}", response.status())),
-                },
-                Err(e) => ConnectionCheckResult {
-                    success: false,
-                    latency: None,
-                    error: Some(e.to_string()),
-                },
-            }
-        }
+        "upbit" => match upbit::check_connection().await {
+            Ok(latency) => ConnectionCheckResult {
+                success: true,
+                latency: Some(latency),
+                error: None,
+            },
+            Err(e) => ConnectionCheckResult {
+                success: false,
+                latency: None,
+                error: Some(e.to_korean_message()),
+            },
+        },
         _ => ConnectionCheckResult {
             success: false,
             latency: None,
@@ -118,6 +105,61 @@ pub async fn wts_get_markets() -> WtsApiResult<Vec<UpbitMarket>> {
 pub async fn wts_place_order(params: OrderParams) -> WtsApiResult<OrderResponse> {
     match upbit::place_order(params).await {
         Ok(order) => WtsApiResult::ok(order),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+// ============================================================================
+// Deposit API Commands (WTS-4.1)
+// ============================================================================
+
+/// Upbit 입금 주소를 조회합니다.
+///
+/// # Arguments
+/// * `params` - 입금 주소 조회 파라미터 (currency, net_type)
+///
+/// # Returns
+/// * `WtsApiResult<DepositAddressResponse>` - 성공 시 입금 주소, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_get_deposit_address(
+    params: DepositAddressParams,
+) -> WtsApiResult<DepositAddressResponse> {
+    match upbit::get_deposit_address(params).await {
+        Ok(address) => WtsApiResult::ok(address),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+/// Upbit 입금 주소를 생성합니다 (비동기).
+///
+/// # Arguments
+/// * `params` - 입금 주소 생성 파라미터 (currency, net_type)
+///
+/// # Returns
+/// * `WtsApiResult<GenerateAddressResponse>` - 성공 시 생성 상태/주소, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_generate_deposit_address(
+    params: DepositAddressParams,
+) -> WtsApiResult<GenerateAddressResponse> {
+    match upbit::generate_deposit_address(params).await {
+        Ok(response) => WtsApiResult::ok(response),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+/// Upbit 입금 가능 정보를 조회합니다.
+///
+/// # Arguments
+/// * `params` - 입금 가능 정보 조회 파라미터 (currency, net_type)
+///
+/// # Returns
+/// * `WtsApiResult<DepositChanceResponse>` - 성공 시 입금 가능 정보, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_get_deposit_chance(
+    params: DepositChanceParams,
+) -> WtsApiResult<DepositChanceResponse> {
+    match upbit::get_deposit_chance(params).await {
+        Ok(chance) => WtsApiResult::ok(chance),
         Err(e) => WtsApiResult::err(e),
     }
 }

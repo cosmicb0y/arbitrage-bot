@@ -116,12 +116,12 @@ development_status:
   wts-3-4-limit-order-buy-sell: done
   wts-3-5-order-confirm-dialog: done
   wts-3-6-console-log-order-result: done
-  wts-3-7-order-error-ratelimit-handling: backlog
+  wts-3-7-order-error-ratelimit-handling: done
   wts-epic-3-retrospective: optional
 
   # WTS Epic 4: 입금 기능
-  wts-epic-4: backlog
-  wts-4-1-deposit-api-rust-backend: backlog
+  wts-epic-4: in-progress
+  wts-4-1-deposit-api-rust-backend: done
   wts-4-2-deposit-tab-ui-asset-network: backlog
   wts-4-3-deposit-address-display-copy: backlog
   wts-4-4-deposit-address-async-generation: backlog

@@ -156,6 +156,7 @@ export interface BalanceEntry {
 export interface WtsApiErrorResponse {
   code: string;
   message: string;
+  detail?: Record<string, unknown>;
 }
 
 /** WTS API 응답 래퍼 */
@@ -371,9 +372,14 @@ export const UPBIT_ORDER_ERROR_MESSAGES: Record<string, string> = {
   no_authorization_ip: '허용되지 않은 IP입니다',
   expired_access_key: '만료된 API 키입니다',
   // 네트워크/서버
-  network_error: '네트워크 연결에 실패했습니다',
-  rate_limit: '요청이 너무 많습니다. 잠시 후 다시 시도하세요',
+  network_error: '네트워크 연결을 확인하세요',
+  timeout_error: '요청 시간이 초과되었습니다. 네트워크 상태를 확인하세요',
+  connection_error: '서버에 연결할 수 없습니다. 네트워크 상태를 확인하세요',
+  rate_limit: '주문 요청이 너무 빠릅니다. 잠시 후 다시 시도하세요.',
+  too_many_requests: '주문 요청이 너무 빠릅니다. 잠시 후 다시 시도하세요.',
   parse_error: '응답 파싱에 실패했습니다',
+  server_error: '서버 오류가 발생했습니다. 잠시 후 다시 시도하세요',
+  service_unavailable: '서비스를 일시적으로 이용할 수 없습니다',
   // 주문 관련
   insufficient_funds_bid: '매수 가능 금액이 부족합니다',
   insufficient_funds_ask: '매도 가능 수량이 부족합니다',
@@ -385,6 +391,14 @@ export const UPBIT_ORDER_ERROR_MESSAGES: Record<string, string> = {
   invalid_side: '주문 방향이 올바르지 않습니다',
   invalid_ord_type: '주문 유형이 올바르지 않습니다',
   validation_error: '잘못된 요청입니다',
+  invalid_query_payload: '요청 파라미터가 올바르지 않습니다',
+  // 입금 관련 (WTS-4.1)
+  deposit_address_not_found: '입금 주소가 아직 생성되지 않았습니다',
+  invalid_currency: '지원하지 않는 자산입니다',
+  invalid_net_type: '지원하지 않는 네트워크입니다',
+  deposit_paused: '현재 입금이 일시 중단되었습니다',
+  deposit_suspended: '해당 자산의 입금이 중단되었습니다',
+  address_generation_failed: '입금 주소 생성에 실패했습니다',
 };
 
 /**
@@ -397,4 +411,106 @@ export function getOrderErrorMessage(code: string, fallback?: string): string {
   if (mapped) return mapped;
   if (fallback && /[가-힣]/.test(fallback)) return fallback;
   return '알 수 없는 오류가 발생했습니다';
+}
+
+/**
+ * Rate Limit 관련 에러인지 확인
+ * @param code 에러 코드
+ */
+export function isRateLimitError(code: string): boolean {
+  return code === 'rate_limit' || code === 'too_many_requests';
+}
+
+/**
+ * 네트워크 관련 에러인지 확인
+ * @param code 에러 코드
+ */
+export function isNetworkError(code: string): boolean {
+  return code === 'network_error' || code === 'timeout_error' || code === 'connection_error';
+}
+
+// ============================================================================
+// Deposit API Types (Upbit) - WTS-4.1
+// ============================================================================
+
+/** 입금 주소 조회 파라미터 */
+export interface DepositAddressParams {
+  /** 자산 코드 (예: "BTC", "ETH") */
+  currency: string;
+  /** 네트워크 타입 (예: "BTC", "ETH", "TRX" 등) */
+  net_type: string;
+}
+
+/** 입금 주소 조회 응답 */
+export interface DepositAddressResponse {
+  /** 자산 코드 */
+  currency: string;
+  /** 네트워크 타입 */
+  net_type: string;
+  /** 입금 주소 (null일 수 있음 - 생성 중) */
+  deposit_address: string | null;
+  /** 보조 주소 (XRP tag, EOS memo 등) */
+  secondary_address: string | null;
+}
+
+/** 입금 가능 정보 파라미터 */
+export interface DepositChanceParams {
+  /** 자산 코드 */
+  currency: string;
+  /** 네트워크 타입 */
+  net_type: string;
+}
+
+/** 네트워크 정보 */
+export interface DepositNetwork {
+  /** 네트워크 이름 */
+  name: string;
+  /** 네트워크 타입 */
+  net_type: string;
+  /** 우선순위 */
+  priority: number;
+  /** 입금 상태 */
+  deposit_state: string;
+  /** 확인 횟수 */
+  confirm_count: number;
+}
+
+/** 입금 가능 정보 응답 */
+export interface DepositChanceResponse {
+  /** 자산 코드 */
+  currency: string;
+  /** 네트워크 타입 */
+  net_type: string;
+  /** 네트워크 정보 */
+  network: DepositNetwork;
+  /** 입금 상태 (normal, paused 등) */
+  deposit_state: string;
+  /** 최소 입금 수량 */
+  minimum: string;
+}
+
+/** 입금 주소 생성 응답 - 비동기 생성 중 */
+export interface GenerateAddressCreating {
+  success: true;
+  message: 'creating';
+}
+
+/** 입금 주소 생성 응답 (비동기) */
+export type GenerateAddressResponse =
+  | GenerateAddressCreating
+  | DepositAddressResponse;
+
+/** 입금 상태 타입 */
+export type DepositState = 'normal' | 'paused' | 'suspended';
+
+/** 입금 상태가 정상인지 확인 */
+export function isDepositAvailable(state: string): boolean {
+  return state === 'normal';
+}
+
+/** GenerateAddressResponse가 생성 중 상태인지 확인 */
+export function isAddressGenerating(
+  response: GenerateAddressResponse
+): response is GenerateAddressCreating {
+  return 'success' in response && response.message === 'creating';
 }
