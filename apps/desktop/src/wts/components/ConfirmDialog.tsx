@@ -188,10 +188,15 @@ export function ConfirmDialog({
             </>
           )}
 
-          {/* 경고 메시지 */}
+          {/* 경고/안내 메시지 */}
           {isMarket && (
             <div className="mt-3 p-2 bg-yellow-900/30 border border-yellow-700/50 rounded text-xs text-yellow-500">
               ⚠️ 시장가 주문은 즉시 체결됩니다
+            </div>
+          )}
+          {!isMarket && (
+            <div className="mt-3 p-2 bg-blue-900/30 border border-blue-700/50 rounded text-xs text-blue-400">
+              ℹ️ 지정가 주문은 해당 가격에 도달하면 체결됩니다
             </div>
           )}
         </div>

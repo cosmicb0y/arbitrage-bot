@@ -431,6 +431,84 @@ describe('OrderPanel', () => {
       expect(screen.getByText('잔고 초과')).toBeDefined();
     });
 
+    it('지정가 매수: 예상 총액 > KRW 잔고 시 "잔고 초과" 표시 (AC #7)', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '60000000',
+        quantity: '0.02', // 60000000 * 0.02 = 1,200,000 > 1,000,000 (잔고)
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByText('잔고 초과')).toBeDefined();
+    });
+
+    it('지정가 매도: 수량 > 코인 잔고 시 "잔고 초과" 표시 (AC #8)', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'sell',
+        price: '50000000',
+        quantity: '0.6', // 0.6 > 0.5 (BTC 잔고)
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByText('잔고 초과')).toBeDefined();
+    });
+
+    it('지정가 매도: 수량 <= 코인 잔고 시 "잔고 초과" 미표시', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'sell',
+        price: '50000000',
+        quantity: '0.3', // 0.3 <= 0.5 (BTC 잔고)
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.queryByText('잔고 초과')).toBeNull();
+    });
+
+    it('잔고 초과 상태에서도 주문 버튼은 클릭 가능해야 한다 (거래소 API가 최종 검증)', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '1', // 잔고 초과
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByText('잔고 초과')).toBeDefined();
+      // 버튼은 비활성화되지 않음 (가격과 수량이 입력되어 있으므로)
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', false);
+    });
+
     it('시장가 매수에서 예상 총액이 주문 금액으로 표시되어야 한다', () => {
       vi.mocked(useOrderStore).mockReturnValue({
         orderType: 'market',
@@ -635,6 +713,82 @@ describe('OrderPanel', () => {
       expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', false);
     });
 
+    it('지정가 모드에서 가격이 0이면 버튼이 비활성화되어야 한다 (AC #9)', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '0',
+        quantity: '0.01',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', true);
+    });
+
+    it('지정가 모드에서 수량이 0이면 버튼이 비활성화되어야 한다 (AC #9)', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', true);
+    });
+
+    it('지정가 모드에서 가격이 비어있으면 버튼이 비활성화되어야 한다 (AC #9)', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '',
+        quantity: '0.01',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', true);
+    });
+
+    it('지정가 모드에서 수량이 비어있으면 버튼이 비활성화되어야 한다 (AC #9)', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      expect(screen.getByTestId('order-submit-btn')).toHaveProperty('disabled', true);
+    });
+
     it('버튼 클릭 시 확인 다이얼로그가 표시되어야 한다 (AC #1)', () => {
       vi.mocked(useOrderStore).mockReturnValue({
         orderType: 'market',
@@ -693,6 +847,299 @@ describe('OrderPanel', () => {
       render(<OrderPanel />);
 
       expect(screen.getByTestId('order-submit-btn').className).toContain('bg-red');
+    });
+  });
+
+  describe('WTS-3.4: 지정가 주문 (AC: #3, #4, #5)', () => {
+    it('지정가 주문 시 ord_type=limit, side=bid/ask, volume, price가 전달되어야 한다 (AC #3)', async () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: {
+          uuid: 'order-limit-1',
+          side: 'bid',
+          ord_type: 'limit',
+          price: '50000000',
+          state: 'wait',
+          market: 'KRW-BTC',
+          created_at: '2026-01-19T00:00:00Z',
+          volume: '0.001',
+          remaining_volume: '0.001',
+          reserved_fee: '0',
+          remaining_fee: '0',
+          paid_fee: '0',
+          locked: '50050',
+          executed_volume: '0',
+          trades_count: 0,
+        },
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '매수' }));
+
+      await waitFor(() => {
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith('wts_place_order', {
+          params: {
+            market: 'KRW-BTC',
+            side: 'bid',
+            ord_type: 'limit',
+            volume: '0.001',
+            price: '50000000',
+          },
+        });
+      });
+    });
+
+    it('지정가 주문 성공 시 콘솔에 INFO 로그가 기록되어야 한다 (AC #4)', async () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: {
+          uuid: 'order-limit-1',
+          side: 'bid',
+          ord_type: 'limit',
+          price: '50000000',
+          state: 'wait',
+          market: 'KRW-BTC',
+          created_at: '2026-01-19T00:00:00Z',
+          volume: '0.001',
+          remaining_volume: '0.001',
+          reserved_fee: '0',
+          remaining_fee: '0',
+          paid_fee: '0',
+          locked: '50050',
+          executed_volume: '0',
+          trades_count: 0,
+        },
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '매수' }));
+
+      await waitFor(() => {
+        // 주문 요청 로그
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'INFO',
+          'ORDER',
+          expect.stringContaining('지정가 매수 주문 요청')
+        );
+      });
+    });
+
+    it('지정가 주문 응답 state가 wait이면 "주문이 등록되었습니다" 토스트가 표시되어야 한다 (AC #5)', async () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: {
+          uuid: 'order-limit-1',
+          side: 'bid',
+          ord_type: 'limit',
+          price: '50000000',
+          state: 'wait',
+          market: 'KRW-BTC',
+          created_at: '2026-01-19T00:00:00Z',
+          volume: '0.001',
+          remaining_volume: '0.001',
+          reserved_fee: '0',
+          remaining_fee: '0',
+          paid_fee: '0',
+          locked: '50050',
+          executed_volume: '0',
+          trades_count: 0,
+        },
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '매수' }));
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('success', '주문이 등록되었습니다');
+      });
+    });
+
+    it('지정가 주문 응답 state가 done이면 "주문이 체결되었습니다" 토스트가 표시되어야 한다', async () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: {
+          uuid: 'order-limit-1',
+          side: 'bid',
+          ord_type: 'limit',
+          price: '50000000',
+          state: 'done',
+          market: 'KRW-BTC',
+          created_at: '2026-01-19T00:00:00Z',
+          volume: '0.001',
+          remaining_volume: '0',
+          reserved_fee: '0',
+          remaining_fee: '0',
+          paid_fee: '50',
+          locked: '0',
+          executed_volume: '0.001',
+          trades_count: 1,
+        },
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '매수' }));
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('success', '주문이 체결되었습니다');
+      });
+    });
+
+    it('지정가 매도 주문 시 콘솔 로그 포맷이 올바르게 표시되어야 한다', async () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'sell',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: {
+          uuid: 'order-limit-2',
+          side: 'ask',
+          ord_type: 'limit',
+          price: '50000000',
+          state: 'wait',
+          market: 'KRW-BTC',
+          created_at: '2026-01-19T00:00:00Z',
+          volume: '0.001',
+          remaining_volume: '0.001',
+          reserved_fee: '0',
+          remaining_fee: '0',
+          paid_fee: '0',
+          locked: '0.001',
+          executed_volume: '0',
+          trades_count: 0,
+        },
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '매도' }));
+
+      await waitFor(() => {
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'INFO',
+          'ORDER',
+          expect.stringContaining('지정가 매도 주문 요청')
+        );
+      });
+    });
+
+    it('지정가 주문 실패 시 콘솔에 ERROR 로그가 기록되고 토스트에 에러 메시지가 표시되어야 한다 (AC #10)', async () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      vi.mocked(invoke).mockResolvedValue({
+        success: false,
+        error: {
+          code: 'insufficient_balance',
+          message: '잔액이 부족합니다',
+        },
+      });
+
+      render(<OrderPanel />);
+
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '매수' }));
+
+      await waitFor(() => {
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'ERROR',
+          'ORDER',
+          expect.stringContaining('주문 실패')
+        );
+        expect(mockShowToast).toHaveBeenCalledWith('error', expect.any(String));
+      });
     });
   });
 

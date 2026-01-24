@@ -231,14 +231,41 @@ export function OrderPanel({ className = '' }: OrderPanelProps) {
       if (result.success && result.data) {
         const sideLabel = side === 'buy' ? '매수' : '매도';
         const executedVolume = result.data.executed_volume || result.data.volume || quantity;
+        const orderState = result.data.state;
+        const isWait = orderState === 'wait';
+        const isDone = orderState === 'done';
+        const isCancel = orderState === 'cancel';
+        const isTrade = orderState === 'trade';
+        const statusLabel = isWait
+          ? '등록'
+          : isDone
+            ? '체결'
+            : isCancel
+              ? '취소'
+              : isTrade
+                ? '부분 체결'
+                : '처리';
+        const logLevel = isCancel ? 'WARN' : 'SUCCESS';
 
         addLog(
-          'SUCCESS',
+          logLevel,
           'ORDER',
-          `주문 체결: ${sideLabel} ${executedVolume} ${coin} @ ${isMarket ? '시장가' : formatKrw(parseFloat(unformatPrice(price)))}`
+          `주문 ${statusLabel}: ${sideLabel} ${executedVolume} ${coin} @ ${
+            isMarket ? '시장가' : formatKrw(parseFloat(unformatPrice(price)))
+          }`
         );
 
-        showToast('success', '주문이 체결되었습니다');
+        // 응답 상태에 따른 토스트 메시지 분기 (AC #5)
+        const toastMessage = isWait
+          ? '주문이 등록되었습니다'
+          : isDone
+            ? '주문이 체결되었습니다'
+            : isCancel
+              ? '주문이 취소되었습니다'
+              : isTrade
+                ? '주문이 부분 체결되었습니다'
+                : '주문이 처리되었습니다';
+        showToast(isCancel ? 'error' : 'success', toastMessage);
 
         // 잔고 갱신
         setTimeout(() => {
