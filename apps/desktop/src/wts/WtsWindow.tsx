@@ -5,6 +5,7 @@ import {
   BalancePanel,
   OrderPanel,
   OpenOrdersPanel,
+  TransferPanel,
 } from './panels';
 import { ToastContainer } from './components/ToastContainer';
 import { useConnectionCheck } from './hooks';
@@ -29,6 +30,7 @@ export function WtsWindow() {
         <OrderbookPanel />
         <BalancePanel />
         <OrderPanel />
+        <TransferPanel />
         <OpenOrdersPanel />
       </div>
       <ToastContainer />

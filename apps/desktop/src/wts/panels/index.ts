@@ -4,3 +4,4 @@ export { OrderbookPanel } from './OrderbookPanel';
 export { BalancePanel } from './BalancePanel';
 export { OrderPanel } from './OrderPanel';
 export { OpenOrdersPanel } from './OpenOrdersPanel';
+export { TransferPanel } from './TransferPanel';

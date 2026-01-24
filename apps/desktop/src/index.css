@@ -45,12 +45,12 @@
 /* WTS Grid Layout */
 .wts-grid {
   display: grid;
-  grid-template-columns: 25% 35% 40%;
+  grid-template-columns: 25% 35% 20% 20%;
   grid-template-rows: 40px 60% 40%;
   grid-template-areas:
-    "header  header     header"
-    "console orderbook  order"
-    "console balances   openOrders";
+    "header   header     header     header"
+    "console  orderbook  order      order"
+    "console  balances   transfer   openOrders";
   height: 100vh;
   gap: 4px;
   padding: 4px;
@@ -63,6 +63,7 @@
 .wts-area-orderbook { grid-area: orderbook; }
 .wts-area-balances { grid-area: balances; }
 .wts-area-order { grid-area: order; }
+.wts-area-transfer { grid-area: transfer; }
 .wts-area-openOrders { grid-area: openOrders; }
 
 /* WTS Panel Base Styles */
