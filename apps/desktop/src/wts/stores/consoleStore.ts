@@ -6,6 +6,7 @@ import type {
   LogCategory,
 } from '../types';
 import { MAX_CONSOLE_LOGS } from '../types';
+import { sanitizeLogDetail } from '../utils/formatters';
 
 /**
  * 콘솔 스토어
@@ -31,7 +32,7 @@ export const useConsoleStore = create<ConsoleState>()((set) => ({
         level,
         category,
         message,
-        detail,
+        detail: sanitizeLogDetail(detail),
       };
 
       const logs = [...state.logs, newLog];

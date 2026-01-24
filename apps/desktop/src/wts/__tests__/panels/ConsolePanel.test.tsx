@@ -306,4 +306,90 @@ describe('ConsolePanel', () => {
       expect(panel.className).toContain('custom-class');
     });
   });
+
+  describe('WTS-3.6: 자동 스크롤 동작 (AC #7)', () => {
+    it('하단에서 50px 이내이면 자동 스크롤이 활성화되어야 한다', () => {
+      vi.mocked(useConsoleStore).mockReturnValue(
+        createMockStore([createTestLog({ message: 'test' })])
+      );
+      const { rerender } = render(<ConsolePanel />);
+
+      const consolePanel = screen.getByTestId('console-panel');
+      const contentArea = consolePanel.querySelector(
+        '.wts-panel-content'
+      ) as HTMLDivElement;
+
+      Object.defineProperty(contentArea, 'scrollHeight', {
+        value: 1000,
+        configurable: true,
+      });
+      Object.defineProperty(contentArea, 'clientHeight', {
+        value: 200,
+        configurable: true,
+      });
+      // scrollTop을 하단에서 40px 위치로 설정 (1000 - 200 - 40 = 760)
+      Object.defineProperty(contentArea, 'scrollTop', {
+        value: 760,
+        writable: true,
+      });
+
+      // 스크롤 이벤트 발생
+      fireEvent.scroll(contentArea);
+
+      // 새 로그 추가
+      vi.mocked(useConsoleStore).mockReturnValue(
+        createMockStore([
+          createTestLog({ message: 'test' }),
+          createTestLog({ message: 'new log' }),
+        ])
+      );
+      rerender(<ConsolePanel />);
+
+      // 하단에서 50px 이내이므로 자동 스크롤 활성화됨
+      expect(contentArea.scrollTop).toBe(1000);
+    });
+
+    it('하단에서 50px 초과 위치이면 자동 스크롤이 비활성화되어야 한다', () => {
+      vi.mocked(useConsoleStore).mockReturnValue(
+        createMockStore([createTestLog({ message: 'test' })])
+      );
+      const { rerender } = render(<ConsolePanel />);
+
+      const consolePanel = screen.getByTestId('console-panel');
+      const contentArea = consolePanel.querySelector(
+        '.wts-panel-content'
+      ) as HTMLDivElement;
+
+      Object.defineProperty(contentArea, 'scrollHeight', {
+        value: 1000,
+        configurable: true,
+      });
+      Object.defineProperty(contentArea, 'clientHeight', {
+        value: 200,
+        configurable: true,
+      });
+      // scrollTop을 하단에서 100px 위치로 설정 (1000 - 200 - 100 = 700)
+      Object.defineProperty(contentArea, 'scrollTop', {
+        value: 700,
+        writable: true,
+      });
+
+      // 스크롤 이벤트 발생
+      fireEvent.scroll(contentArea);
+
+      const originalScrollTop = contentArea.scrollTop;
+
+      // 새 로그 추가
+      vi.mocked(useConsoleStore).mockReturnValue(
+        createMockStore([
+          createTestLog({ message: 'test' }),
+          createTestLog({ message: 'new log' }),
+        ])
+      );
+      rerender(<ConsolePanel />);
+
+      // 하단에서 50px 초과이므로 자동 스크롤 비활성화
+      expect(contentArea.scrollTop).toBe(originalScrollTop);
+    });
+  });
 });

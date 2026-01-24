@@ -43,3 +43,58 @@ export function formatNumber(amount: number): string {
   if (isNaN(amount) || !isFinite(amount)) return '0';
   return Math.round(amount).toLocaleString('ko-KR');
 }
+
+/**
+ * 민감 정보 키 목록 (대소문자 무시)
+ */
+const SENSITIVE_KEYS = [
+  'access_key',
+  'secret_key',
+  'api_key',
+  'apikey',
+  'authorization',
+  'password',
+  'token',
+  'secret',
+];
+
+/**
+ * 로그 detail에서 민감 정보를 마스킹
+ * 객체 내 민감한 키의 값을 [MASKED]로 대체
+ * @param detail 원본 detail 객체
+ * @returns 민감 정보가 마스킹된 객체
+ */
+export function sanitizeLogDetail(detail: unknown): unknown {
+  if (detail === null || detail === undefined) {
+    return detail;
+  }
+
+  if (typeof detail === 'string') {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    return detail.map((item) => sanitizeLogDetail(item));
+  }
+
+  if (typeof detail === 'object') {
+    const sanitized: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(detail as Record<string, unknown>)) {
+      const lowerKey = key.toLowerCase();
+      const isSensitive = SENSITIVE_KEYS.some((k) => lowerKey.includes(k));
+
+      if (isSensitive) {
+        sanitized[key] = '[MASKED]';
+      } else if (typeof value === 'object' && value !== null) {
+        sanitized[key] = sanitizeLogDetail(value);
+      } else {
+        sanitized[key] = value;
+      }
+    }
+
+    return sanitized;
+  }
+
+  return detail;
+}

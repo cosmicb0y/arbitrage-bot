@@ -4,6 +4,7 @@ import {
   formatCrypto,
   formatKrw,
   formatNumber,
+  sanitizeLogDetail,
 } from '../../utils/formatters';
 
 describe('formatLogTimestamp', () => {
@@ -116,5 +117,144 @@ describe('formatNumber', () => {
   it('should handle NaN and Infinity', () => {
     expect(formatNumber(NaN)).toBe('0');
     expect(formatNumber(Infinity)).toBe('0');
+  });
+});
+
+describe('sanitizeLogDetail (WTS-3.6 AC #5)', () => {
+  describe('민감 정보 마스킹', () => {
+    it('access_key를 마스킹해야 한다', () => {
+      const input = { access_key: 'my-secret-key', uuid: '123' };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+
+      expect(result.access_key).toBe('[MASKED]');
+      expect(result.uuid).toBe('123');
+    });
+
+    it('secret_key를 마스킹해야 한다', () => {
+      const input = { secret_key: 'super-secret', data: 'normal' };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+
+      expect(result.secret_key).toBe('[MASKED]');
+      expect(result.data).toBe('normal');
+    });
+
+    it('api_key를 마스킹해야 한다', () => {
+      const input = { api_key: 'api123', status: 'ok' };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+
+      expect(result.api_key).toBe('[MASKED]');
+    });
+
+    it('apikey (소문자)를 마스킹해야 한다', () => {
+      const input = { apikey: 'api123' };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+
+      expect(result.apikey).toBe('[MASKED]');
+    });
+
+    it('authorization을 마스킹해야 한다', () => {
+      const input = { authorization: 'Bearer token123' };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+
+      expect(result.authorization).toBe('[MASKED]');
+    });
+
+    it('password를 마스킹해야 한다', () => {
+      const input = { password: 'mypassword' };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+
+      expect(result.password).toBe('[MASKED]');
+    });
+
+    it('token을 마스킹해야 한다', () => {
+      const input = { token: 'jwt-token', refresh_token: 'refresh' };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+
+      expect(result.token).toBe('[MASKED]');
+      expect(result.refresh_token).toBe('[MASKED]');
+    });
+
+    it('대소문자 무시하고 마스킹해야 한다', () => {
+      const input = {
+        ACCESS_KEY: 'key1',
+        Secret_Key: 'key2',
+        ApiKey: 'key3',
+      };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+
+      expect(result.ACCESS_KEY).toBe('[MASKED]');
+      expect(result.Secret_Key).toBe('[MASKED]');
+      expect(result.ApiKey).toBe('[MASKED]');
+    });
+  });
+
+  describe('중첩 객체 마스킹', () => {
+    it('중첩된 객체의 민감 정보도 마스킹해야 한다', () => {
+      const input = {
+        config: {
+          api_key: 'nested-key',
+          endpoint: 'https://api.example.com',
+        },
+        status: 'ok',
+      };
+      const result = sanitizeLogDetail(input) as Record<string, unknown>;
+      const config = result.config as Record<string, unknown>;
+
+      expect(config.api_key).toBe('[MASKED]');
+      expect(config.endpoint).toBe('https://api.example.com');
+      expect(result.status).toBe('ok');
+    });
+
+    it('배열 내 객체의 민감 정보도 마스킹해야 한다', () => {
+      const input = [
+        { token: 'token1', id: 1 },
+        { token: 'token2', id: 2 },
+      ];
+      const result = sanitizeLogDetail(input) as Array<Record<string, unknown>>;
+
+      expect(result[0].token).toBe('[MASKED]');
+      expect(result[0].id).toBe(1);
+      expect(result[1].token).toBe('[MASKED]');
+      expect(result[1].id).toBe(2);
+    });
+  });
+
+  describe('원시 타입 처리', () => {
+    it('null을 그대로 반환해야 한다', () => {
+      expect(sanitizeLogDetail(null)).toBeNull();
+    });
+
+    it('undefined를 그대로 반환해야 한다', () => {
+      expect(sanitizeLogDetail(undefined)).toBeUndefined();
+    });
+
+    it('문자열을 그대로 반환해야 한다', () => {
+      expect(sanitizeLogDetail('test string')).toBe('test string');
+    });
+
+    it('숫자를 그대로 반환해야 한다', () => {
+      expect(sanitizeLogDetail(12345)).toBe(12345);
+    });
+
+    it('boolean을 그대로 반환해야 한다', () => {
+      expect(sanitizeLogDetail(true)).toBe(true);
+      expect(sanitizeLogDetail(false)).toBe(false);
+    });
+  });
+
+  describe('일반 객체 필드 유지', () => {
+    it('민감하지 않은 필드는 그대로 유지해야 한다', () => {
+      const input = {
+        uuid: 'order-123',
+        side: 'bid',
+        price: '50000000',
+        volume: '0.001',
+        market: 'KRW-BTC',
+        state: 'done',
+      };
+      const result = sanitizeLogDetail(input);
+
+      expect(result).toEqual(input);
+    });
   });
 });

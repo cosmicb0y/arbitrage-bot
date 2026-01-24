@@ -230,6 +230,7 @@ export function OrderPanel({ className = '' }: OrderPanelProps) {
 
       if (result.success && result.data) {
         const sideLabel = side === 'buy' ? '매수' : '매도';
+        const orderTypeLabel = isMarket ? '시장가' : '지정가';
         const executedVolume = result.data.executed_volume || result.data.volume || quantity;
         const orderState = result.data.state;
         const isWait = orderState === 'wait';
@@ -246,13 +247,13 @@ export function OrderPanel({ className = '' }: OrderPanelProps) {
                 ? '부분 체결'
                 : '처리';
         const logLevel = isCancel ? 'WARN' : 'SUCCESS';
+        const priceInfo = isMarket ? '시장가' : formatKrw(parseFloat(unformatPrice(price)));
+        const marketLabel = selectedMarket ?? 'UNKNOWN';
 
         addLog(
           logLevel,
           'ORDER',
-          `주문 ${statusLabel}: ${sideLabel} ${executedVolume} ${coin} @ ${
-            isMarket ? '시장가' : formatKrw(parseFloat(unformatPrice(price)))
-          }`
+          `[${orderTypeLabel}] 주문 ${statusLabel}: ${marketLabel}, ${sideLabel} ${executedVolume} ${coin} @ ${priceInfo}`
         );
 
         // 응답 상태에 따른 토스트 메시지 분기 (AC #5)
