@@ -1,0 +1,128 @@
+/**
+ * WTS 에러 처리 유틸리티
+ * 콘솔 로깅 + 토스트 알림 통합 처리
+ */
+
+import { useConsoleStore } from '../stores/consoleStore';
+import { useToastStore } from '../stores/toastStore';
+import { getOrderErrorMessage, isRateLimitError, isNetworkError } from '../types';
+import type { LogCategory, WtsApiErrorResponse } from '../types';
+
+function isNetworkMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('network') ||
+    lower.includes('timeout') ||
+    lower.includes('timed out') ||
+    lower.includes('connection') ||
+    lower.includes('econn') ||
+    message.includes('네트워크')
+  );
+}
+
+function extractRemainingReq(detail?: Record<string, unknown>): string | undefined {
+  if (!detail) return undefined;
+  const remainingReq = detail['remaining_req'];
+  return typeof remainingReq === 'string' ? remainingReq : undefined;
+}
+
+/**
+ * WTS API 에러 응답인지 확인
+ */
+export function isWtsApiError(error: unknown): error is WtsApiErrorResponse {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof (error as Record<string, unknown>).code === 'string'
+  );
+}
+
+/**
+ * API 에러 통합 처리
+ * - 콘솔 ERROR 로깅
+ * - 토스트 알림 표시
+ * - Rate Limit 시 재시도 안내
+ *
+ * @param error 에러 객체 또는 WtsApiError 응답
+ * @param category 로그 카테고리
+ * @param context 에러 컨텍스트 (선택)
+ */
+export function handleApiError(
+  error: unknown,
+  category: LogCategory,
+  context?: string
+): void {
+  const addLog = useConsoleStore.getState().addLog;
+  const showToast = useToastStore.getState().showToast;
+
+  let errorCode = 'unknown';
+  let errorMessage = '알 수 없는 오류가 발생했습니다';
+  let logDetail: unknown = error;
+
+  if (isWtsApiError(error)) {
+    errorCode = error.code;
+    errorMessage = getOrderErrorMessage(error.code, error.message);
+    logDetail = error.detail ? { ...error.detail, code: error.code, message: error.message } : error;
+  } else if (error instanceof Error) {
+    logDetail = { name: error.name, message: error.message };
+    if (isNetworkMessage(error.message)) {
+      errorCode = 'network_error';
+      errorMessage = getOrderErrorMessage(errorCode, error.message);
+    } else {
+      errorMessage = error.message;
+    }
+  } else if (typeof error === 'string') {
+    logDetail = error;
+    if (isNetworkMessage(error)) {
+      errorCode = 'network_error';
+      errorMessage = getOrderErrorMessage(errorCode, error);
+    } else {
+      errorMessage = error;
+    }
+  }
+
+  const logMessage = context ? `${context}: ${errorMessage}` : errorMessage;
+
+  // 에러 로깅
+  addLog('ERROR', category, logMessage, logDetail);
+
+  // 토스트 알림
+  showToast('error', errorMessage);
+
+  // Rate Limit 특별 안내
+  if (isRateLimitError(errorCode)) {
+    if (isWtsApiError(error)) {
+      const remainingReq = extractRemainingReq(error.detail);
+      if (remainingReq) {
+        addLog('INFO', category, `Remaining-Req: ${remainingReq}`);
+      }
+    }
+    addLog('INFO', category, '주문 제한: 초당 8회. 잠시 후 다시 시도하세요.');
+  }
+
+  // 네트워크 에러 시 추가 안내
+  if (isNetworkError(errorCode)) {
+    addLog('INFO', category, '네트워크 연결을 확인하고 다시 시도하세요.');
+  }
+}
+
+/**
+ * 에러 코드에서 상세 정보 추출
+ */
+export function getErrorDetails(errorCode: string): {
+  isRateLimit: boolean;
+  isNetwork: boolean;
+  isAuth: boolean;
+  isOrder: boolean;
+} {
+  const authCodes = ['missing_api_key', 'jwt_error', 'jwt_verification', 'no_authorization_ip', 'expired_access_key'];
+  const orderCodes = ['insufficient_funds_bid', 'insufficient_funds_ask', 'under_min_total_bid', 'under_min_total_ask', 'invalid_volume', 'invalid_price', 'market_does_not_exist', 'invalid_side', 'invalid_ord_type'];
+
+  return {
+    isRateLimit: isRateLimitError(errorCode),
+    isNetwork: isNetworkError(errorCode),
+    isAuth: authCodes.includes(errorCode),
+    isOrder: orderCodes.includes(errorCode),
+  };
+}

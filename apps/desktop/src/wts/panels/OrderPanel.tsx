@@ -5,6 +5,7 @@ import { useBalanceStore } from '../stores/balanceStore';
 import { useWtsStore } from '../stores/wtsStore';
 import { useConsoleStore } from '../stores/consoleStore';
 import { useToastStore } from '../stores/toastStore';
+import { handleApiError } from '../utils/errorHandler';
 import { formatKrw, formatNumber } from '../utils/formatters';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import type { OrderConfirmInfo } from '../components/ConfirmDialog';
@@ -15,7 +16,7 @@ import type {
   OrderResponse,
   WtsApiResult,
 } from '../types';
-import { toUpbitSide, toUpbitOrderType, getOrderErrorMessage } from '../types';
+import { toUpbitSide, toUpbitOrderType } from '../types';
 
 interface OrderPanelProps {
   className?: string;
@@ -279,17 +280,15 @@ export function OrderPanel({ className = '' }: OrderPanelProps) {
 
         setIsConfirmOpen(false);
       } else {
-        const errorCode = result.error?.code || 'unknown';
-        const errorMsg = getOrderErrorMessage(errorCode, result.error?.message);
-
-        addLog('ERROR', 'ORDER', `주문 실패: ${errorMsg}`);
-        showToast('error', errorMsg);
+        handleApiError(
+          result.error ?? { code: 'unknown', message: '알 수 없는 오류가 발생했습니다' },
+          'ORDER',
+          '주문 실패'
+        );
         setIsConfirmOpen(false);
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      addLog('ERROR', 'ORDER', `주문 실패: ${errorMsg}`);
-      showToast('error', '주문 처리 중 오류가 발생했습니다');
+      handleApiError(err, 'ORDER', '주문 실패');
       setIsConfirmOpen(false);
     } finally {
       setIsSubmitting(false);

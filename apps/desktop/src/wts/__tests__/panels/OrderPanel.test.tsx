@@ -103,6 +103,11 @@ describe('OrderPanel', () => {
       }
       return { logs: [], addLog: mockAddLog, clearLogs: vi.fn() };
     });
+    vi.mocked(useConsoleStore.getState).mockReturnValue({
+      logs: [],
+      addLog: mockAddLog,
+      clearLogs: vi.fn(),
+    });
 
     // Mock toastStore
     vi.mocked(useToastStore).mockImplementation((selector) => {
@@ -110,6 +115,12 @@ describe('OrderPanel', () => {
         return selector({ toasts: [], showToast: mockShowToast, removeToast: vi.fn(), clearToasts: vi.fn() });
       }
       return { toasts: [], showToast: mockShowToast, removeToast: vi.fn(), clearToasts: vi.fn() };
+    });
+    vi.mocked(useToastStore.getState).mockReturnValue({
+      toasts: [],
+      showToast: mockShowToast,
+      removeToast: vi.fn(),
+      clearToasts: vi.fn(),
     });
   });
 
@@ -1136,7 +1147,8 @@ describe('OrderPanel', () => {
         expect(mockAddLog).toHaveBeenCalledWith(
           'ERROR',
           'ORDER',
-          expect.stringContaining('주문 실패')
+          expect.stringContaining('주문 실패'),
+          expect.anything()
         );
         expect(mockShowToast).toHaveBeenCalledWith('error', expect.any(String));
       });
@@ -1558,7 +1570,8 @@ describe('OrderPanel', () => {
           expect(mockAddLog).toHaveBeenCalledWith(
             'ERROR',
             'ORDER',
-            expect.stringContaining('주문 실패')
+            expect.stringContaining('주문 실패'),
+            expect.anything()
           );
         });
       });
@@ -1589,13 +1602,95 @@ describe('OrderPanel', () => {
           expect(mockAddLog).toHaveBeenCalledWith(
             'ERROR',
             'ORDER',
-            expect.stringContaining('Network error')
+            expect.stringContaining('네트워크'),
+            expect.anything()
           );
         });
       });
     });
 
     describe('주문 취소 로깅', () => {
+it('Rate Limit 에러 시 INFO 로그에 재시도 안내가 포함되어야 한다 (AC: WTS-3.7 #4, #5)', async () => {
+        vi.mocked(useOrderStore).mockReturnValue({
+          orderType: 'market',
+          side: 'buy',
+          price: '100000',
+          quantity: '',
+          setOrderType: mockSetOrderType,
+          setSide: mockSetSide,
+          setPrice: mockSetPrice,
+          setQuantity: mockSetQuantity,
+          setPriceFromOrderbook: vi.fn(),
+          resetForm: vi.fn(),
+        });
+
+        vi.mocked(invoke).mockResolvedValue({
+          success: false,
+          error: {
+            code: 'rate_limit',
+            message: '요청이 너무 많습니다',
+            detail: { remaining_req: 'group=order; sec=2' },
+          },
+        });
+
+        render(<OrderPanel />);
+
+        fireEvent.click(screen.getByTestId('order-submit-btn'));
+        const dialog = screen.getByRole('dialog');
+        fireEvent.click(within(dialog).getByRole('button', { name: '매수' }));
+
+        await waitFor(() => {
+          // Rate Limit 에러 메시지가 토스트에 표시되어야 함
+          expect(mockShowToast).toHaveBeenCalledWith(
+            'error',
+            expect.stringContaining('주문 요청')
+          );
+          // Remaining-Req 헤더 정보가 로그에 포함되어야 함
+          expect(mockAddLog).toHaveBeenCalledWith(
+            'INFO',
+            'ORDER',
+            expect.stringContaining('Remaining-Req: group=order; sec=2')
+          );
+          // 재시도 안내 INFO 로그가 추가되어야 함
+          expect(mockAddLog).toHaveBeenCalledWith(
+            'INFO',
+            'ORDER',
+            expect.stringContaining('초당 8회')
+          );
+        });
+      });
+
+      it('네트워크 에러 시 네트워크 확인 안내가 표시되어야 한다 (AC: WTS-3.7 #6)', async () => {
+        vi.mocked(useOrderStore).mockReturnValue({
+          orderType: 'market',
+          side: 'buy',
+          price: '100000',
+          quantity: '',
+          setOrderType: mockSetOrderType,
+          setSide: mockSetSide,
+          setPrice: mockSetPrice,
+          setQuantity: mockSetQuantity,
+          setPriceFromOrderbook: vi.fn(),
+          resetForm: vi.fn(),
+        });
+
+        vi.mocked(invoke).mockResolvedValue({
+          success: false,
+          error: { code: 'network_error', message: 'Connection failed' },
+        });
+
+        render(<OrderPanel />);
+
+        fireEvent.click(screen.getByTestId('order-submit-btn'));
+        const dialog = screen.getByRole('dialog');
+        fireEvent.click(within(dialog).getByRole('button', { name: '매수' }));
+
+        await waitFor(() => {
+          // 네트워크 에러 메시지가 토스트에 표시되어야 함
+          expect(mockShowToast).toHaveBeenCalledWith('error', expect.stringContaining('네트워크'));
+        });
+      });
+
       it('주문 취소 시 WARN 로그가 기록되어야 한다', async () => {
         vi.mocked(useOrderStore).mockReturnValue({
           orderType: 'limit',
