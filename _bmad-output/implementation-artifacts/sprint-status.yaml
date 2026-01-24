@@ -114,7 +114,7 @@ development_status:
   wts-3-2-order-panel-ui-qty-price-input: done
   wts-3-3-market-order-buy-sell: done
   wts-3-4-limit-order-buy-sell: done
-  wts-3-5-order-confirm-dialog: backlog
+  wts-3-5-order-confirm-dialog: done
   wts-3-6-console-log-order-result: backlog
   wts-3-7-order-error-ratelimit-handling: backlog
   wts-epic-3-retrospective: optional

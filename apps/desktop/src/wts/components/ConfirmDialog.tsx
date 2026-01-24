@@ -59,9 +59,49 @@ export function ConfirmDialog({
   const isMarket = orderType === 'market';
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  const getFocusableElements = useCallback(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return [];
+    const elements = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+    );
+    return elements.filter((element) => {
+      const isDisabled = (element as HTMLButtonElement).disabled === true;
+      const isHidden = element.getAttribute('aria-hidden') === 'true';
+      return !isDisabled && !isHidden;
+    });
+  }, []);
+
   // 키보드 이벤트 핸들러 (dialog 요소에서만 사용)
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        const focusable = getFocusableElements();
+        if (focusable.length === 0) {
+          e.preventDefault();
+          return;
+        }
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement as HTMLElement | null;
+
+        if (e.shiftKey) {
+          if (active === first || !dialogRef.current?.contains(active)) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (active === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+        return;
+      }
+
       if (isLoading) return;
 
       if (e.key === 'Enter') {
@@ -72,14 +112,19 @@ export function ConfirmDialog({
         onCancel();
       }
     },
-    [isLoading, onConfirm, onCancel]
+    [getFocusableElements, isLoading, onConfirm, onCancel]
   );
 
   useEffect(() => {
     if (isOpen) {
-      dialogRef.current?.focus();
+      const focusable = getFocusableElements();
+      if (focusable.length > 0) {
+        focusable[0].focus();
+      } else {
+        dialogRef.current?.focus();
+      }
     }
-  }, [isOpen]);
+  }, [getFocusableElements, isOpen]);
 
   if (!isOpen) return null;
 
@@ -120,9 +165,18 @@ export function ConfirmDialog({
         tabIndex={-1}
       >
         {/* 헤더 */}
-        <div className="px-4 py-3 border-b border-wts">
-          <h2 id="dialog-title" className="text-base font-semibold text-wts-foreground">
-            주문 확인
+        <div
+          className={`px-4 py-3 border-b ${
+            isBuy ? 'border-green-600/50' : 'border-red-600/50'
+          }`}
+        >
+          <h2
+            id="dialog-title"
+            className={`text-base font-semibold ${
+              isBuy ? 'text-green-400' : 'text-red-400'
+            }`}
+          >
+            {isBuy ? '매수' : '매도'} 주문 확인
           </h2>
         </div>
 
@@ -191,7 +245,7 @@ export function ConfirmDialog({
           {/* 경고/안내 메시지 */}
           {isMarket && (
             <div className="mt-3 p-2 bg-yellow-900/30 border border-yellow-700/50 rounded text-xs text-yellow-500">
-              ⚠️ 시장가 주문은 즉시 체결됩니다
+              ⚠️ 시장가로 즉시 체결됩니다
             </div>
           )}
           {!isMarket && (
@@ -222,7 +276,20 @@ export function ConfirmDialog({
                         disabled:opacity-50 disabled:cursor-not-allowed
                         transition-colors`}
           >
-            {isLoading ? '처리중...' : confirmLabel}
+            {isLoading ? (
+              <span className="inline-flex items-center justify-center gap-2">
+                <span
+                  data-testid="confirm-loading-spinner"
+                  aria-hidden="true"
+                  className="animate-spin"
+                >
+                  ⏳
+                </span>
+                처리중...
+              </span>
+            ) : (
+              confirmLabel
+            )}
           </button>
         </div>
       </div>

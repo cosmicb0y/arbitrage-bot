@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import type { OrderConfirmInfo } from '../../components/ConfirmDialog';
@@ -34,9 +34,20 @@ describe('ConfirmDialog', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
 
-    it('주문 확인 제목이 표시된다', () => {
+    it('매수 주문 확인 제목이 표시된다', () => {
       render(<ConfirmDialog {...defaultProps} />);
-      expect(screen.getByText('주문 확인')).toBeTruthy();
+      expect(screen.getByText('매수 주문 확인')).toBeTruthy();
+    });
+
+    it('매도 주문 확인 제목이 표시된다', () => {
+      const sellInfo: OrderConfirmInfo = {
+        market: 'KRW-BTC',
+        side: 'sell',
+        orderType: 'market',
+        quantity: '0.001',
+      };
+      render(<ConfirmDialog {...defaultProps} orderInfo={sellInfo} />);
+      expect(screen.getByText('매도 주문 확인')).toBeTruthy();
     });
 
     it('마켓 정보가 표시된다', () => {
@@ -62,7 +73,7 @@ describe('ConfirmDialog', () => {
 
     it('시장가 주문 경고 메시지가 표시된다', () => {
       render(<ConfirmDialog {...defaultProps} />);
-      expect(screen.getByText(/시장가 주문은 즉시 체결됩니다/)).toBeTruthy();
+      expect(screen.getByText(/시장가로 즉시 체결됩니다/)).toBeTruthy();
     });
 
     it('확인/취소 버튼이 표시된다', () => {
@@ -133,7 +144,7 @@ describe('ConfirmDialog', () => {
         total: 5000000,
       };
       render(<ConfirmDialog {...defaultProps} orderInfo={limitInfo} />);
-      expect(screen.queryByText(/시장가 주문은 즉시 체결됩니다/)).toBeNull();
+      expect(screen.queryByText(/시장가로 즉시 체결됩니다/)).toBeNull();
     });
   });
 
@@ -154,6 +165,24 @@ describe('ConfirmDialog', () => {
       render(<ConfirmDialog {...defaultProps} orderInfo={sellInfo} />);
       const confirmBtn = screen.getByRole('button', { name: /매도/ });
       expect(confirmBtn.className).toContain('bg-red');
+    });
+
+    it('매수 다이얼로그 헤더는 녹색 계열 스타일을 가진다 (AC #6)', () => {
+      render(<ConfirmDialog {...defaultProps} />);
+      const header = screen.getByText('매수 주문 확인');
+      expect(header.className).toContain('text-green');
+    });
+
+    it('매도 다이얼로그 헤더는 빨간색 계열 스타일을 가진다 (AC #6)', () => {
+      const sellInfo: OrderConfirmInfo = {
+        market: 'KRW-BTC',
+        side: 'sell',
+        orderType: 'market',
+        quantity: '0.001',
+      };
+      render(<ConfirmDialog {...defaultProps} orderInfo={sellInfo} />);
+      const header = screen.getByText('매도 주문 확인');
+      expect(header.className).toContain('text-red');
     });
   });
 
@@ -180,6 +209,11 @@ describe('ConfirmDialog', () => {
       render(<ConfirmDialog {...defaultProps} isLoading={true} />);
       const confirmBtn = screen.getByRole('button', { name: /처리중/ });
       expect(confirmBtn).toHaveProperty('disabled', true);
+    });
+
+    it('isLoading=true일 때 로딩 스피너가 표시된다', () => {
+      render(<ConfirmDialog {...defaultProps} isLoading={true} />);
+      expect(screen.getByTestId('confirm-loading-spinner')).toBeTruthy();
     });
 
     it('isLoading=true일 때 취소 버튼이 비활성화된다', () => {
@@ -246,6 +280,43 @@ describe('ConfirmDialog', () => {
       fireEvent.click(overlay);
 
       expect(onCancel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('포커스 트랩', () => {
+    it('다이얼로그가 열리면 첫 번째 버튼에 포커스가 이동한다', async () => {
+      render(<ConfirmDialog {...defaultProps} />);
+
+      const cancelBtn = screen.getByRole('button', { name: /취소/ });
+      await waitFor(() => {
+        expect(document.activeElement).toBe(cancelBtn);
+      });
+    });
+
+    it('Shift+Tab으로 마지막 버튼으로 순환된다', () => {
+      render(<ConfirmDialog {...defaultProps} />);
+
+      const dialog = screen.getByRole('dialog');
+      const cancelBtn = screen.getByRole('button', { name: /취소/ });
+      const confirmBtn = screen.getByRole('button', { name: /매수/ });
+
+      cancelBtn.focus();
+      fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+
+      expect(document.activeElement).toBe(confirmBtn);
+    });
+
+    it('Tab으로 첫 번째 버튼으로 순환된다', () => {
+      render(<ConfirmDialog {...defaultProps} />);
+
+      const dialog = screen.getByRole('dialog');
+      const cancelBtn = screen.getByRole('button', { name: /취소/ });
+      const confirmBtn = screen.getByRole('button', { name: /매수/ });
+
+      confirmBtn.focus();
+      fireEvent.keyDown(dialog, { key: 'Tab' });
+
+      expect(document.activeElement).toBe(cancelBtn);
     });
   });
 });

@@ -808,7 +808,7 @@ describe('OrderPanel', () => {
       fireEvent.click(screen.getByTestId('order-submit-btn'));
 
       expect(screen.getByRole('dialog')).toBeDefined();
-      expect(screen.getByText('주문 확인')).toBeDefined();
+      expect(screen.getByText('매수 주문 확인')).toBeDefined();
     });
 
     it('매수 버튼은 녹색이어야 한다', () => {
@@ -1140,6 +1140,106 @@ describe('OrderPanel', () => {
         );
         expect(mockShowToast).toHaveBeenCalledWith('error', expect.any(String));
       });
+    });
+  });
+
+  describe('WTS-3.5: 확인 다이얼로그 취소 시 폼 상태 유지 (AC: #10)', () => {
+    it('취소 버튼 클릭 후 폼 입력값이 유지되어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      // 주문 버튼 클릭하여 다이얼로그 표시
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      expect(screen.getByRole('dialog')).toBeDefined();
+
+      // 취소 버튼 클릭
+      fireEvent.click(screen.getByRole('button', { name: '취소' }));
+
+      // 다이얼로그 닫힘
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      // 폼 리셋 함수가 호출되지 않아야 함 (폼 상태 유지)
+      expect(mockSetPrice).not.toHaveBeenCalled();
+      expect(mockSetQuantity).not.toHaveBeenCalled();
+    });
+
+    it('ESC 키로 취소 후 폼 입력값이 유지되어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      // 주문 버튼 클릭하여 다이얼로그 표시
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      const dialog = screen.getByRole('dialog');
+      expect(dialog).toBeDefined();
+
+      // ESC 키로 취소
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+
+      // 다이얼로그 닫힘
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      // 폼 리셋 함수가 호출되지 않아야 함 (폼 상태 유지)
+      expect(mockSetPrice).not.toHaveBeenCalled();
+      expect(mockSetQuantity).not.toHaveBeenCalled();
+    });
+
+    it('오버레이 클릭으로 취소 후 폼 입력값이 유지되어야 한다', () => {
+      vi.mocked(useOrderStore).mockReturnValue({
+        orderType: 'limit',
+        side: 'buy',
+        price: '50000000',
+        quantity: '0.001',
+        setOrderType: mockSetOrderType,
+        setSide: mockSetSide,
+        setPrice: mockSetPrice,
+        setQuantity: mockSetQuantity,
+        setPriceFromOrderbook: vi.fn(),
+        resetForm: vi.fn(),
+      });
+
+      render(<OrderPanel />);
+
+      // 주문 버튼 클릭하여 다이얼로그 표시
+      fireEvent.click(screen.getByTestId('order-submit-btn'));
+
+      expect(screen.getByRole('dialog')).toBeDefined();
+
+      // 오버레이 클릭으로 취소
+      const overlay = screen.getByTestId('dialog-overlay');
+      fireEvent.click(overlay);
+
+      // 다이얼로그 닫힘
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      // 폼 리셋 함수가 호출되지 않아야 함 (폼 상태 유지)
+      expect(mockSetPrice).not.toHaveBeenCalled();
+      expect(mockSetQuantity).not.toHaveBeenCalled();
     });
   });
 

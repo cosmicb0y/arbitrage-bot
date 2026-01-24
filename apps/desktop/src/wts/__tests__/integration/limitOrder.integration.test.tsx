@@ -165,7 +165,7 @@ describe('WTS-3.4 지정가 주문 통합 테스트', () => {
 
       // Step 2: 다이얼로그에서 주문 정보 확인 (AC #2)
       const dialog = screen.getByRole('dialog');
-      expect(within(dialog).getByText('주문 확인')).toBeDefined();
+      expect(within(dialog).getByText('매수 주문 확인')).toBeDefined();
       expect(within(dialog).getByText('지정가 매수')).toBeDefined();
       expect(within(dialog).getByText('KRW-BTC')).toBeDefined();
       expect(within(dialog).getByText(/50,000,000/)).toBeDefined();
