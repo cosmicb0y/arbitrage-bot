@@ -82,10 +82,10 @@ describe('errorHandler', () => {
       expect(mockAddLog).toHaveBeenCalledWith(
         'ERROR',
         'ORDER',
-        '네트워크 연결을 확인하세요.',
+        '네트워크 연결을 확인하세요',
         expect.anything()
       );
-      expect(mockShowToast).toHaveBeenCalledWith('error', '네트워크 연결을 확인하세요.');
+      expect(mockShowToast).toHaveBeenCalledWith('error', '네트워크 연결을 확인하세요');
     });
 
     it('문자열 에러를 처리한다', () => {
@@ -133,6 +133,24 @@ describe('errorHandler', () => {
       handleApiError(error, 'ORDER');
 
       expect(mockAddLog).toHaveBeenCalledWith('INFO', 'ORDER', expect.stringContaining('초당 8회'));
+    });
+
+    it('WITHDRAW Rate Limit 에러는 출금 메시지를 사용한다', () => {
+      const error = { code: 'rate_limit', message: 'Too many requests' };
+
+      handleApiError(error, 'WITHDRAW');
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'ERROR',
+        'WITHDRAW',
+        expect.stringContaining('출금 요청이 너무 빠릅니다'),
+        expect.anything()
+      );
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'WITHDRAW',
+        expect.stringContaining('요청 제한')
+      );
     });
 
     it('네트워크 에러 시 네트워크 확인 안내를 추가한다', () => {

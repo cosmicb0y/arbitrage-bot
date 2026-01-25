@@ -26,6 +26,28 @@ function extractRemainingReq(detail?: Record<string, unknown>): string | undefin
   return typeof remainingReq === 'string' ? remainingReq : undefined;
 }
 
+function getRateLimitMessage(category: LogCategory): string {
+  switch (category) {
+    case 'ORDER':
+      return '주문 요청이 너무 빠릅니다. 잠시 후 다시 시도하세요.';
+    case 'WITHDRAW':
+      return '출금 요청이 너무 빠릅니다. 잠시 후 다시 시도하세요.';
+    case 'DEPOSIT':
+      return '입금 요청이 너무 빠릅니다. 잠시 후 다시 시도하세요.';
+    case 'BALANCE':
+      return '잔고 요청이 너무 빠릅니다. 잠시 후 다시 시도하세요.';
+    default:
+      return '요청이 너무 빠릅니다. 잠시 후 다시 시도하세요.';
+  }
+}
+
+function getRateLimitInfoMessage(category: LogCategory): string {
+  if (category === 'ORDER') {
+    return '주문 제한: 초당 8회. 잠시 후 다시 시도하세요.';
+  }
+  return '요청 제한으로 잠시 후 다시 시도하세요.';
+}
+
 /**
  * WTS API 에러 응답인지 확인
  */
@@ -82,6 +104,10 @@ export function handleApiError(
     }
   }
 
+  if (isRateLimitError(errorCode) && category !== 'ORDER') {
+    errorMessage = getRateLimitMessage(category);
+  }
+
   const logMessage = context ? `${context}: ${errorMessage}` : errorMessage;
 
   // 에러 로깅
@@ -98,7 +124,7 @@ export function handleApiError(
         addLog('INFO', category, `Remaining-Req: ${remainingReq}`);
       }
     }
-    addLog('INFO', category, '주문 제한: 초당 8회. 잠시 후 다시 시도하세요.');
+    addLog('INFO', category, getRateLimitInfoMessage(category));
   }
 
   // 네트워크 에러 시 추가 안내
