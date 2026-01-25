@@ -78,6 +78,10 @@ fn main() {
             wts::wts_get_deposit_address,
             wts::wts_generate_deposit_address,
             wts::wts_get_deposit_chance,
+            wts::wts_withdraw,
+            wts::wts_get_withdraw_chance,
+            wts::wts_get_withdraw_addresses,
+            wts::wts_get_withdraw,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

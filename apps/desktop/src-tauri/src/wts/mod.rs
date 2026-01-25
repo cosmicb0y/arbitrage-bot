@@ -8,8 +8,9 @@ pub mod upbit;
 pub use types::*;
 pub use upbit::{
     BalanceEntry, DepositAddressParams, DepositAddressResponse, DepositChanceParams,
-    DepositChanceResponse, GenerateAddressResponse, OrderParams, OrderResponse, UpbitMarket,
-    WtsApiResult,
+    DepositChanceResponse, GenerateAddressResponse, GetWithdrawParams, OrderParams, OrderResponse,
+    UpbitMarket, WithdrawAddressResponse, WithdrawChanceParams, WithdrawChanceResponse,
+    WithdrawParams, WithdrawResponse, WtsApiResult,
 };
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -160,6 +161,74 @@ pub async fn wts_get_deposit_chance(
 ) -> WtsApiResult<DepositChanceResponse> {
     match upbit::get_deposit_chance(params).await {
         Ok(chance) => WtsApiResult::ok(chance),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+// ============================================================================
+// Withdraw API Commands (WTS-5.1)
+// ============================================================================
+
+/// Upbit 출금을 요청합니다.
+///
+/// # Arguments
+/// * `params` - 출금 요청 파라미터 (currency, net_type, amount, address, ...)
+///
+/// # Returns
+/// * `WtsApiResult<WithdrawResponse>` - 성공 시 출금 요청 결과, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_withdraw(params: WithdrawParams) -> WtsApiResult<WithdrawResponse> {
+    match upbit::withdraw_coin(params).await {
+        Ok(response) => WtsApiResult::ok(response),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+/// Upbit 출금 가능 정보를 조회합니다.
+///
+/// # Arguments
+/// * `params` - 출금 가능 정보 조회 파라미터 (currency, net_type)
+///
+/// # Returns
+/// * `WtsApiResult<WithdrawChanceResponse>` - 성공 시 출금 가능 정보, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_get_withdraw_chance(
+    params: WithdrawChanceParams,
+) -> WtsApiResult<WithdrawChanceResponse> {
+    match upbit::get_withdraw_chance(params).await {
+        Ok(chance) => WtsApiResult::ok(chance),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+/// Upbit에 등록된 출금 허용 주소를 조회합니다.
+///
+/// # Arguments
+/// * `params` - 출금 주소 조회 파라미터 (currency, net_type)
+///
+/// # Returns
+/// * `WtsApiResult<Vec<WithdrawAddressResponse>>` - 성공 시 출금 주소 목록, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_get_withdraw_addresses(
+    params: WithdrawChanceParams,
+) -> WtsApiResult<Vec<WithdrawAddressResponse>> {
+    match upbit::get_withdraw_addresses(params).await {
+        Ok(addresses) => WtsApiResult::ok(addresses),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+/// Upbit 출금 상태를 조회합니다.
+///
+/// # Arguments
+/// * `params` - 출금 조회 파라미터 (uuid 또는 txid)
+///
+/// # Returns
+/// * `WtsApiResult<WithdrawResponse>` - 성공 시 출금 상태, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_get_withdraw(params: GetWithdrawParams) -> WtsApiResult<WithdrawResponse> {
+    match upbit::get_withdraw(params).await {
+        Ok(withdraw) => WtsApiResult::ok(withdraw),
         Err(e) => WtsApiResult::err(e),
     }
 }

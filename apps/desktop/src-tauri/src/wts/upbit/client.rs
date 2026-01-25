@@ -5,8 +5,9 @@
 use super::auth::{generate_jwt_token, generate_jwt_token_with_query};
 use super::types::{
     BalanceEntry, DepositAddressParams, DepositAddressResponse, DepositChanceParams,
-    DepositChanceResponse, GenerateAddressResponse, OrderParams, OrderResponse, UpbitApiError,
-    UpbitMarket,
+    DepositChanceResponse, GenerateAddressResponse, GetWithdrawParams, OrderParams, OrderResponse,
+    UpbitApiError, UpbitMarket, WithdrawAddressResponse, WithdrawChanceParams,
+    WithdrawChanceResponse, WithdrawParams, WithdrawResponse,
 };
 use std::collections::VecDeque;
 use std::sync::OnceLock;
@@ -292,6 +293,11 @@ pub async fn get_deposit_address(
     // 쿼리 문자열 생성
     let query = format!("currency={}&net_type={}", params.currency, params.net_type);
 
+    eprintln!(
+        "[DEBUG] get_deposit_address: currency={}, net_type={}",
+        params.currency, params.net_type
+    );
+
     // 쿼리 해시 포함 JWT 생성
     let token = generate_jwt_token_with_query(&access_key, &secret_key, &query)
         .map_err(UpbitApiError::JwtError)?;
@@ -301,37 +307,54 @@ pub async fn get_deposit_address(
         .build()
         .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
 
+    let url = format!("{}/deposits/coin_address", UPBIT_API_BASE);
+    eprintln!("[DEBUG] get_deposit_address: requesting URL={}", url);
+
     let response = client
-        .get(format!("{}/deposits/coin_address", UPBIT_API_BASE))
+        .get(&url)
         .header("Authorization", format!("Bearer {}", token))
         .query(&[("currency", &params.currency), ("net_type", &params.net_type)])
         .send()
         .await
         .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
 
+    let status = response.status();
+    eprintln!("[DEBUG] get_deposit_address: HTTP status={}", status);
+
     // Rate Limit 체크 (HTTP 429)
-    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         return Err(UpbitApiError::RateLimitExceeded {
             remaining_req: extract_remaining_req(response.headers()),
         });
     }
 
+    // 응답 본문을 먼저 텍스트로 읽어서 디버깅
+    let body_text = response
+        .text()
+        .await
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    eprintln!(
+        "[DEBUG] get_deposit_address: raw response body (first 1000 chars):\n{}",
+        &body_text[..body_text.len().min(1000)]
+    );
+
     // 에러 응답 처리
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_body: serde_json::Value = response
-            .json()
-            .await
-            .unwrap_or_else(|_| serde_json::json!({}));
+    if !status.is_success() {
+        let error_body: serde_json::Value =
+            serde_json::from_str(&body_text).unwrap_or_else(|_| serde_json::json!({}));
 
         return Err(parse_upbit_error(status, error_body));
     }
 
     // 성공 응답 파싱
-    response
-        .json::<DepositAddressResponse>()
-        .await
-        .map_err(|e| UpbitApiError::ParseError(e.to_string()))
+    serde_json::from_str::<DepositAddressResponse>(&body_text).map_err(|e| {
+        eprintln!(
+            "[DEBUG] get_deposit_address: parse error: {}\nBody was: {}",
+            e, body_text
+        );
+        UpbitApiError::ParseError(e.to_string())
+    })
 }
 
 /// Upbit 입금 주소를 생성합니다 (비동기).
@@ -410,6 +433,148 @@ pub async fn get_deposit_chance(
     // 쿼리 문자열 생성
     let query = format!("currency={}&net_type={}", params.currency, params.net_type);
 
+    eprintln!(
+        "[DEBUG] get_deposit_chance: currency={}, net_type={}",
+        params.currency, params.net_type
+    );
+
+    // 쿼리 해시 포함 JWT 생성
+    let token = generate_jwt_token_with_query(&access_key, &secret_key, &query)
+        .map_err(UpbitApiError::JwtError)?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    let url = format!("{}/deposits/chance/coin", UPBIT_API_BASE);
+    eprintln!("[DEBUG] get_deposit_chance: requesting URL={}", url);
+
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .query(&[("currency", &params.currency), ("net_type", &params.net_type)])
+        .send()
+        .await
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    let status = response.status();
+    eprintln!("[DEBUG] get_deposit_chance: HTTP status={}", status);
+
+    // Rate Limit 체크 (HTTP 429)
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(UpbitApiError::RateLimitExceeded {
+            remaining_req: extract_remaining_req(response.headers()),
+        });
+    }
+
+    // 응답 본문을 먼저 텍스트로 읽어서 디버깅
+    let body_text = response
+        .text()
+        .await
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    eprintln!(
+        "[DEBUG] get_deposit_chance: raw response body (first 1000 chars):\n{}",
+        &body_text[..body_text.len().min(1000)]
+    );
+
+    // 에러 응답 처리
+    if !status.is_success() {
+        let error_body: serde_json::Value =
+            serde_json::from_str(&body_text).unwrap_or_else(|_| serde_json::json!({}));
+
+        return Err(parse_upbit_error(status, error_body));
+    }
+
+    // 성공 응답 파싱
+    serde_json::from_str::<DepositChanceResponse>(&body_text).map_err(|e| {
+        eprintln!(
+            "[DEBUG] get_deposit_chance: parse error: {}\nBody was: {}",
+            e, body_text
+        );
+        UpbitApiError::ParseError(e.to_string())
+    })
+}
+
+// ============================================================================
+// Withdraw API Functions (WTS-5.1)
+// ============================================================================
+
+/// Upbit 출금을 요청합니다.
+///
+/// # Arguments
+/// * `params` - 출금 요청 파라미터 (currency, net_type, amount, address, ...)
+///
+/// # Returns
+/// * `Ok(WithdrawResponse)` - 출금 요청 결과 (uuid, state 등)
+/// * `Err(UpbitApiError)` - API 호출 실패 시 에러
+pub async fn withdraw_coin(params: WithdrawParams) -> Result<WithdrawResponse, UpbitApiError> {
+    let (access_key, secret_key) = load_api_keys()?;
+
+    // JSON 바디 생성
+    let body = serde_json::to_string(&params)
+        .map_err(|e| UpbitApiError::ParseError(e.to_string()))?;
+
+    // 쿼리 해시 포함 JWT 생성 (바디 해시)
+    let token = generate_jwt_token_with_query(&access_key, &secret_key, &body)
+        .map_err(UpbitApiError::JwtError)?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    let response = client
+        .post(format!("{}/withdraws/coin", UPBIT_API_BASE))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    // Rate Limit 체크 (HTTP 429)
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(UpbitApiError::RateLimitExceeded {
+            remaining_req: extract_remaining_req(response.headers()),
+        });
+    }
+
+    // 에러 응답 처리
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_body: serde_json::Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}));
+
+        return Err(parse_upbit_error(status, error_body));
+    }
+
+    // 성공 응답 파싱
+    response
+        .json::<WithdrawResponse>()
+        .await
+        .map_err(|e| UpbitApiError::ParseError(e.to_string()))
+}
+
+/// Upbit 출금 가능 정보를 조회합니다.
+///
+/// # Arguments
+/// * `params` - 출금 가능 정보 조회 파라미터 (currency, net_type)
+///
+/// # Returns
+/// * `Ok(WithdrawChanceResponse)` - 출금 가능 정보 (수수료, 한도, 지갑 상태 등)
+/// * `Err(UpbitApiError)` - API 호출 실패 시 에러
+pub async fn get_withdraw_chance(
+    params: WithdrawChanceParams,
+) -> Result<WithdrawChanceResponse, UpbitApiError> {
+    let (access_key, secret_key) = load_api_keys()?;
+
+    // 쿼리 문자열 생성
+    let query = format!("currency={}&net_type={}", params.currency, params.net_type);
+
     // 쿼리 해시 포함 JWT 생성
     let token = generate_jwt_token_with_query(&access_key, &secret_key, &query)
         .map_err(UpbitApiError::JwtError)?;
@@ -420,7 +585,7 @@ pub async fn get_deposit_chance(
         .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
 
     let response = client
-        .get(format!("{}/deposits/chance/coin", UPBIT_API_BASE))
+        .get(format!("{}/withdraws/chance", UPBIT_API_BASE))
         .header("Authorization", format!("Bearer {}", token))
         .query(&[("currency", &params.currency), ("net_type", &params.net_type)])
         .send()
@@ -447,7 +612,138 @@ pub async fn get_deposit_chance(
 
     // 성공 응답 파싱
     response
-        .json::<DepositChanceResponse>()
+        .json::<WithdrawChanceResponse>()
+        .await
+        .map_err(|e| UpbitApiError::ParseError(e.to_string()))
+}
+
+/// Upbit에 등록된 출금 허용 주소 목록을 조회합니다.
+///
+/// # Arguments
+/// * `params` - 출금 주소 조회 파라미터 (currency, net_type)
+///
+/// # Returns
+/// * `Ok(Vec<WithdrawAddressResponse>)` - 등록된 출금 주소 목록
+/// * `Err(UpbitApiError)` - API 호출 실패 시 에러
+pub async fn get_withdraw_addresses(
+    params: WithdrawChanceParams,
+) -> Result<Vec<WithdrawAddressResponse>, UpbitApiError> {
+    let (access_key, secret_key) = load_api_keys()?;
+
+    // 쿼리 문자열 생성
+    let query = format!("currency={}&net_type={}", params.currency, params.net_type);
+
+    // 쿼리 해시 포함 JWT 생성
+    let token = generate_jwt_token_with_query(&access_key, &secret_key, &query)
+        .map_err(UpbitApiError::JwtError)?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    let response = client
+        .get(format!("{}/withdraws/coin_addresses", UPBIT_API_BASE))
+        .header("Authorization", format!("Bearer {}", token))
+        .query(&[("currency", &params.currency), ("net_type", &params.net_type)])
+        .send()
+        .await
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    // Rate Limit 체크 (HTTP 429)
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(UpbitApiError::RateLimitExceeded {
+            remaining_req: extract_remaining_req(response.headers()),
+        });
+    }
+
+    // 에러 응답 처리
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_body: serde_json::Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}));
+
+        return Err(parse_upbit_error(status, error_body));
+    }
+
+    // 성공 응답 파싱
+    response
+        .json::<Vec<WithdrawAddressResponse>>()
+        .await
+        .map_err(|e| UpbitApiError::ParseError(e.to_string()))
+}
+
+/// Upbit 출금 상태를 조회합니다.
+///
+/// # Arguments
+/// * `params` - 출금 조회 파라미터 (uuid 또는 txid)
+///
+/// # Returns
+/// * `Ok(WithdrawResponse)` - 출금 상태 정보
+/// * `Err(UpbitApiError)` - API 호출 실패 시 에러
+pub async fn get_withdraw(params: GetWithdrawParams) -> Result<WithdrawResponse, UpbitApiError> {
+    let (access_key, secret_key) = load_api_keys()?;
+
+    // 쿼리 문자열 생성 (uuid 또는 txid 중 하나 사용)
+    let query = if let Some(uuid) = &params.uuid {
+        format!("uuid={}", uuid)
+    } else if let Some(txid) = &params.txid {
+        format!("txid={}", txid)
+    } else {
+        return Err(UpbitApiError::ApiError {
+            code: "invalid_params".to_string(),
+            message: "uuid or txid is required".to_string(),
+        });
+    };
+
+    // 쿼리 해시 포함 JWT 생성
+    let token = generate_jwt_token_with_query(&access_key, &secret_key, &query)
+        .map_err(UpbitApiError::JwtError)?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    let mut request = client
+        .get(format!("{}/withdraw", UPBIT_API_BASE))
+        .header("Authorization", format!("Bearer {}", token));
+
+    // 쿼리 파라미터 추가
+    if let Some(uuid) = &params.uuid {
+        request = request.query(&[("uuid", uuid)]);
+    } else if let Some(txid) = &params.txid {
+        request = request.query(&[("txid", txid)]);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    // Rate Limit 체크 (HTTP 429)
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(UpbitApiError::RateLimitExceeded {
+            remaining_req: extract_remaining_req(response.headers()),
+        });
+    }
+
+    // 에러 응답 처리
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_body: serde_json::Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}));
+
+        return Err(parse_upbit_error(status, error_body));
+    }
+
+    // 성공 응답 파싱
+    response
+        .json::<WithdrawResponse>()
         .await
         .map_err(|e| UpbitApiError::ParseError(e.to_string()))
 }
@@ -651,6 +947,82 @@ mod tests {
             net_type: "BTC".to_string(),
         };
         let result = get_deposit_chance(params).await;
+
+        assert!(matches!(result, Err(UpbitApiError::MissingApiKey)));
+    }
+
+    // ============================================================================
+    // Withdraw API Tests (WTS-5.1)
+    // ============================================================================
+
+    use super::super::types::{
+        GetWithdrawParams, WithdrawChanceParams as WithdrawChanceParamsType, WithdrawParams,
+    };
+
+    #[tokio::test]
+    async fn test_withdraw_coin_missing_api_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        std::env::remove_var("UPBIT_ACCESS_KEY");
+        std::env::remove_var("UPBIT_SECRET_KEY");
+
+        let params = WithdrawParams {
+            currency: "BTC".to_string(),
+            net_type: "BTC".to_string(),
+            amount: "0.01".to_string(),
+            address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
+            secondary_address: None,
+            transaction_type: None,
+        };
+        let result = withdraw_coin(params).await;
+
+        assert!(matches!(result, Err(UpbitApiError::MissingApiKey)));
+    }
+
+    #[tokio::test]
+    async fn test_get_withdraw_chance_missing_api_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        std::env::remove_var("UPBIT_ACCESS_KEY");
+        std::env::remove_var("UPBIT_SECRET_KEY");
+
+        let params = WithdrawChanceParamsType {
+            currency: "BTC".to_string(),
+            net_type: "BTC".to_string(),
+        };
+        let result = get_withdraw_chance(params).await;
+
+        assert!(matches!(result, Err(UpbitApiError::MissingApiKey)));
+    }
+
+    #[tokio::test]
+    async fn test_get_withdraw_addresses_missing_api_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        std::env::remove_var("UPBIT_ACCESS_KEY");
+        std::env::remove_var("UPBIT_SECRET_KEY");
+
+        let params = WithdrawChanceParamsType {
+            currency: "BTC".to_string(),
+            net_type: "BTC".to_string(),
+        };
+        let result = get_withdraw_addresses(params).await;
+
+        assert!(matches!(result, Err(UpbitApiError::MissingApiKey)));
+    }
+
+    #[tokio::test]
+    async fn test_get_withdraw_missing_api_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        std::env::remove_var("UPBIT_ACCESS_KEY");
+        std::env::remove_var("UPBIT_SECRET_KEY");
+
+        let params = GetWithdrawParams {
+            uuid: Some("9f432943-54e0-40b7-825f-b6fec8b42b79".to_string()),
+            txid: None,
+        };
+        let result = get_withdraw(params).await;
 
         assert!(matches!(result, Err(UpbitApiError::MissingApiKey)));
     }
