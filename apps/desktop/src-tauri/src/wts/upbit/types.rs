@@ -81,12 +81,31 @@ impl UpbitApiError {
                 "invalid_side" => "주문 방향이 올바르지 않습니다".to_string(),
                 "invalid_ord_type" => "주문 유형이 올바르지 않습니다".to_string(),
                 // 입금 관련 에러 (WTS-4.1)
+                "coin_address_not_found" => "입금 주소가 아직 생성되지 않았습니다".to_string(),
                 "deposit_address_not_found" => "입금 주소가 아직 생성되지 않았습니다".to_string(),
                 "invalid_currency" => "지원하지 않는 자산입니다".to_string(),
                 "invalid_net_type" => "지원하지 않는 네트워크입니다".to_string(),
                 "deposit_paused" => "현재 입금이 일시 중단되었습니다".to_string(),
                 "deposit_suspended" => "해당 자산의 입금이 중단되었습니다".to_string(),
                 "address_generation_failed" => "입금 주소 생성에 실패했습니다".to_string(),
+                // 출금 관련 에러 (WTS-5.1)
+                "unregistered_withdraw_address" | "withdraw_address_not_registered" => {
+                    "출금 주소를 Upbit 웹에서 먼저 등록해주세요".to_string()
+                }
+                "insufficient_funds_withdraw" => "출금 가능 잔고가 부족합니다".to_string(),
+                "under_min_amount" => "최소 출금 수량 이상이어야 합니다".to_string(),
+                "over_daily_limit" => "일일 출금 한도를 초과했습니다".to_string(),
+                "withdraw_suspended" => "현재 출금이 일시 중단되었습니다".to_string(),
+                "withdraw_disabled" => "해당 자산의 출금이 비활성화되었습니다".to_string(),
+                "wallet_not_working" => {
+                    "지갑 점검 중입니다. 잠시 후 다시 시도해주세요".to_string()
+                }
+                "two_factor_auth_required" => "Upbit 앱에서 2FA 인증이 필요합니다".to_string(),
+                "invalid_withdraw_address" => "유효하지 않은 출금 주소입니다".to_string(),
+                "invalid_secondary_address" => {
+                    "유효하지 않은 보조 주소입니다 (태그/메모)".to_string()
+                }
+                "travel_rule_violation" => "트래블룰 검증에 실패했습니다".to_string(),
                 _ => message.clone(),
             },
             Self::ParseError(_) => "응답 파싱에 실패했습니다".to_string(),
@@ -233,10 +252,30 @@ pub struct DepositChanceParams {
     pub net_type: String,
 }
 
-/// 네트워크 정보
+/// 입금 가능 정보 응답 (실제 Upbit API 응답 형식)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepositChanceResponse {
+    /// 자산 코드
+    pub currency: String,
+    /// 네트워크 타입
+    pub net_type: String,
+    /// 입금 가능 여부
+    pub is_deposit_possible: bool,
+    /// 입금 불가능 사유 (가능하면 null)
+    pub deposit_impossible_reason: Option<String>,
+    /// 최소 입금 수량
+    pub minimum_deposit_amount: f64,
+    /// 최소 입금 확인 횟수
+    pub minimum_deposit_confirmations: i32,
+    /// 소수점 정밀도
+    pub decimal_precision: i32,
+}
+
+/// 프론트엔드용 DepositNetwork (호환성 유지)
+/// 실제 API에서 제공하지 않으므로 DepositChanceResponse에서 생성
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepositNetwork {
-    /// 네트워크 이름
+    /// 네트워크 이름 (net_type 사용)
     pub name: String,
     /// 네트워크 타입
     pub net_type: String,
@@ -248,19 +287,35 @@ pub struct DepositNetwork {
     pub confirm_count: i32,
 }
 
-/// 입금 가능 정보 응답
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DepositChanceResponse {
-    /// 자산 코드
-    pub currency: String,
-    /// 네트워크 타입
-    pub net_type: String,
-    /// 네트워크 정보
-    pub network: DepositNetwork,
-    /// 입금 상태 (normal, paused 등)
-    pub deposit_state: String,
-    /// 최소 입금 수량
-    pub minimum: String,
+impl DepositChanceResponse {
+    /// 프론트엔드 호환용 네트워크 정보 생성
+    pub fn to_network(&self) -> DepositNetwork {
+        DepositNetwork {
+            name: self.net_type.clone(),
+            net_type: self.net_type.clone(),
+            priority: 1,
+            deposit_state: if self.is_deposit_possible {
+                "normal".to_string()
+            } else {
+                "paused".to_string()
+            },
+            confirm_count: self.minimum_deposit_confirmations,
+        }
+    }
+
+    /// 입금 상태 문자열 반환
+    pub fn deposit_state(&self) -> &str {
+        if self.is_deposit_possible {
+            "normal"
+        } else {
+            "paused"
+        }
+    }
+
+    /// 최소 입금 수량 문자열 반환
+    pub fn minimum(&self) -> String {
+        self.minimum_deposit_amount.to_string()
+    }
 }
 
 /// 입금 주소 생성 파라미터
@@ -283,6 +338,154 @@ pub enum GenerateAddressResponse {
     },
     /// 이미 존재하는 주소
     Existing(DepositAddressResponse),
+}
+
+// ============================================================================
+// Withdraw API Types (Upbit) - WTS-5.1
+// ============================================================================
+
+/// 출금 요청 파라미터
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawParams {
+    /// 자산 코드 (예: "BTC", "ETH")
+    pub currency: String,
+    /// 네트워크 타입 (예: "BTC", "ETH", "TRX" 등)
+    pub net_type: String,
+    /// 출금 수량
+    pub amount: String,
+    /// 출금 주소 (Upbit에 사전 등록 필수)
+    pub address: String,
+    /// 보조 주소 (XRP tag, EOS memo 등)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secondary_address: Option<String>,
+    /// 트래블룰 거래 유형 ("default" 또는 "internal")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_type: Option<String>,
+}
+
+/// 출금 응답
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawResponse {
+    /// 응답 타입 (항상 "withdraw")
+    #[serde(rename = "type")]
+    pub response_type: String,
+    /// 출금 고유 식별자
+    pub uuid: String,
+    /// 자산 코드
+    pub currency: String,
+    /// 네트워크 타입
+    pub net_type: String,
+    /// 트랜잭션 ID (블록체인 TXID, 처리 전에는 null)
+    pub txid: Option<String>,
+    /// 출금 상태
+    pub state: String,
+    /// 출금 생성 시각
+    pub created_at: String,
+    /// 출금 완료 시각 (완료 전에는 null)
+    pub done_at: Option<String>,
+    /// 출금 수량
+    pub amount: String,
+    /// 출금 수수료
+    pub fee: String,
+    /// 트래블룰 거래 유형
+    pub transaction_type: String,
+}
+
+/// 출금 가능 정보 파라미터
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawChanceParams {
+    /// 자산 코드
+    pub currency: String,
+    /// 네트워크 타입
+    pub net_type: String,
+}
+
+/// 출금 가능 정보 응답
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawChanceResponse {
+    /// 자산 코드
+    pub currency: String,
+    /// 네트워크 타입
+    pub net_type: String,
+    /// 회원 레벨 정보
+    pub member_level: WithdrawMemberLevel,
+    /// 자산 정보
+    pub currency_info: WithdrawCurrencyInfo,
+    /// 계좌 정보
+    pub account_info: WithdrawAccountInfo,
+    /// 출금 한도 정보
+    pub withdraw_limit: WithdrawLimitInfo,
+}
+
+/// 회원 레벨 정보
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawMemberLevel {
+    pub security_level: i32,
+    pub fee_level: i32,
+    pub email_verified: bool,
+    pub identity_auth_verified: bool,
+    pub bank_account_verified: bool,
+    pub two_factor_auth_verified: bool,
+    pub locked: bool,
+}
+
+/// 자산 정보 (출금용)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawCurrencyInfo {
+    pub code: String,
+    pub withdraw_fee: String,
+    pub is_coin: bool,
+    pub wallet_state: String,
+    pub wallet_support: Vec<String>,
+}
+
+/// 계좌 정보 (출금용)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawAccountInfo {
+    pub balance: String,
+    pub locked: String,
+    pub avg_buy_price: String,
+    pub avg_buy_price_modified: bool,
+    pub unit_currency: String,
+}
+
+/// 출금 한도 정보
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawLimitInfo {
+    pub currency: String,
+    pub minimum: String,
+    pub onetime: String,
+    pub daily: String,
+    pub remaining_daily: String,
+    pub remaining_daily_krw: String,
+    pub fixed: i32,
+    pub can_withdraw: bool,
+}
+
+/// 출금 허용 주소 응답
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawAddressResponse {
+    /// 자산 코드
+    pub currency: String,
+    /// 네트워크 타입
+    pub net_type: String,
+    /// 네트워크 이름
+    pub network_name: String,
+    /// 출금 주소
+    pub withdraw_address: String,
+    /// 보조 주소
+    pub secondary_address: Option<String>,
+}
+
+/// 출금 조회 파라미터
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetWithdrawParams {
+    /// 출금 UUID (uuid 또는 txid 중 하나 필수)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
+    /// 트랜잭션 ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub txid: Option<String>,
 }
 
 /// 주문 응답 (Upbit API)
@@ -678,29 +881,65 @@ mod tests {
 
     #[test]
     fn test_deposit_chance_response_deserialize() {
+        // 실제 Upbit API 응답 형식
         let json = r#"{
             "currency": "BTC",
             "net_type": "BTC",
-            "network": {
-                "name": "Bitcoin",
-                "net_type": "BTC",
-                "priority": 1,
-                "deposit_state": "normal",
-                "confirm_count": 3
-            },
-            "deposit_state": "normal",
-            "minimum": "0.001"
+            "is_deposit_possible": true,
+            "deposit_impossible_reason": null,
+            "minimum_deposit_amount": 0.001,
+            "minimum_deposit_confirmations": 3,
+            "decimal_precision": 8
         }"#;
 
         let response: DepositChanceResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.currency, "BTC");
         assert_eq!(response.net_type, "BTC");
-        assert_eq!(response.network.name, "Bitcoin");
-        assert_eq!(response.network.priority, 1);
-        assert_eq!(response.network.deposit_state, "normal");
-        assert_eq!(response.network.confirm_count, 3);
-        assert_eq!(response.deposit_state, "normal");
-        assert_eq!(response.minimum, "0.001");
+        assert!(response.is_deposit_possible);
+        assert!(response.deposit_impossible_reason.is_none());
+        assert!((response.minimum_deposit_amount - 0.001).abs() < f64::EPSILON);
+        assert_eq!(response.minimum_deposit_confirmations, 3);
+        assert_eq!(response.decimal_precision, 8);
+    }
+
+    #[test]
+    fn test_deposit_chance_response_with_reason() {
+        // 입금 불가능한 경우
+        let json = r#"{
+            "currency": "ETH",
+            "net_type": "ETH",
+            "is_deposit_possible": false,
+            "deposit_impossible_reason": "네트워크 점검 중",
+            "minimum_deposit_amount": 0.01,
+            "minimum_deposit_confirmations": 12,
+            "decimal_precision": 18
+        }"#;
+
+        let response: DepositChanceResponse = serde_json::from_str(json).unwrap();
+        assert!(!response.is_deposit_possible);
+        assert_eq!(
+            response.deposit_impossible_reason,
+            Some("네트워크 점검 중".to_string())
+        );
+    }
+
+    #[test]
+    fn test_deposit_chance_to_network() {
+        let response = DepositChanceResponse {
+            currency: "BTC".to_string(),
+            net_type: "BTC".to_string(),
+            is_deposit_possible: true,
+            deposit_impossible_reason: None,
+            minimum_deposit_amount: 0.001,
+            minimum_deposit_confirmations: 3,
+            decimal_precision: 8,
+        };
+
+        let network = response.to_network();
+        assert_eq!(network.name, "BTC");
+        assert_eq!(network.net_type, "BTC");
+        assert_eq!(network.deposit_state, "normal");
+        assert_eq!(network.confirm_count, 3);
     }
 
     #[test]
@@ -782,5 +1021,349 @@ mod tests {
             message: "Address generation failed".to_string(),
         };
         assert_eq!(err.to_korean_message(), "입금 주소 생성에 실패했습니다");
+    }
+
+    // ============================================================================
+    // Withdraw Types Tests (WTS-5.1)
+    // ============================================================================
+
+    #[test]
+    fn test_withdraw_params_serialize() {
+        let params = WithdrawParams {
+            currency: "BTC".to_string(),
+            net_type: "BTC".to_string(),
+            amount: "0.01".to_string(),
+            address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
+            secondary_address: None,
+            transaction_type: None,
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["currency"], "BTC");
+        assert_eq!(json["net_type"], "BTC");
+        assert_eq!(json["amount"], "0.01");
+        assert_eq!(json["address"], "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh");
+        // skip_serializing_if should omit None values
+        assert!(json.get("secondary_address").is_none());
+        assert!(json.get("transaction_type").is_none());
+    }
+
+    #[test]
+    fn test_withdraw_params_serialize_with_secondary() {
+        // XRP는 secondary_address (Destination Tag) 사용
+        let params = WithdrawParams {
+            currency: "XRP".to_string(),
+            net_type: "XRP".to_string(),
+            amount: "100".to_string(),
+            address: "rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh".to_string(),
+            secondary_address: Some("123456789".to_string()),
+            transaction_type: Some("default".to_string()),
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["currency"], "XRP");
+        assert_eq!(json["secondary_address"], "123456789");
+        assert_eq!(json["transaction_type"], "default");
+    }
+
+    #[test]
+    fn test_withdraw_response_deserialize() {
+        let json = r#"{
+            "type": "withdraw",
+            "uuid": "9f432943-54e0-40b7-825f-b6fec8b42b79",
+            "currency": "BTC",
+            "net_type": "BTC",
+            "txid": null,
+            "state": "submitting",
+            "created_at": "2026-01-24T10:30:00+09:00",
+            "done_at": null,
+            "amount": "0.01",
+            "fee": "0.0005",
+            "transaction_type": "default"
+        }"#;
+
+        let response: WithdrawResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.response_type, "withdraw");
+        assert_eq!(response.uuid, "9f432943-54e0-40b7-825f-b6fec8b42b79");
+        assert_eq!(response.currency, "BTC");
+        assert_eq!(response.net_type, "BTC");
+        assert!(response.txid.is_none());
+        assert_eq!(response.state, "submitting");
+        assert_eq!(response.created_at, "2026-01-24T10:30:00+09:00");
+        assert!(response.done_at.is_none());
+        assert_eq!(response.amount, "0.01");
+        assert_eq!(response.fee, "0.0005");
+        assert_eq!(response.transaction_type, "default");
+    }
+
+    #[test]
+    fn test_withdraw_response_deserialize_with_txid() {
+        // 출금 완료 후 txid가 있는 응답
+        let json = r#"{
+            "type": "withdraw",
+            "uuid": "9f432943-54e0-40b7-825f-b6fec8b42b79",
+            "currency": "BTC",
+            "net_type": "BTC",
+            "txid": "abc123def456...",
+            "state": "done",
+            "created_at": "2026-01-24T10:30:00+09:00",
+            "done_at": "2026-01-24T11:00:00+09:00",
+            "amount": "0.01",
+            "fee": "0.0005",
+            "transaction_type": "default"
+        }"#;
+
+        let response: WithdrawResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.txid, Some("abc123def456...".to_string()));
+        assert_eq!(response.state, "done");
+        assert_eq!(
+            response.done_at,
+            Some("2026-01-24T11:00:00+09:00".to_string())
+        );
+    }
+
+    #[test]
+    fn test_withdraw_chance_params_serialize() {
+        let params = WithdrawChanceParams {
+            currency: "BTC".to_string(),
+            net_type: "BTC".to_string(),
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["currency"], "BTC");
+        assert_eq!(json["net_type"], "BTC");
+    }
+
+    #[test]
+    fn test_withdraw_chance_response_deserialize() {
+        let json = r#"{
+            "currency": "BTC",
+            "net_type": "BTC",
+            "member_level": {
+                "security_level": 3,
+                "fee_level": 1,
+                "email_verified": true,
+                "identity_auth_verified": true,
+                "bank_account_verified": true,
+                "two_factor_auth_verified": true,
+                "locked": false
+            },
+            "currency_info": {
+                "code": "BTC",
+                "withdraw_fee": "0.0005",
+                "is_coin": true,
+                "wallet_state": "working",
+                "wallet_support": ["deposit", "withdraw"]
+            },
+            "account_info": {
+                "balance": "1.0",
+                "locked": "0.0",
+                "avg_buy_price": "50000000",
+                "avg_buy_price_modified": false,
+                "unit_currency": "KRW"
+            },
+            "withdraw_limit": {
+                "currency": "BTC",
+                "minimum": "0.001",
+                "onetime": "10.0",
+                "daily": "100.0",
+                "remaining_daily": "99.5",
+                "remaining_daily_krw": "4950000000",
+                "fixed": 8,
+                "can_withdraw": true
+            }
+        }"#;
+
+        let response: WithdrawChanceResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.currency, "BTC");
+        assert_eq!(response.net_type, "BTC");
+
+        // member_level
+        assert_eq!(response.member_level.security_level, 3);
+        assert!(response.member_level.two_factor_auth_verified);
+        assert!(!response.member_level.locked);
+
+        // currency_info
+        assert_eq!(response.currency_info.code, "BTC");
+        assert_eq!(response.currency_info.withdraw_fee, "0.0005");
+        assert!(response.currency_info.is_coin);
+        assert_eq!(response.currency_info.wallet_state, "working");
+
+        // account_info
+        assert_eq!(response.account_info.balance, "1.0");
+        assert_eq!(response.account_info.locked, "0.0");
+
+        // withdraw_limit
+        assert_eq!(response.withdraw_limit.minimum, "0.001");
+        assert!(response.withdraw_limit.can_withdraw);
+    }
+
+    #[test]
+    fn test_withdraw_address_response_deserialize() {
+        let json = r#"{
+            "currency": "BTC",
+            "net_type": "BTC",
+            "network_name": "Bitcoin",
+            "withdraw_address": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+            "secondary_address": null
+        }"#;
+
+        let response: WithdrawAddressResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.currency, "BTC");
+        assert_eq!(response.net_type, "BTC");
+        assert_eq!(response.network_name, "Bitcoin");
+        assert_eq!(
+            response.withdraw_address,
+            "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+        );
+        assert!(response.secondary_address.is_none());
+    }
+
+    #[test]
+    fn test_withdraw_address_response_with_secondary() {
+        // XRP는 secondary_address 사용
+        let json = r#"{
+            "currency": "XRP",
+            "net_type": "XRP",
+            "network_name": "Ripple",
+            "withdraw_address": "rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh",
+            "secondary_address": "123456789"
+        }"#;
+
+        let response: WithdrawAddressResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.currency, "XRP");
+        assert_eq!(response.secondary_address, Some("123456789".to_string()));
+    }
+
+    #[test]
+    fn test_get_withdraw_params_serialize_with_uuid() {
+        let params = GetWithdrawParams {
+            uuid: Some("9f432943-54e0-40b7-825f-b6fec8b42b79".to_string()),
+            txid: None,
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["uuid"], "9f432943-54e0-40b7-825f-b6fec8b42b79");
+        assert!(json.get("txid").is_none());
+    }
+
+    #[test]
+    fn test_get_withdraw_params_serialize_with_txid() {
+        let params = GetWithdrawParams {
+            uuid: None,
+            txid: Some("abc123def456...".to_string()),
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert!(json.get("uuid").is_none());
+        assert_eq!(json["txid"], "abc123def456...");
+    }
+
+    #[test]
+    fn test_withdraw_error_korean_messages() {
+        // 출금 주소 미등록 에러
+        let err = UpbitApiError::ApiError {
+            code: "unregistered_withdraw_address".to_string(),
+            message: "Unregistered withdraw address".to_string(),
+        };
+        assert_eq!(
+            err.to_korean_message(),
+            "출금 주소를 Upbit 웹에서 먼저 등록해주세요"
+        );
+
+        let err = UpbitApiError::ApiError {
+            code: "withdraw_address_not_registered".to_string(),
+            message: "Address not registered".to_string(),
+        };
+        assert_eq!(
+            err.to_korean_message(),
+            "출금 주소를 Upbit 웹에서 먼저 등록해주세요"
+        );
+
+        // 잔고 부족 에러
+        let err = UpbitApiError::ApiError {
+            code: "insufficient_funds_withdraw".to_string(),
+            message: "Insufficient funds".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "출금 가능 잔고가 부족합니다");
+
+        // 최소 출금 수량 에러
+        let err = UpbitApiError::ApiError {
+            code: "under_min_amount".to_string(),
+            message: "Under minimum amount".to_string(),
+        };
+        assert_eq!(
+            err.to_korean_message(),
+            "최소 출금 수량 이상이어야 합니다"
+        );
+
+        // 일일 한도 초과 에러
+        let err = UpbitApiError::ApiError {
+            code: "over_daily_limit".to_string(),
+            message: "Over daily limit".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "일일 출금 한도를 초과했습니다");
+
+        // 출금 중단 에러
+        let err = UpbitApiError::ApiError {
+            code: "withdraw_suspended".to_string(),
+            message: "Withdraw suspended".to_string(),
+        };
+        assert_eq!(
+            err.to_korean_message(),
+            "현재 출금이 일시 중단되었습니다"
+        );
+
+        let err = UpbitApiError::ApiError {
+            code: "withdraw_disabled".to_string(),
+            message: "Withdraw disabled".to_string(),
+        };
+        assert_eq!(
+            err.to_korean_message(),
+            "해당 자산의 출금이 비활성화되었습니다"
+        );
+
+        // 지갑 점검 에러
+        let err = UpbitApiError::ApiError {
+            code: "wallet_not_working".to_string(),
+            message: "Wallet not working".to_string(),
+        };
+        assert_eq!(
+            err.to_korean_message(),
+            "지갑 점검 중입니다. 잠시 후 다시 시도해주세요"
+        );
+
+        // 2FA 필요 에러
+        let err = UpbitApiError::ApiError {
+            code: "two_factor_auth_required".to_string(),
+            message: "2FA required".to_string(),
+        };
+        assert_eq!(
+            err.to_korean_message(),
+            "Upbit 앱에서 2FA 인증이 필요합니다"
+        );
+
+        // 유효하지 않은 주소 에러
+        let err = UpbitApiError::ApiError {
+            code: "invalid_withdraw_address".to_string(),
+            message: "Invalid address".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "유효하지 않은 출금 주소입니다");
+
+        let err = UpbitApiError::ApiError {
+            code: "invalid_secondary_address".to_string(),
+            message: "Invalid secondary address".to_string(),
+        };
+        assert_eq!(
+            err.to_korean_message(),
+            "유효하지 않은 보조 주소입니다 (태그/메모)"
+        );
+
+        // 트래블룰 에러
+        let err = UpbitApiError::ApiError {
+            code: "travel_rule_violation".to_string(),
+            message: "Travel rule violation".to_string(),
+        };
+        assert_eq!(err.to_korean_message(), "트래블룰 검증에 실패했습니다");
     }
 }

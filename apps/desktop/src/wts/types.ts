@@ -393,12 +393,26 @@ export const UPBIT_ORDER_ERROR_MESSAGES: Record<string, string> = {
   validation_error: '잘못된 요청입니다',
   invalid_query_payload: '요청 파라미터가 올바르지 않습니다',
   // 입금 관련 (WTS-4.1)
+  coin_address_not_found: '입금 주소가 아직 생성되지 않았습니다',
   deposit_address_not_found: '입금 주소가 아직 생성되지 않았습니다',
   invalid_currency: '지원하지 않는 자산입니다',
   invalid_net_type: '지원하지 않는 네트워크입니다',
   deposit_paused: '현재 입금이 일시 중단되었습니다',
   deposit_suspended: '해당 자산의 입금이 중단되었습니다',
   address_generation_failed: '입금 주소 생성에 실패했습니다',
+  // 출금 관련 (WTS-5.1)
+  unregistered_withdraw_address: '출금 주소를 Upbit 웹에서 먼저 등록해주세요',
+  withdraw_address_not_registered: '출금 주소를 Upbit 웹에서 먼저 등록해주세요',
+  insufficient_funds_withdraw: '출금 가능 잔고가 부족합니다',
+  under_min_amount: '최소 출금 수량 이상이어야 합니다',
+  over_daily_limit: '일일 출금 한도를 초과했습니다',
+  withdraw_suspended: '현재 출금이 일시 중단되었습니다',
+  withdraw_disabled: '해당 자산의 출금이 비활성화되었습니다',
+  wallet_not_working: '지갑 점검 중입니다. 잠시 후 다시 시도해주세요',
+  two_factor_auth_required: 'Upbit 앱에서 2FA 인증이 필요합니다',
+  invalid_withdraw_address: '유효하지 않은 출금 주소입니다',
+  invalid_secondary_address: '유효하지 않은 보조 주소입니다 (태그/메모)',
+  travel_rule_violation: '트래블룰 검증에 실패했습니다',
 };
 
 /**
@@ -461,7 +475,25 @@ export interface DepositChanceParams {
   net_type: string;
 }
 
-/** 네트워크 정보 */
+/** 입금 가능 정보 응답 (실제 Upbit API 응답 형식) */
+export interface DepositChanceResponse {
+  /** 자산 코드 */
+  currency: string;
+  /** 네트워크 타입 */
+  net_type: string;
+  /** 입금 가능 여부 */
+  is_deposit_possible: boolean;
+  /** 입금 불가능 사유 (가능하면 null) */
+  deposit_impossible_reason: string | null;
+  /** 최소 입금 수량 */
+  minimum_deposit_amount: number;
+  /** 최소 입금 확인 횟수 */
+  minimum_deposit_confirmations: number;
+  /** 소수점 정밀도 */
+  decimal_precision: number;
+}
+
+/** 네트워크 정보 (프론트엔드 호환용) */
 export interface DepositNetwork {
   /** 네트워크 이름 */
   name: string;
@@ -475,18 +507,15 @@ export interface DepositNetwork {
   confirm_count: number;
 }
 
-/** 입금 가능 정보 응답 */
-export interface DepositChanceResponse {
-  /** 자산 코드 */
-  currency: string;
-  /** 네트워크 타입 */
-  net_type: string;
-  /** 네트워크 정보 */
-  network: DepositNetwork;
-  /** 입금 상태 (normal, paused 등) */
-  deposit_state: string;
-  /** 최소 입금 수량 */
-  minimum: string;
+/** DepositChanceResponse에서 DepositNetwork 생성 */
+export function toDepositNetwork(response: DepositChanceResponse): DepositNetwork {
+  return {
+    name: response.net_type,
+    net_type: response.net_type,
+    priority: 1,
+    deposit_state: response.is_deposit_possible ? 'normal' : 'paused',
+    confirm_count: response.minimum_deposit_confirmations,
+  };
 }
 
 /** 입금 주소 생성 응답 - 비동기 생성 중 */
@@ -503,9 +532,14 @@ export type GenerateAddressResponse =
 /** 입금 상태 타입 */
 export type DepositState = 'normal' | 'paused' | 'suspended';
 
-/** 입금 상태가 정상인지 확인 */
+/** 입금 상태가 정상인지 확인 (레거시 호환) */
 export function isDepositAvailable(state: string): boolean {
   return state === 'normal';
+}
+
+/** DepositChanceResponse로 입금 가능 여부 확인 */
+export function isDepositPossible(response: DepositChanceResponse): boolean {
+  return response.is_deposit_possible;
 }
 
 /** GenerateAddressResponse가 생성 중 상태인지 확인 */
@@ -513,4 +547,157 @@ export function isAddressGenerating(
   response: GenerateAddressResponse
 ): response is GenerateAddressCreating {
   return 'success' in response && response.message === 'creating';
+}
+
+// ============================================================================
+// Withdraw API Types (Upbit) - WTS-5.1
+// ============================================================================
+
+/** 출금 요청 파라미터 */
+export interface WithdrawParams {
+  /** 자산 코드 (예: "BTC", "ETH") */
+  currency: string;
+  /** 네트워크 타입 (예: "BTC", "ETH", "TRX" 등) */
+  net_type: string;
+  /** 출금 수량 */
+  amount: string;
+  /** 출금 주소 (Upbit에 사전 등록 필수) */
+  address: string;
+  /** 보조 주소 (XRP tag, EOS memo 등) */
+  secondary_address?: string | null;
+  /** 트래블룰 거래 유형 ("default" 또는 "internal") */
+  transaction_type?: string;
+}
+
+/** 출금 응답 */
+export interface WithdrawResponse {
+  /** 응답 타입 (항상 "withdraw") */
+  type: string;
+  /** 출금 고유 식별자 */
+  uuid: string;
+  /** 자산 코드 */
+  currency: string;
+  /** 네트워크 타입 */
+  net_type: string;
+  /** 트랜잭션 ID (블록체인 TXID, 처리 전에는 null) */
+  txid: string | null;
+  /** 출금 상태 */
+  state: WithdrawState;
+  /** 출금 생성 시각 */
+  created_at: string;
+  /** 출금 완료 시각 (완료 전에는 null) */
+  done_at: string | null;
+  /** 출금 수량 */
+  amount: string;
+  /** 출금 수수료 */
+  fee: string;
+  /** 트래블룰 거래 유형 */
+  transaction_type: string;
+}
+
+/** 출금 상태 */
+export type WithdrawState =
+  | 'submitting'
+  | 'submitted'
+  | 'almost_accepted'
+  | 'rejected'
+  | 'accepted'
+  | 'processing'
+  | 'done'
+  | 'canceled';
+
+/** 출금 가능 정보 파라미터 */
+export interface WithdrawChanceParams {
+  /** 자산 코드 */
+  currency: string;
+  /** 네트워크 타입 */
+  net_type: string;
+}
+
+/** 회원 레벨 정보 */
+export interface WithdrawMemberLevel {
+  security_level: number;
+  fee_level: number;
+  email_verified: boolean;
+  identity_auth_verified: boolean;
+  bank_account_verified: boolean;
+  two_factor_auth_verified: boolean;
+  locked: boolean;
+}
+
+/** 자산 정보 (출금용) */
+export interface WithdrawCurrencyInfo {
+  code: string;
+  withdraw_fee: string;
+  is_coin: boolean;
+  wallet_state: string;
+  wallet_support: string[];
+}
+
+/** 계좌 정보 (출금용) */
+export interface WithdrawAccountInfo {
+  balance: string;
+  locked: string;
+  avg_buy_price: string;
+  avg_buy_price_modified: boolean;
+  unit_currency: string;
+}
+
+/** 출금 한도 정보 */
+export interface WithdrawLimitInfo {
+  currency: string;
+  minimum: string;
+  onetime: string;
+  daily: string;
+  remaining_daily: string;
+  remaining_daily_krw: string;
+  fixed: number;
+  can_withdraw: boolean;
+}
+
+/** 출금 가능 정보 응답 */
+export interface WithdrawChanceResponse {
+  currency: string;
+  net_type: string;
+  member_level: WithdrawMemberLevel;
+  currency_info: WithdrawCurrencyInfo;
+  account_info: WithdrawAccountInfo;
+  withdraw_limit: WithdrawLimitInfo;
+}
+
+/** 출금 허용 주소 응답 */
+export interface WithdrawAddressResponse {
+  /** 자산 코드 */
+  currency: string;
+  /** 네트워크 타입 */
+  net_type: string;
+  /** 네트워크 이름 */
+  network_name: string;
+  /** 출금 주소 */
+  withdraw_address: string;
+  /** 보조 주소 */
+  secondary_address: string | null;
+}
+
+/** 출금 조회 파라미터 */
+export interface GetWithdrawParams {
+  /** 출금 UUID (uuid 또는 txid 중 하나 필수) */
+  uuid?: string;
+  /** 트랜잭션 ID */
+  txid?: string;
+}
+
+/** 출금 상태가 완료인지 확인 */
+export function isWithdrawComplete(state: WithdrawState): boolean {
+  return state === 'done';
+}
+
+/** 출금 상태가 진행 중인지 확인 */
+export function isWithdrawPending(state: WithdrawState): boolean {
+  return ['submitting', 'submitted', 'almost_accepted', 'accepted', 'processing'].includes(state);
+}
+
+/** 출금 상태가 실패인지 확인 */
+export function isWithdrawFailed(state: WithdrawState): boolean {
+  return ['rejected', 'canceled'].includes(state);
 }
