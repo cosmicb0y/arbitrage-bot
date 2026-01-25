@@ -1,14 +1,73 @@
-import { useCallback } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useTransferStore } from '../stores/transferStore';
+import {
+  useTransferStore,
+  MAX_GENERATE_RETRIES,
+  GENERATE_RETRY_INTERVAL,
+} from '../stores/transferStore';
 import { useConsoleStore } from '../stores/consoleStore';
 import { handleApiError } from '../utils/errorHandler';
-import { isDepositAvailable } from '../types';
-import type { DepositChanceResponse, WtsApiResult, DepositChanceParams } from '../types';
+import type {
+  DepositChanceResponse,
+  WtsApiResult,
+  DepositChanceParams,
+  DepositAddressParams,
+  DepositAddressResponse,
+  GenerateAddressResponse,
+} from '../types';
 
 interface TransferPanelProps {
   className?: string;
 }
+
+// 아이콘 컴포넌트
+const CopyIcon = ({ className = 'w-4 h-4' }: { className?: string }) => (
+  <svg
+    className={className}
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+  >
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+    />
+  </svg>
+);
+
+const CheckIcon = ({ className = 'w-4 h-4' }: { className?: string }) => (
+  <svg
+    className={className}
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+  >
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M5 13l4 4L19 7"
+    />
+  </svg>
+);
+
+const WarningIcon = ({ className = 'w-4 h-4' }: { className?: string }) => (
+  <svg
+    className={className}
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+  >
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+    />
+  </svg>
+);
 
 /** 입금 가능 자산 목록 (MVP) */
 export const DEPOSIT_CURRENCIES = [
@@ -30,17 +89,154 @@ export function TransferPanel({ className = '' }: TransferPanelProps) {
   const {
     activeTab,
     selectedCurrency,
+    selectedNetwork,
     networkInfo,
     isLoading,
     error,
+    depositAddress,
+    isAddressLoading,
+    addressError,
+    isGenerating,
+    generateRetryCount,
     setActiveTab,
     setSelectedCurrency,
+    setSelectedNetwork,
     setNetworkInfo,
     setLoading,
     setError,
+    setDepositAddress,
+    setAddressLoading,
+    setAddressError,
+    setGenerating,
+    setGenerateRetryCount,
+    resetGenerateState,
   } = useTransferStore();
 
   const addLog = useConsoleStore((state) => state.addLog);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // 폴링 타이머 ref
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 컴포넌트 언마운트 시 타이머 정리
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+      }
+    };
+  }, []);
+
+  // 폴링 중단 함수
+  const cancelPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    resetGenerateState();
+    addLog('WARN', 'DEPOSIT', '주소 생성 취소됨');
+  }, [resetGenerateState, addLog]);
+
+  // 입금 주소 조회
+  const fetchDepositAddress = useCallback(
+    async (currency: string, netType: string) => {
+      setAddressLoading(true);
+      setAddressError(null);
+
+      try {
+        const params: DepositAddressParams = { currency, net_type: netType };
+        console.log('[DEBUG] fetchDepositAddress: calling wts_get_deposit_address with params:', params);
+
+        const result = await invoke<WtsApiResult<DepositAddressResponse>>(
+          'wts_get_deposit_address',
+          { params }
+        );
+
+        console.log('[DEBUG] fetchDepositAddress: raw result:', JSON.stringify(result, null, 2));
+
+        if (result.success && result.data) {
+          console.log('[DEBUG] fetchDepositAddress: success, data:', result.data);
+          setDepositAddress(result.data);
+          addLog(
+            'INFO',
+            'DEPOSIT',
+            `입금 주소 조회 완료: ${result.data.deposit_address ? '성공' : '미생성'}`
+          );
+        } else if (result.error?.code === 'coin_address_not_found') {
+          console.log('[DEBUG] fetchDepositAddress: address not found, setting null');
+          // 주소가 없는 경우 null 설정 (생성 버튼 표시용)
+          setDepositAddress({
+            currency,
+            net_type: netType,
+            deposit_address: null,
+            secondary_address: null,
+          });
+        } else {
+          console.error('[DEBUG] fetchDepositAddress: failed, error:', result.error);
+          handleApiError(result.error, 'DEPOSIT', '입금 주소 조회 실패');
+          setAddressError(result.error?.message || '입금 주소 조회 실패');
+        }
+      } catch (err) {
+        console.error('[DEBUG] fetchDepositAddress: exception caught:', err);
+        handleApiError(err, 'DEPOSIT', '입금 주소 조회 실패');
+        setAddressError('입금 주소 조회 실패');
+      } finally {
+        setAddressLoading(false);
+      }
+    },
+    [setAddressLoading, setAddressError, setDepositAddress, addLog]
+  );
+
+  // 입금 가능 정보 조회
+  const fetchDepositChance = useCallback(
+    async (currency: string, netType: string) => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const params: DepositChanceParams = { currency, net_type: netType };
+        console.log('[DEBUG] fetchDepositChance: calling wts_get_deposit_chance with params:', params);
+
+        const result = await invoke<WtsApiResult<DepositChanceResponse>>(
+          'wts_get_deposit_chance',
+          { params }
+        );
+
+        console.log('[DEBUG] fetchDepositChance: raw result:', JSON.stringify(result, null, 2));
+
+        if (result.success && result.data) {
+          console.log('[DEBUG] fetchDepositChance: success, data:', result.data);
+          setNetworkInfo(result.data);
+          setSelectedNetwork(netType);
+          addLog(
+            'INFO',
+            'DEPOSIT',
+            `입금 정보 조회 완료: ${currency}/${netType}`
+          );
+          // 입금 정보 조회 성공 시 주소도 조회
+          await fetchDepositAddress(currency, netType);
+        } else {
+          console.error('[DEBUG] fetchDepositChance: failed, error:', result.error);
+          handleApiError(result.error, 'DEPOSIT', '입금 정보 조회 실패');
+          setError(result.error?.message || '입금 정보 조회 실패');
+        }
+      } catch (err) {
+        console.error('[DEBUG] fetchDepositChance: exception caught:', err);
+        handleApiError(err, 'DEPOSIT', '입금 정보 조회 실패');
+        setError('입금 정보 조회 실패');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      setLoading,
+      setError,
+      setNetworkInfo,
+      setSelectedNetwork,
+      addLog,
+      fetchDepositAddress,
+    ]
+  );
 
   // 자산 선택 핸들러
   const handleCurrencyChange = useCallback(
@@ -55,46 +251,155 @@ export function TransferPanel({ className = '' }: TransferPanelProps) {
 
       // 자산에 해당하는 기본 네트워크로 입금 정보 조회
       const currencyInfo = DEPOSIT_CURRENCIES.find((c) => c.code === currency);
-      if (!currencyInfo || currencyInfo.networks.length === 0) {
+      if (!currencyInfo) {
         return;
       }
 
       const defaultNetwork = currencyInfo.networks[0];
       await fetchDepositChance(currency, defaultNetwork);
     },
-    [setSelectedCurrency, addLog]
+    [setSelectedCurrency, addLog, fetchDepositChance]
   );
 
-  // 입금 가능 정보 조회
-  const fetchDepositChance = useCallback(
-    async (currency: string, netType: string) => {
-      setLoading(true);
-      setError(null);
+  // 주소 복사 핸들러
+  const handleCopyAddress = useCallback(
+    async (text: string | null, field: string) => {
+      if (!text) return;
 
       try {
-        const params: DepositChanceParams = { currency, net_type: netType };
-        const result = await invoke<WtsApiResult<DepositChanceResponse>>(
-          'wts_get_deposit_chance',
+        await navigator.clipboard.writeText(text);
+        setCopiedField(field);
+        addLog(
+          'SUCCESS',
+          'DEPOSIT',
+          `${field === 'address' ? '입금 주소' : 'Tag'}가 클립보드에 복사되었습니다`
+        );
+
+        setTimeout(() => setCopiedField(null), 2000);
+      } catch (err) {
+        addLog('ERROR', 'DEPOSIT', '클립보드 복사 실패');
+      }
+    },
+    [addLog]
+  );
+
+  // 주소 폴링 함수
+  const pollForAddress = useCallback(
+    async (currency: string, netType: string, attempt: number) => {
+      if (attempt > MAX_GENERATE_RETRIES) {
+        setAddressError(
+          `주소 생성 실패: 최대 재시도 횟수(${MAX_GENERATE_RETRIES}회) 초과`
+        );
+        resetGenerateState();
+        addLog(
+          'ERROR',
+          'DEPOSIT',
+          `주소 생성 실패: ${MAX_GENERATE_RETRIES}회 시도 후 타임아웃`
+        );
+        return;
+      }
+
+      setGenerateRetryCount(attempt);
+      addLog(
+        'INFO',
+        'DEPOSIT',
+        `입금 주소 확인 중 (${attempt}/${MAX_GENERATE_RETRIES})`
+      );
+
+      try {
+        const params: DepositAddressParams = { currency, net_type: netType };
+        const result = await invoke<WtsApiResult<DepositAddressResponse>>(
+          'wts_get_deposit_address',
           { params }
         );
 
-        if (result.success && result.data) {
-          setNetworkInfo(result.data);
-          setSelectedNetwork(netType);
-          addLog('INFO', 'DEPOSIT', `입금 정보 조회 완료: ${currency}/${netType}`);
-        } else {
-          handleApiError(result.error, 'DEPOSIT', '입금 정보 조회 실패');
-          setError(result.error?.message || '입금 정보 조회 실패');
+        if (result.success && result.data?.deposit_address) {
+          // 성공! 주소 획득
+          setDepositAddress(result.data);
+          resetGenerateState();
+          addLog(
+            'SUCCESS',
+            'DEPOSIT',
+            `입금 주소 생성 완료: ${result.data.deposit_address.slice(0, 10)}...`
+          );
+          return;
         }
+
+        // 주소가 아직 없음 - 다음 폴링 예약
+        pollTimerRef.current = setTimeout(() => {
+          pollForAddress(currency, netType, attempt + 1);
+        }, GENERATE_RETRY_INTERVAL);
       } catch (err) {
-        handleApiError(err, 'DEPOSIT', '입금 정보 조회 실패');
-        setError('입금 정보 조회 실패');
-      } finally {
-        setLoading(false);
+        // 네트워크 오류 시에도 재시도
+        addLog(
+          'WARN',
+          'DEPOSIT',
+          `주소 확인 실패, 재시도 중 (${attempt}/${MAX_GENERATE_RETRIES})`
+        );
+        pollTimerRef.current = setTimeout(() => {
+          pollForAddress(currency, netType, attempt + 1);
+        }, GENERATE_RETRY_INTERVAL);
       }
     },
-    [setLoading, setError, setNetworkInfo, addLog]
+    [
+      setGenerateRetryCount,
+      setDepositAddress,
+      resetGenerateState,
+      setAddressError,
+      addLog,
+    ]
   );
+
+  // 주소 생성 핸들러 (비동기 폴링 지원)
+  const handleGenerateAddress = useCallback(async () => {
+    if (!selectedCurrency || !selectedNetwork) return;
+
+    // 기존 폴링 취소
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+    }
+
+    setGenerating(true);
+    setAddressError(null);
+    setGenerateRetryCount(0);
+
+    try {
+      const result = await invoke<WtsApiResult<GenerateAddressResponse>>(
+        'wts_generate_deposit_address',
+        {
+          params: {
+            currency: selectedCurrency,
+            net_type: selectedNetwork,
+          },
+        }
+      );
+
+      if (result.success) {
+        addLog('INFO', 'DEPOSIT', '입금 주소 생성 요청 완료, 폴링 시작');
+        // 첫 폴링 시작 (3초 후)
+        pollTimerRef.current = setTimeout(() => {
+          pollForAddress(selectedCurrency, selectedNetwork, 1);
+        }, GENERATE_RETRY_INTERVAL);
+      } else {
+        handleApiError(result.error, 'DEPOSIT', '주소 생성 요청 실패');
+        setAddressError(result.error?.message || '주소 생성 요청 실패');
+        resetGenerateState();
+      }
+    } catch (err) {
+      handleApiError(err, 'DEPOSIT', '주소 생성 요청 실패');
+      setAddressError('주소 생성 요청 실패');
+      resetGenerateState();
+    }
+  }, [
+    selectedCurrency,
+    selectedNetwork,
+    setGenerating,
+    setAddressError,
+    setGenerateRetryCount,
+    addLog,
+    pollForAddress,
+    resetGenerateState,
+  ]);
 
   return (
     <div
@@ -162,25 +467,29 @@ export function TransferPanel({ className = '' }: TransferPanelProps) {
               {/* 네트워크 선택 */}
               {selectedCurrency && (
                 <div className="mt-3">
-                  <span className="text-wts-muted text-xs mb-1 block">네트워크 선택</span>
+                  <span className="text-wts-muted text-xs mb-1 block">
+                    네트워크 선택
+                  </span>
                   <div className="flex flex-wrap gap-2">
-                    {DEPOSIT_CURRENCIES.find((c) => c.code === selectedCurrency)?.networks.map(
-                      (net) => (
-                        <button
-                          key={net}
-                          onClick={() => fetchDepositChance(selectedCurrency, net)}
-                          className={`px-3 py-1 text-xs rounded border transition-colors
+                    {DEPOSIT_CURRENCIES.find(
+                      (c) => c.code === selectedCurrency
+                    )?.networks.map((net) => (
+                      <button
+                        key={net}
+                        onClick={() =>
+                          fetchDepositChance(selectedCurrency, net)
+                        }
+                        className={`px-3 py-1 text-xs rounded border transition-colors
                             ${
                               networkInfo?.net_type === net
                                 ? 'bg-wts-accent text-white border-wts-accent'
                                 : 'bg-wts-secondary text-wts-muted border-wts hover:border-wts-foreground'
                             }
                           `}
-                        >
-                          {net}
-                        </button>
-                      )
-                    )}
+                      >
+                        {net}
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
@@ -204,32 +513,160 @@ export function TransferPanel({ className = '' }: TransferPanelProps) {
                 <div className="mt-3 p-3 rounded bg-wts-tertiary text-xs space-y-2">
                   <div className="flex justify-between">
                     <span className="text-wts-muted">네트워크</span>
-                    <span className="text-wts-foreground">{networkInfo.network.name}</span>
+                    <span className="text-wts-foreground">
+                      {networkInfo.net_type}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-wts-muted">입금 상태</span>
                     <span
                       className={
-                        isDepositAvailable(networkInfo.deposit_state)
+                        networkInfo.is_deposit_possible
                           ? 'text-green-500'
                           : 'text-red-500'
                       }
                     >
-                      {networkInfo.deposit_state === 'normal' ? '정상' : '중단'}
+                      {networkInfo.is_deposit_possible ? '정상' : '중단'}
                     </span>
                   </div>
+                  {!networkInfo.is_deposit_possible &&
+                    networkInfo.deposit_impossible_reason && (
+                      <div className="flex justify-between">
+                        <span className="text-wts-muted">중단 사유</span>
+                        <span className="text-red-400">
+                          {networkInfo.deposit_impossible_reason}
+                        </span>
+                      </div>
+                    )}
                   <div className="flex justify-between">
                     <span className="text-wts-muted">확인 횟수</span>
                     <span className="text-wts-foreground">
-                      {networkInfo.network.confirm_count}회
+                      {networkInfo.minimum_deposit_confirmations}회
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-wts-muted">최소 입금</span>
                     <span className="text-wts-foreground font-mono">
-                      {networkInfo.minimum} {networkInfo.currency}
+                      {networkInfo.minimum_deposit_amount} {networkInfo.currency}
                     </span>
                   </div>
+                </div>
+              )}
+
+              {/* 입금 주소 표시 섹션 */}
+              {networkInfo && !isLoading && !error && (
+                <div className="mt-3 p-3 rounded bg-wts-tertiary text-xs space-y-2 border-t border-wts">
+                  {isGenerating ? (
+                    // 생성 중 상태
+                    <div className="text-center py-4">
+                      <div className="animate-pulse mb-2">
+                        <div className="inline-block w-6 h-6 border-2 border-wts-accent border-t-transparent rounded-full animate-spin" />
+                      </div>
+                      <div className="text-wts-foreground mb-1">
+                        {generateRetryCount === 0
+                          ? '주소 생성 요청 중...'
+                          : `주소 확인 중 (${generateRetryCount}/${MAX_GENERATE_RETRIES})`}
+                      </div>
+                      <div className="text-wts-muted text-[10px] mb-2">
+                        Upbit에서 주소를 생성하고 있습니다
+                      </div>
+                      <button
+                        onClick={cancelPolling}
+                        className="text-xs text-wts-muted hover:text-red-400 underline"
+                      >
+                        취소
+                      </button>
+                    </div>
+                  ) : isAddressLoading ? (
+                    <div className="text-center py-2 text-wts-muted">
+                      주소 로딩 중...
+                    </div>
+                  ) : addressError ? (
+                    // 에러 상태 (재시도 버튼 포함)
+                    <div className="text-center py-2">
+                      <div className="text-red-400 mb-2">{addressError}</div>
+                      <button
+                        onClick={handleGenerateAddress}
+                        className="px-3 py-1.5 bg-wts-accent text-white rounded hover:bg-opacity-90 transition-colors text-xs"
+                      >
+                        다시 시도
+                      </button>
+                    </div>
+                  ) : depositAddress?.deposit_address ? (
+                    <>
+                      <div className="flex justify-between items-start">
+                        <span className="text-wts-muted">입금 주소</span>
+                        <button
+                          onClick={() =>
+                            handleCopyAddress(
+                              depositAddress.deposit_address,
+                              'address'
+                            )
+                          }
+                          className="ml-2 p-1 rounded hover:bg-wts-secondary text-wts-accent"
+                          title="주소 복사"
+                        >
+                          {copiedField === 'address' ? (
+                            <CheckIcon />
+                          ) : (
+                            <CopyIcon />
+                          )}
+                        </button>
+                      </div>
+                      <div className="font-mono text-wts-foreground break-all text-[11px] bg-black/20 p-2 rounded">
+                        {depositAddress.deposit_address}
+                      </div>
+
+                      {/* 보조 주소 (XRP tag, EOS memo 등) */}
+                      {depositAddress.secondary_address && (
+                        <>
+                          <div className="mt-2 p-2 rounded bg-yellow-900/20 border border-yellow-500/30">
+                            <div className="flex items-center gap-1 text-yellow-400 text-xs mb-1">
+                              <WarningIcon className="w-3 h-3" />
+                              <span>Memo/Tag 필수</span>
+                            </div>
+                            <div className="text-yellow-200 text-[10px]">
+                              입금 시 반드시 아래 Tag를 포함해야 합니다
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-start mt-2">
+                            <span className="text-wts-muted">Memo/Tag</span>
+                            <button
+                              onClick={() =>
+                                handleCopyAddress(
+                                  depositAddress.secondary_address,
+                                  'tag'
+                                )
+                              }
+                              className="ml-2 p-1 rounded hover:bg-wts-secondary text-wts-accent"
+                              title="Tag 복사"
+                            >
+                              {copiedField === 'tag' ? (
+                                <CheckIcon />
+                              ) : (
+                                <CopyIcon />
+                              )}
+                            </button>
+                          </div>
+                          <div className="font-mono text-wts-foreground bg-black/20 p-2 rounded">
+                            {depositAddress.secondary_address}
+                          </div>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-center py-2">
+                      <div className="text-wts-muted mb-2">
+                        입금 주소가 없습니다
+                      </div>
+                      <button
+                        onClick={handleGenerateAddress}
+                        className="px-3 py-1.5 bg-wts-accent text-white rounded hover:bg-opacity-90 transition-colors text-xs"
+                      >
+                        주소 생성
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </>
