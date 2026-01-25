@@ -4,6 +4,11 @@ use serde::Deserialize;
 use super::ExchangeAdapter;
 use crate::FeedError;
 
+/// Maximum streams per WebSocket connection for Binance.
+/// Binance limits each connection to 1024 streams.
+/// We use 1000 to leave margin for safety.
+pub const MAX_STREAMS_PER_CONNECTION: usize = 1000;
+
 pub struct BinanceAdapter;
 
 #[derive(Debug, Deserialize)]
@@ -370,6 +375,40 @@ impl BinanceAdapter {
             streams.join("/")
         )
     }
+
+    /// Distribute symbols across multiple connection groups.
+    ///
+    /// Returns a vector of symbol groups, where each group has at most
+    /// `MAX_STREAMS_PER_CONNECTION` symbols. This is needed because Binance
+    /// limits each WebSocket connection to 1024 streams.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,ignore
+    /// let symbols = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string(), ...]; // 1500 symbols
+    /// let groups = BinanceAdapter::distribute_symbols(&symbols);
+    /// // groups[0] has 1000 symbols
+    /// // groups[1] has 500 symbols
+    /// ```
+    pub fn distribute_symbols(symbols: &[String]) -> Vec<Vec<String>> {
+        if symbols.is_empty() {
+            return vec![];
+        }
+
+        symbols
+            .chunks(MAX_STREAMS_PER_CONNECTION)
+            .map(|chunk| chunk.to_vec())
+            .collect()
+    }
+
+    /// Calculate the number of connections needed for the given symbol count.
+    pub fn connections_needed(symbol_count: usize) -> usize {
+        if symbol_count == 0 {
+            0
+        } else {
+            (symbol_count + MAX_STREAMS_PER_CONNECTION - 1) / MAX_STREAMS_PER_CONNECTION
+        }
+    }
 }
 
 #[cfg(test)]
@@ -536,5 +575,55 @@ mod tests {
             BinanceAdapter::extract_base_symbol("PEPEUSDT"),
             Some("PEPE".to_string())
         );
+    }
+
+    #[test]
+    fn test_distribute_symbols_empty() {
+        let symbols: Vec<String> = vec![];
+        let groups = BinanceAdapter::distribute_symbols(&symbols);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn test_distribute_symbols_under_limit() {
+        let symbols: Vec<String> = (0..500)
+            .map(|i| format!("SYMBOL{}USDT", i))
+            .collect();
+        let groups = BinanceAdapter::distribute_symbols(&symbols);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 500);
+    }
+
+    #[test]
+    fn test_distribute_symbols_over_limit() {
+        let symbols: Vec<String> = (0..1500)
+            .map(|i| format!("SYMBOL{}USDT", i))
+            .collect();
+        let groups = BinanceAdapter::distribute_symbols(&symbols);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].len(), 1000);
+        assert_eq!(groups[1].len(), 500);
+    }
+
+    #[test]
+    fn test_distribute_symbols_exact_limit() {
+        let symbols: Vec<String> = (0..1000)
+            .map(|i| format!("SYMBOL{}USDT", i))
+            .collect();
+        let groups = BinanceAdapter::distribute_symbols(&symbols);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 1000);
+    }
+
+    #[test]
+    fn test_connections_needed() {
+        assert_eq!(BinanceAdapter::connections_needed(0), 0);
+        assert_eq!(BinanceAdapter::connections_needed(1), 1);
+        assert_eq!(BinanceAdapter::connections_needed(500), 1);
+        assert_eq!(BinanceAdapter::connections_needed(1000), 1);
+        assert_eq!(BinanceAdapter::connections_needed(1001), 2);
+        assert_eq!(BinanceAdapter::connections_needed(1500), 2);
+        assert_eq!(BinanceAdapter::connections_needed(2000), 2);
+        assert_eq!(BinanceAdapter::connections_needed(2001), 3);
     }
 }

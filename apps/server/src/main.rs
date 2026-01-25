@@ -24,13 +24,12 @@ use arbitrage_alerts::{Database, Notifier, NotifierConfig, TelegramBot};
 use arbitrage_core::{Exchange, FixedPoint, PriceTick, QuoteCurrency};
 use arbitrage_engine::ConversionRates;
 use arbitrage_feeds::{
-    load_mappings, runner as feed_runner, BinanceAdapter, BinanceRestFetcher,
-    BinanceSubscriptionBuilder, BithumbAdapter, BithumbRestFetcher, BithumbSubscriptionBuilder,
-    BybitAdapter, BybitRestFetcher, BybitSubscriptionBuilder, CoinbaseAdapter, CoinbaseCredentials,
-    CoinbaseRestFetcher, CoinbaseSubscriptionBuilder, ExchangeAdapter, FeedConfig, FeedMessage,
-    GateIOAdapter, GateIORestFetcher, GateIOSubscriptionBuilder, MarketDiscovery,
-    SubscriptionManager, SymbolMappings, UpbitAdapter, UpbitRestFetcher, UpbitSubscriptionBuilder,
-    WsClient,
+    load_mappings, runner as feed_runner, BinanceAdapter, BinanceConnectionPool, BinanceRestFetcher,
+    BithumbAdapter, BithumbRestFetcher, BithumbSubscriptionBuilder, BybitAdapter, BybitRestFetcher,
+    BybitSubscriptionBuilder, CoinbaseAdapter, CoinbaseConnectionPool, CoinbaseCredentials,
+    CoinbaseRestFetcher, ExchangeAdapter, FeedConfig, FeedMessage, GateIOAdapter, GateIORestFetcher,
+    GateIOSubscriptionBuilder, MarketDiscovery, SubscriptionManager, SymbolMappings, UpbitAdapter,
+    UpbitRestFetcher, UpbitSubscriptionBuilder, WsClient,
 };
 use feeds::common::{
     convert_stablecoin_to_usd_for_exchange, extract_binance_base_quote, extract_bybit_base_quote,
@@ -1122,53 +1121,59 @@ async fn spawn_live_feeds(
         feeds::run_feed_handler(feed_rx, handler_ctx).await;
     }));
 
-    // Binance
+    // Binance - use connection pool to distribute symbols across multiple connections
+    // (Binance limits each WebSocket connection to 1024 streams)
     if !binance_symbols.is_empty() {
-        let (ws_tx, ws_rx) = mpsc::channel(5000);
-
-        // Create subscription channel for runtime dynamic subscriptions
-        let (sub_tx, sub_rx) = SubscriptionManager::create_channel();
-        subscription_manager.register_exchange(Exchange::Binance, sub_tx);
-
         // Add stablecoin rate symbols to subscription
         let mut all_binance_symbols = binance_symbols.clone();
         all_binance_symbols.push("USDTUSD".to_string());
         all_binance_symbols.push("USDCUSDT".to_string());
         all_binance_symbols.push("USDCUSD".to_string());
 
-        // Use combined stream URL (includes stream name in response, needed for depth streams)
-        let combined_url = BinanceAdapter::ws_url_combined(&all_binance_symbols);
-        let mut binance_config = FeedConfig::for_exchange(Exchange::Binance);
-        binance_config.ws_url = combined_url;
+        let num_connections = BinanceAdapter::connections_needed(all_binance_symbols.len());
+        info!(
+            "Binance: {} symbols require {} WebSocket connection(s)",
+            all_binance_symbols.len(),
+            num_connections
+        );
 
-        // Connect subscription channel with BinanceSubscriptionBuilder for runtime dynamic subscriptions
-        let binance_client = WsClient::new(binance_config.clone(), ws_tx)
-            .with_subscription_channel(sub_rx, Box::new(BinanceSubscriptionBuilder::new()));
-        handles.push(tokio::spawn(async move {
-            if let Err(e) = binance_client.run(None).await {
-                warn!("Binance WebSocket error: {}", e);
-            }
-        }));
+        // Create connection pool and connect all symbols
+        let mut binance_pool = BinanceConnectionPool::new();
+        let mut pool_senders = Vec::new();
+        let handles_and_receivers = binance_pool
+            .connect_all(&all_binance_symbols, feed_tx.clone(), &mut pool_senders)
+            .await;
 
-        // Runner: WsMessage -> FeedMessage
-        let feed_tx_clone = feed_tx.clone();
-        handles.push(tokio::spawn(async move {
-            feed_runner::run_binance(ws_rx, feed_tx_clone).await;
-        }));
+        // Track initial subscriptions to prevent duplicate subscription on market discovery
+        subscription_manager
+            .track_initial_subscriptions(Exchange::Binance, all_binance_symbols.clone());
+
+        // Register pool with subscription manager for dynamic subscriptions
+        subscription_manager.register_exchange_pool(Exchange::Binance, pool_senders);
+
+        // Add connection handles and start feed runners
+        for (conn_idx, (handle, ws_rx)) in handles_and_receivers.into_iter().enumerate() {
+            handles.push(handle);
+
+            // Runner: WsMessage -> FeedMessage for each connection
+            let feed_tx_clone = feed_tx.clone();
+            handles.push(tokio::spawn(async move {
+                tracing::debug!("Starting Binance feed runner for connection {}", conn_idx);
+                feed_runner::run_binance(ws_rx, feed_tx_clone).await;
+            }));
+        }
+
+        info!(
+            "Binance: Started {} connection(s) with {} total symbols",
+            binance_pool.connection_count(),
+            binance_pool.total_symbol_count()
+        );
     }
 
     // Coinbase (requires authentication for level2 channel)
+    // Uses connection pool to distribute symbols across multiple connections (30 L2 streams each)
     if !coinbase_symbols.is_empty() {
         if let Some(credentials) = CoinbaseCredentials::from_env() {
-            let coinbase_config = FeedConfig::for_exchange(Exchange::Coinbase);
-            let (ws_tx, ws_rx) = mpsc::channel(5000);
-
-            // Create subscription channel for runtime dynamic subscriptions
-            let (sub_tx, sub_rx) = SubscriptionManager::create_channel();
-            subscription_manager.register_exchange(Exchange::Coinbase, sub_tx);
-
-            const BATCH_SIZE: usize = 20;
-
             // Priority symbols - major coins first
             let priority_bases = [
                 "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "LINK", "AVAX", "DOT", "MATIC",
@@ -1200,42 +1205,46 @@ async fn spawn_live_feeds(
                 }
             }
 
-            // Generate subscription messages in batches
-            let mut all_subscribe_msgs: Vec<String> = Vec::new();
-            for chunk in prioritized_symbols.chunks(BATCH_SIZE) {
-                match CoinbaseAdapter::subscribe_messages_with_auth(&chunk.to_vec(), &credentials) {
-                    Ok(msgs) => all_subscribe_msgs.extend(msgs),
-                    Err(e) => warn!("Coinbase: Failed to generate subscription for batch: {}", e),
-                }
-            }
+            let symbols_to_subscribe = prioritized_symbols;
 
-            if !all_subscribe_msgs.is_empty() {
-                debug!(
-                    "Coinbase: Subscribing to {} symbols in {} batches",
-                    prioritized_symbols.len(),
-                    all_subscribe_msgs.len()
-                );
+            info!(
+                "Coinbase: {} symbols require {} WebSocket connection(s) (30 L2 streams per connection)",
+                symbols_to_subscribe.len(),
+                CoinbaseAdapter::connections_needed(symbols_to_subscribe.len())
+            );
 
-                let coinbase_client = WsClient::new(coinbase_config.clone(), ws_tx)
-                    .with_subscription_channel(
-                        sub_rx,
-                        Box::new(CoinbaseSubscriptionBuilder::new()),
-                    );
-                handles.push(tokio::spawn(async move {
-                    if let Err(e) = coinbase_client
-                        .run_with_messages(Some(all_subscribe_msgs))
-                        .await
-                    {
-                        warn!("Coinbase WebSocket error: {}", e);
-                    }
-                }));
+            // Track initial subscriptions to prevent duplicate subscription on market discovery
+            subscription_manager
+                .track_initial_subscriptions(Exchange::Coinbase, symbols_to_subscribe.clone());
 
-                // Runner: WsMessage -> FeedMessage
+            // Create connection pool and connect all symbols
+            let mut coinbase_pool = CoinbaseConnectionPool::new(credentials);
+            let mut pool_senders = Vec::new();
+            let handles_and_receivers = coinbase_pool
+                .connect_all(&symbols_to_subscribe, feed_tx.clone(), &mut pool_senders)
+                .await;
+
+            // Register pool with subscription manager for dynamic subscriptions
+            // NOTE: Symbols already tracked via track_initial_subscriptions will be skipped (diff only)
+            subscription_manager.register_exchange_pool(Exchange::Coinbase, pool_senders);
+
+            // Add connection handles and start feed runners
+            for (conn_idx, (handle, ws_rx)) in handles_and_receivers.into_iter().enumerate() {
+                handles.push(handle);
+
+                // Runner: WsMessage -> FeedMessage for each connection
                 let feed_tx_clone = feed_tx.clone();
                 handles.push(tokio::spawn(async move {
+                    tracing::debug!("Starting Coinbase feed runner for connection {}", conn_idx);
                     feed_runner::run_coinbase(ws_rx, feed_tx_clone).await;
                 }));
             }
+
+            info!(
+                "Coinbase: Started {} connection(s) with {} total symbols",
+                coinbase_pool.connection_count(),
+                coinbase_pool.total_symbol_count()
+            );
         } else {
             warn!("Coinbase: No API credentials found (COINBASE_API_KEY_ID, COINBASE_SECRET_KEY). Skipping Coinbase feed.");
         }
@@ -1251,6 +1260,9 @@ async fn spawn_live_feeds(
         subscription_manager.register_exchange(Exchange::Upbit, sub_tx);
 
         let upbit_subscribe = UpbitAdapter::subscribe_message(&upbit_symbols);
+
+        // Track initial subscriptions to prevent duplicate subscription on market discovery
+        subscription_manager.track_initial_subscriptions(Exchange::Upbit, upbit_symbols.clone());
 
         let upbit_client = WsClient::new(upbit_config.clone(), ws_tx)
             .with_subscription_channel(sub_rx, Box::new(UpbitSubscriptionBuilder::new()));
@@ -1277,6 +1289,9 @@ async fn spawn_live_feeds(
         subscription_manager.register_exchange(Exchange::Bithumb, sub_tx);
 
         let bithumb_subscribe = BithumbAdapter::subscribe_message(&bithumb_symbols);
+
+        // Track initial subscriptions to prevent duplicate subscription on market discovery
+        subscription_manager.track_initial_subscriptions(Exchange::Bithumb, bithumb_symbols.clone());
 
         let bithumb_client = WsClient::new(bithumb_config.clone(), ws_tx)
             .with_subscription_channel(sub_rx, Box::new(BithumbSubscriptionBuilder::new()));
@@ -1310,6 +1325,9 @@ async fn spawn_live_feeds(
 
         // Bybit has a limit of 10 args per subscription, so we batch them
         let bybit_subscribe_msgs = BybitAdapter::subscribe_messages(&all_bybit_symbols);
+
+        // Track initial subscriptions to prevent duplicate subscription on market discovery
+        subscription_manager.track_initial_subscriptions(Exchange::Bybit, all_bybit_symbols.clone());
 
         let bybit_client = WsClient::new(bybit_config.clone(), ws_tx)
             .with_subscription_channel(sub_rx, Box::new(BybitSubscriptionBuilder::new()));
@@ -1345,6 +1363,9 @@ async fn spawn_live_feeds(
 
         // Subscribe to orderbook channel
         let gateio_subscribe_msgs = GateIOAdapter::subscribe_messages(&all_gateio_symbols);
+
+        // Track initial subscriptions to prevent duplicate subscription on market discovery
+        subscription_manager.track_initial_subscriptions(Exchange::GateIO, all_gateio_symbols.clone());
 
         let gateio_client = WsClient::new(gateio_config.clone(), ws_tx)
             .with_subscription_channel(sub_rx, Box::new(GateIOSubscriptionBuilder::new()));

@@ -10,10 +10,12 @@ mod coinbase;
 mod gateio;
 mod upbit;
 
-pub use binance::BinanceAdapter;
+pub use binance::{BinanceAdapter, MAX_STREAMS_PER_CONNECTION};
 pub use bithumb::{BithumbAdapter, BithumbMessage, OrderbookSnapshot as BithumbOrderbookSnapshot};
 pub use bybit::BybitAdapter;
-pub use coinbase::{CoinbaseAdapter, CoinbaseCredentials, CoinbaseL2Event};
+pub use coinbase::{
+    CoinbaseAdapter, CoinbaseCredentials, CoinbaseL2Event, COINBASE_MAX_L2_STREAMS_PER_CONNECTION,
+};
 pub use gateio::GateIOAdapter;
 pub use upbit::{UpbitAdapter, UpbitMessage};
 

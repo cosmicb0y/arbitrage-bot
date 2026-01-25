@@ -4,6 +4,11 @@ use serde::Deserialize;
 use super::ExchangeAdapter;
 use crate::FeedError;
 
+/// Maximum L2 streams per WebSocket connection for Coinbase.
+/// Coinbase returns "too many L2 streams requested in a single session" when exceeded.
+/// Using 30 streams per connection to stay within limits.
+pub const COINBASE_MAX_L2_STREAMS_PER_CONNECTION: usize = 30;
+
 pub struct CoinbaseAdapter;
 
 #[derive(Debug, Clone)]
@@ -635,6 +640,31 @@ impl CoinbaseAdapter {
                 products_str, jwt
             ),
         ])
+    }
+
+    /// Distribute symbols across multiple connection groups.
+    ///
+    /// Returns a vector of symbol groups, where each group has at most
+    /// `COINBASE_MAX_L2_STREAMS_PER_CONNECTION` symbols (30).
+    pub fn distribute_symbols(symbols: &[String]) -> Vec<Vec<String>> {
+        if symbols.is_empty() {
+            return vec![];
+        }
+
+        symbols
+            .chunks(COINBASE_MAX_L2_STREAMS_PER_CONNECTION)
+            .map(|chunk| chunk.to_vec())
+            .collect()
+    }
+
+    /// Calculate the number of connections needed for the given symbol count.
+    pub fn connections_needed(symbol_count: usize) -> usize {
+        if symbol_count == 0 {
+            0
+        } else {
+            (symbol_count + COINBASE_MAX_L2_STREAMS_PER_CONNECTION - 1)
+                / COINBASE_MAX_L2_STREAMS_PER_CONNECTION
+        }
     }
 }
 

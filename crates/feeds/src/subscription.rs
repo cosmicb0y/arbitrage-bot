@@ -26,6 +26,7 @@
 //! ]);
 //! ```
 
+use crate::adapter::{CoinbaseAdapter, CoinbaseCredentials};
 use crate::websocket::SubscriptionBuilder;
 use arbitrage_core::Exchange;
 use dashmap::DashMap;
@@ -125,6 +126,9 @@ impl SubscriptionChange {
 pub struct SubscriptionManager {
     /// Channel senders for each exchange's WsClient
     senders: HashMap<Exchange, mpsc::Sender<SubscriptionChange>>,
+    /// Pool senders for exchanges with multiple connections (e.g., Binance).
+    /// When an exchange has pool senders, subscriptions are distributed across them.
+    pool_senders: HashMap<Exchange, Vec<mpsc::Sender<SubscriptionChange>>>,
     /// Current subscription state per exchange (lock-free)
     current_subscriptions: Arc<DashMap<Exchange, HashSet<String>>>,
 }
@@ -134,6 +138,7 @@ impl SubscriptionManager {
     pub fn new() -> Self {
         Self {
             senders: HashMap::new(),
+            pool_senders: HashMap::new(),
             current_subscriptions: Arc::new(DashMap::new()),
         }
     }
@@ -160,8 +165,85 @@ impl SubscriptionManager {
         sender: mpsc::Sender<SubscriptionChange>,
     ) {
         self.senders.insert(exchange, sender);
-        // Initialize empty subscription set for the exchange
-        self.current_subscriptions.insert(exchange, HashSet::new());
+        // Initialize subscription set only if not already present (preserves track_initial_subscriptions)
+        self.current_subscriptions.entry(exchange).or_insert_with(HashSet::new);
+    }
+
+    /// Register an exchange with multiple subscription channel senders (connection pool).
+    ///
+    /// This is used for exchanges like Binance that have stream limits per connection
+    /// and require multiple WebSocket connections. Subscriptions will be distributed
+    /// across all senders in round-robin fashion.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,ignore
+    /// let pool_senders = vec![sub_tx1, sub_tx2, sub_tx3];
+    /// manager.register_exchange_pool(Exchange::Binance, pool_senders);
+    /// ```
+    pub fn register_exchange_pool(
+        &mut self,
+        exchange: Exchange,
+        senders: Vec<mpsc::Sender<SubscriptionChange>>,
+    ) {
+        if senders.is_empty() {
+            warn!("register_exchange_pool called with empty senders for {:?}", exchange);
+            return;
+        }
+        info!(
+            "Registering {:?} with {} pool connections",
+            exchange,
+            senders.len()
+        );
+        self.pool_senders.insert(exchange, senders);
+        // Initialize subscription set only if not already present (preserves track_initial_subscriptions)
+        self.current_subscriptions.entry(exchange).or_insert_with(HashSet::new);
+    }
+
+    /// Track symbols from initial subscription (before WsClient starts).
+    ///
+    /// This prevents market discovery from re-subscribing to already subscribed symbols.
+    /// Call this immediately after generating initial subscription messages but before
+    /// starting the WebSocket client.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,ignore
+    /// // After generating initial subscription messages
+    /// subscription_manager.track_initial_subscriptions(
+    ///     Exchange::Coinbase,
+    ///     symbols_to_subscribe.clone(),
+    /// );
+    ///
+    /// // Then start the client
+    /// let client = WsClient::new(...);
+    /// client.run_with_messages(Some(subscribe_msgs)).await;
+    /// ```
+    pub fn track_initial_subscriptions(&self, exchange: Exchange, symbols: Vec<String>) {
+        let symbol_set: HashSet<String> = symbols.into_iter().collect();
+        let count = symbol_set.len();
+        self.current_subscriptions.insert(exchange, symbol_set.clone());
+        info!(
+            "{:?}: Tracked {} initial subscriptions (first 5: {:?})",
+            exchange,
+            count,
+            symbol_set.iter().take(5).collect::<Vec<_>>()
+        );
+    }
+
+    /// Check if an exchange is registered as a pool.
+    #[must_use]
+    pub fn is_pool(&self, exchange: Exchange) -> bool {
+        self.pool_senders.contains_key(&exchange)
+    }
+
+    /// Get the number of pool connections for an exchange.
+    #[must_use]
+    pub fn pool_connection_count(&self, exchange: Exchange) -> usize {
+        self.pool_senders
+            .get(&exchange)
+            .map(|v| v.len())
+            .unwrap_or(0)
     }
 
     /// Update subscriptions for an exchange with new markets.
@@ -200,10 +282,26 @@ impl SubscriptionManager {
         // Calculate diff: new_markets - current = to_subscribe
         let to_subscribe: Vec<String> = new_set.difference(&current).cloned().collect();
 
+        // Debug logging to trace subscription diff issues
+        if !to_subscribe.is_empty() {
+            info!(
+                "{:?}: update_subscriptions - new={}, current={}, diff={} (first 3 diff: {:?})",
+                exchange,
+                new_set.len(),
+                current.len(),
+                to_subscribe.len(),
+                to_subscribe.iter().take(3).collect::<Vec<_>>()
+            );
+        }
+
         let subscribed_count = to_subscribe.len();
 
         if !to_subscribe.is_empty() {
-            if let Some(sender) = self.senders.get(&exchange) {
+            // Check for pool senders first (for exchanges with multiple connections)
+            if let Some(pool_senders) = self.pool_senders.get(&exchange) {
+                // Distribute subscriptions across pool connections using round-robin
+                self.distribute_to_pool(pool_senders, &to_subscribe).await?;
+            } else if let Some(sender) = self.senders.get(&exchange) {
                 sender
                     .send(SubscriptionChange::Subscribe(to_subscribe))
                     .await
@@ -217,6 +315,43 @@ impl SubscriptionManager {
         self.current_subscriptions.insert(exchange, new_set);
 
         Ok(subscribed_count)
+    }
+
+    /// Distribute subscriptions across pool connections.
+    ///
+    /// Uses round-robin distribution to spread symbols evenly across connections.
+    async fn distribute_to_pool(
+        &self,
+        senders: &[mpsc::Sender<SubscriptionChange>],
+        symbols: &[String],
+    ) -> Result<(), SubscriptionError> {
+        if senders.is_empty() {
+            return Err(SubscriptionError::ChannelSendError(
+                "No pool senders available".to_string(),
+            ));
+        }
+
+        // Distribute symbols evenly across connections
+        let mut batches: Vec<Vec<String>> = vec![Vec::new(); senders.len()];
+        for (i, symbol) in symbols.iter().enumerate() {
+            batches[i % senders.len()].push(symbol.clone());
+        }
+
+        // Send to each connection
+        for (sender, batch) in senders.iter().zip(batches.into_iter()) {
+            if !batch.is_empty() {
+                debug!(
+                    "Distributing {} symbols to pool connection",
+                    batch.len()
+                );
+                sender
+                    .send(SubscriptionChange::Subscribe(batch))
+                    .await
+                    .map_err(|e| SubscriptionError::ChannelSendError(e.to_string()))?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Get the current subscriptions for an exchange.
@@ -239,16 +374,19 @@ impl SubscriptionManager {
             .unwrap_or(0)
     }
 
-    /// Check if an exchange is registered.
+    /// Check if an exchange is registered (either single sender or pool).
     #[must_use]
     pub fn is_registered(&self, exchange: Exchange) -> bool {
-        self.senders.contains_key(&exchange)
+        self.senders.contains_key(&exchange) || self.pool_senders.contains_key(&exchange)
     }
 
-    /// Get the number of registered exchanges.
+    /// Get the number of registered exchanges (includes both single and pool registrations).
     #[must_use]
     pub fn registered_exchange_count(&self) -> usize {
-        self.senders.len()
+        // Count unique exchanges (an exchange shouldn't be in both, but just in case)
+        let pool_keys: HashSet<_> = self.pool_senders.keys().collect();
+        let single_only: usize = self.senders.keys().filter(|k| !pool_keys.contains(k)).count();
+        single_only + self.pool_senders.len()
     }
 
     /// Get a shared reference to the current subscriptions DashMap.
@@ -291,7 +429,10 @@ impl SubscriptionManager {
 
         let symbols: Vec<String> = current.into_iter().collect();
 
-        if let Some(sender) = self.senders.get(&exchange) {
+        // Check for pool senders first (for exchanges with multiple connections)
+        if let Some(pool_senders) = self.pool_senders.get(&exchange) {
+            self.distribute_to_pool(pool_senders, &symbols).await?;
+        } else if let Some(sender) = self.senders.get(&exchange) {
             sender
                 .send(SubscriptionChange::Subscribe(symbols))
                 .await
@@ -324,7 +465,9 @@ impl SubscriptionManager {
     ) -> HashMap<Exchange, Result<usize, SubscriptionError>> {
         let mut results = HashMap::new();
 
-        let exchanges: Vec<Exchange> = self.senders.keys().cloned().collect();
+        // Collect all exchanges from both single senders and pool senders
+        let mut exchanges: HashSet<Exchange> = self.senders.keys().cloned().collect();
+        exchanges.extend(self.pool_senders.keys().cloned());
 
         for exchange in exchanges {
             let result = self.resubscribe_all(exchange).await;
@@ -1743,24 +1886,35 @@ impl SubscriptionBuilder for BinanceSubscriptionBuilder {
 /// Coinbase subscription message builder.
 ///
 /// Builds WebSocket subscription messages for Coinbase level2 and heartbeats channels.
-/// Uses the standard Coinbase WebSocket protocol format.
+/// Uses the Coinbase Advanced Trade WebSocket protocol format with JWT authentication.
 ///
 /// ## Example
 ///
-/// ```rust
-/// use arbitrage_feeds::{CoinbaseSubscriptionBuilder, SubscriptionBuilder};
+/// ```rust,ignore
+/// use arbitrage_feeds::{CoinbaseSubscriptionBuilder, CoinbaseCredentials, SubscriptionBuilder};
 ///
-/// let builder = CoinbaseSubscriptionBuilder::new();
+/// let credentials = CoinbaseCredentials::from_env().expect("credentials required");
+/// let builder = CoinbaseSubscriptionBuilder::with_credentials(credentials);
 /// let msg = builder.build_subscribe_message(&["BTC-USD".to_string(), "ETH-USD".to_string()]);
-/// // Produces: {"type": "subscribe", "product_ids": ["BTC-USD", "ETH-USD"], "channels": ["level2", "heartbeats"]}
+/// // Produces: {"type":"subscribe","product_ids":["BTC-USD","ETH-USD"],"channel":"level2","jwt":"..."}
 /// ```
 #[derive(Debug)]
-pub struct CoinbaseSubscriptionBuilder;
+pub struct CoinbaseSubscriptionBuilder {
+    credentials: Option<CoinbaseCredentials>,
+}
 
 impl CoinbaseSubscriptionBuilder {
-    /// Create a new CoinbaseSubscriptionBuilder.
+    /// Create a new CoinbaseSubscriptionBuilder without credentials.
+    /// Note: Subscriptions without credentials will fail authentication.
     pub fn new() -> Self {
-        Self
+        Self { credentials: None }
+    }
+
+    /// Create a new CoinbaseSubscriptionBuilder with credentials for JWT authentication.
+    pub fn with_credentials(credentials: CoinbaseCredentials) -> Self {
+        Self {
+            credentials: Some(credentials),
+        }
     }
 }
 
@@ -1773,9 +1927,22 @@ impl Default for CoinbaseSubscriptionBuilder {
 impl SubscriptionBuilder for CoinbaseSubscriptionBuilder {
     fn build_subscribe_message(&self, symbols: &[String]) -> String {
         let products: Vec<String> = symbols.iter().map(|s| format!("\"{}\"", s)).collect();
+        let products_str = products.join(", ");
+
+        // Credentials are required for Coinbase Advanced Trade API
+        let creds = self
+            .credentials
+            .as_ref()
+            .expect("CoinbaseSubscriptionBuilder requires credentials - use with_credentials()");
+
+        let jwt = CoinbaseAdapter::generate_ws_jwt(creds)
+            .expect("Failed to generate JWT for Coinbase subscription");
+
+        // Return level2 subscription message with JWT
+        // Note: heartbeats channel subscription is handled separately in initial connection
         format!(
-            r#"{{"type": "subscribe", "product_ids": [{}], "channels": ["level2", "heartbeats"]}}"#,
-            products.join(", ")
+            r#"{{"type":"subscribe","product_ids":[{}],"channel":"level2","jwt":"{}"}}"#,
+            products_str, jwt
         )
     }
 }
@@ -2485,46 +2652,30 @@ mod tests {
     fn test_coinbase_subscription_builder_new() {
         let builder = CoinbaseSubscriptionBuilder::new();
         assert!(format!("{:?}", builder).contains("CoinbaseSubscriptionBuilder"));
+        assert!(builder.credentials.is_none());
     }
 
     #[test]
     fn test_coinbase_subscription_builder_default() {
         let builder = CoinbaseSubscriptionBuilder::default();
         assert!(format!("{:?}", builder).contains("CoinbaseSubscriptionBuilder"));
+        assert!(builder.credentials.is_none());
     }
 
     #[test]
-    fn test_coinbase_subscription_builder_single_symbol() {
-        let builder = CoinbaseSubscriptionBuilder::new();
-        let msg = builder.build_subscribe_message(&["BTC-USD".to_string()]);
-
-        assert!(msg.contains(r#""type": "subscribe""#));
-        assert!(msg.contains(r#""BTC-USD""#));
-        assert!(msg.contains(r#""channels": ["level2", "heartbeats"]"#));
+    fn test_coinbase_subscription_builder_with_credentials() {
+        use crate::adapter::CoinbaseCredentials;
+        let credentials = CoinbaseCredentials::new("test_key".to_string(), "test_secret".to_string());
+        let builder = CoinbaseSubscriptionBuilder::with_credentials(credentials);
+        assert!(builder.credentials.is_some());
     }
 
     #[test]
-    fn test_coinbase_subscription_builder_multiple_symbols() {
+    #[should_panic(expected = "CoinbaseSubscriptionBuilder requires credentials")]
+    fn test_coinbase_subscription_builder_without_credentials_panics() {
         let builder = CoinbaseSubscriptionBuilder::new();
-        let msg = builder.build_subscribe_message(&[
-            "BTC-USD".to_string(),
-            "ETH-USD".to_string(),
-            "SOL-USD".to_string(),
-        ]);
-
-        assert!(msg.contains(r#""type": "subscribe""#));
-        assert!(msg.contains(r#""BTC-USD""#));
-        assert!(msg.contains(r#""ETH-USD""#));
-        assert!(msg.contains(r#""SOL-USD""#));
-    }
-
-    #[test]
-    fn test_coinbase_subscription_builder_empty_symbols() {
-        let builder = CoinbaseSubscriptionBuilder::new();
-        let msg = builder.build_subscribe_message(&[]);
-
-        assert!(msg.contains(r#""type": "subscribe""#));
-        assert!(msg.contains(r#""product_ids": []"#));
+        // This should panic because no credentials were provided
+        let _ = builder.build_subscribe_message(&["BTC-USD".to_string()]);
     }
 
     #[test]

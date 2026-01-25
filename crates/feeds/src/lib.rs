@@ -11,6 +11,7 @@
 
 pub mod adapter;
 pub mod aggregator;
+pub mod connection_pool;
 pub mod discovery;
 pub mod error;
 pub mod feed;
@@ -25,9 +26,10 @@ pub mod websocket;
 pub use adapter::{
     BinanceAdapter, BithumbAdapter, BithumbMessage, BybitAdapter, CoinbaseAdapter,
     CoinbaseCredentials, CoinbaseL2Event, ExchangeAdapter, GateIOAdapter, KoreanExchangeAdapter,
-    UpbitAdapter, UpbitMessage,
+    UpbitAdapter, UpbitMessage, COINBASE_MAX_L2_STREAMS_PER_CONNECTION, MAX_STREAMS_PER_CONNECTION,
 };
 pub use aggregator::*;
+pub use connection_pool::{BinanceConnectionPool, CoinbaseConnectionPool, ConnectionInfo};
 pub use discovery::*;
 pub use error::*;
 pub use feed::*;
