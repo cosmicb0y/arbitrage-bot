@@ -3,6 +3,9 @@ import {
   UPBIT_DEFAULT_MARKETS,
   UPBIT_ORDER_ERROR_MESSAGES,
   WITHDRAW_STATE_MESSAGES,
+  WITHDRAW_ACTION_REQUIRED_ERRORS,
+  WITHDRAW_LIMIT_ERRORS,
+  WITHDRAW_ERROR_GUIDANCE,
   getOrderErrorMessage,
   isRateLimitError,
   isNetworkError,
@@ -11,6 +14,8 @@ import {
   isWithdrawComplete,
   isWithdrawPending,
   isWithdrawFailed,
+  isWithdrawActionRequiredError,
+  isWithdrawLimitError,
   type Market,
   type MarketCode,
   type OrderbookEntry,
@@ -724,6 +729,111 @@ describe('WithdrawResultInfo Types (WTS-5.4)', () => {
       expect(isWithdrawFailed('submitting')).toBe(false);
       expect(isWithdrawFailed('processing')).toBe(false);
       expect(isWithdrawFailed('done')).toBe(false);
+    });
+  });
+});
+
+describe('Withdraw Error Classification (WTS-5.5)', () => {
+  describe('WITHDRAW_ACTION_REQUIRED_ERRORS', () => {
+    it('2FA 에러 코드가 포함되어 있다', () => {
+      expect(WITHDRAW_ACTION_REQUIRED_ERRORS).toContain('two_factor_auth_required');
+    });
+
+    it('미등록 주소 에러 코드가 포함되어 있다', () => {
+      expect(WITHDRAW_ACTION_REQUIRED_ERRORS).toContain('unregistered_withdraw_address');
+      expect(WITHDRAW_ACTION_REQUIRED_ERRORS).toContain('withdraw_address_not_registered');
+    });
+
+    it('한도 에러는 포함되지 않는다', () => {
+      expect(WITHDRAW_ACTION_REQUIRED_ERRORS).not.toContain('over_daily_limit');
+      expect(WITHDRAW_ACTION_REQUIRED_ERRORS).not.toContain('under_min_amount');
+    });
+  });
+
+  describe('WITHDRAW_LIMIT_ERRORS', () => {
+    it('일일 한도 초과 에러가 포함되어 있다', () => {
+      expect(WITHDRAW_LIMIT_ERRORS).toContain('over_daily_limit');
+    });
+
+    it('최소 수량 미만 에러가 포함되어 있다', () => {
+      expect(WITHDRAW_LIMIT_ERRORS).toContain('under_min_amount');
+    });
+
+    it('잔고 부족 에러가 포함되어 있다', () => {
+      expect(WITHDRAW_LIMIT_ERRORS).toContain('insufficient_funds_withdraw');
+    });
+
+    it('액션 필요 에러는 포함되지 않는다', () => {
+      expect(WITHDRAW_LIMIT_ERRORS).not.toContain('two_factor_auth_required');
+      expect(WITHDRAW_LIMIT_ERRORS).not.toContain('unregistered_withdraw_address');
+    });
+  });
+
+  describe('isWithdrawActionRequiredError', () => {
+    it('2FA 에러를 true로 반환한다', () => {
+      expect(isWithdrawActionRequiredError('two_factor_auth_required')).toBe(true);
+    });
+
+    it('미등록 주소 에러를 true로 반환한다', () => {
+      expect(isWithdrawActionRequiredError('unregistered_withdraw_address')).toBe(true);
+      expect(isWithdrawActionRequiredError('withdraw_address_not_registered')).toBe(true);
+    });
+
+    it('한도 에러는 false를 반환한다', () => {
+      expect(isWithdrawActionRequiredError('over_daily_limit')).toBe(false);
+      expect(isWithdrawActionRequiredError('under_min_amount')).toBe(false);
+    });
+
+    it('알 수 없는 에러 코드는 false를 반환한다', () => {
+      expect(isWithdrawActionRequiredError('unknown_error')).toBe(false);
+    });
+  });
+
+  describe('isWithdrawLimitError', () => {
+    it('일일 한도 초과 에러를 true로 반환한다', () => {
+      expect(isWithdrawLimitError('over_daily_limit')).toBe(true);
+    });
+
+    it('최소 수량 미만 에러를 true로 반환한다', () => {
+      expect(isWithdrawLimitError('under_min_amount')).toBe(true);
+    });
+
+    it('잔고 부족 에러를 true로 반환한다', () => {
+      expect(isWithdrawLimitError('insufficient_funds_withdraw')).toBe(true);
+    });
+
+    it('액션 필요 에러는 false를 반환한다', () => {
+      expect(isWithdrawLimitError('two_factor_auth_required')).toBe(false);
+      expect(isWithdrawLimitError('unregistered_withdraw_address')).toBe(false);
+    });
+
+    it('알 수 없는 에러 코드는 false를 반환한다', () => {
+      expect(isWithdrawLimitError('unknown_error')).toBe(false);
+    });
+  });
+});
+
+describe('Withdraw Error Guidance (WTS-5.5)', () => {
+  describe('WITHDRAW_ERROR_GUIDANCE', () => {
+    it('2FA 에러에 대한 안내 메시지가 있다', () => {
+      expect(WITHDRAW_ERROR_GUIDANCE['two_factor_auth_required']).toBeDefined();
+      expect(WITHDRAW_ERROR_GUIDANCE['two_factor_auth_required']).toContain('Upbit 모바일 앱');
+    });
+
+    it('미등록 주소 에러에 대한 안내 메시지가 있다', () => {
+      expect(WITHDRAW_ERROR_GUIDANCE['unregistered_withdraw_address']).toBeDefined();
+      expect(WITHDRAW_ERROR_GUIDANCE['unregistered_withdraw_address']).toContain('upbit.com');
+      expect(WITHDRAW_ERROR_GUIDANCE['unregistered_withdraw_address']).toContain('출금주소관리');
+    });
+
+    it('withdraw_address_not_registered 에러에도 안내 메시지가 있다', () => {
+      expect(WITHDRAW_ERROR_GUIDANCE['withdraw_address_not_registered']).toBeDefined();
+      expect(WITHDRAW_ERROR_GUIDANCE['withdraw_address_not_registered']).toContain('upbit.com');
+    });
+
+    it('일일 한도 초과 에러에 대한 안내 메시지가 있다', () => {
+      expect(WITHDRAW_ERROR_GUIDANCE['over_daily_limit']).toBeDefined();
+      expect(WITHDRAW_ERROR_GUIDANCE['over_daily_limit']).toContain('00:00');
     });
   });
 });

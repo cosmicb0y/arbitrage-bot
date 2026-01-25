@@ -5,7 +5,13 @@
 
 import { useConsoleStore } from '../stores/consoleStore';
 import { useToastStore } from '../stores/toastStore';
-import { getOrderErrorMessage, isRateLimitError, isNetworkError } from '../types';
+import {
+  getOrderErrorMessage,
+  isRateLimitError,
+  isNetworkError,
+  isWithdrawActionRequiredError,
+  WITHDRAW_ERROR_GUIDANCE,
+} from '../types';
 import type { LogCategory, WtsApiErrorResponse } from '../types';
 
 function isNetworkMessage(message: string): boolean {
@@ -75,6 +81,11 @@ export function handleApiError(
   category: LogCategory,
   context?: string
 ): void {
+  if (category === 'WITHDRAW') {
+    handleWithdrawError(error, context);
+    return;
+  }
+
   const addLog = useConsoleStore.getState().addLog;
   const showToast = useToastStore.getState().showToast;
 
@@ -151,4 +162,88 @@ export function getErrorDetails(errorCode: string): {
     isAuth: authCodes.includes(errorCode),
     isOrder: orderCodes.includes(errorCode),
   };
+}
+
+/**
+ * 출금 에러 전용 처리 (WTS-5.5)
+ * - 액션 필요 에러 (2FA, 미등록 주소): WARN 레벨 + 추가 안내
+ * - 한도 에러 (over_daily_limit): WARN 레벨 + 추가 안내
+ * - 기타 에러: ERROR 레벨
+ *
+ * @param error 에러 객체 또는 WtsApiError 응답
+ * @param context 에러 컨텍스트 (선택)
+ */
+export function handleWithdrawError(
+  error: unknown,
+  context?: string
+): void {
+  const addLog = useConsoleStore.getState().addLog;
+  const showToast = useToastStore.getState().showToast;
+
+  let errorCode = 'unknown';
+  let errorMessage = '알 수 없는 오류가 발생했습니다';
+  let logDetail: unknown = error;
+
+  if (isWtsApiError(error)) {
+    errorCode = error.code;
+    errorMessage = getOrderErrorMessage(error.code, error.message);
+    logDetail = error.detail ? { ...error.detail, code: error.code, message: error.message } : error;
+  } else if (error instanceof Error) {
+    errorMessage = error.message;
+    logDetail = { name: error.name, message: error.message };
+  } else if (typeof error === 'string') {
+    errorMessage = error;
+    logDetail = error;
+  }
+
+  if (isRateLimitError(errorCode)) {
+    errorMessage = getRateLimitMessage('WITHDRAW');
+  }
+
+  const logMessage = context ? `${context}: ${errorMessage}` : errorMessage;
+
+  // 액션 필요 에러 (2FA, 미등록 주소): WARN 레벨
+  if (isWithdrawActionRequiredError(errorCode)) {
+    addLog('WARN', 'WITHDRAW', logMessage, logDetail);
+    showToast('warning', errorMessage);
+
+    // 추가 안내 메시지
+    const guidance = WITHDRAW_ERROR_GUIDANCE[errorCode];
+    if (guidance) {
+      addLog('INFO', 'WITHDRAW', guidance);
+    }
+    return;
+  }
+
+  // 한도 에러: over_daily_limit은 WARN 레벨
+  if (errorCode === 'over_daily_limit') {
+    addLog('WARN', 'WITHDRAW', logMessage, logDetail);
+    showToast('warning', errorMessage);
+
+    const guidance = WITHDRAW_ERROR_GUIDANCE[errorCode];
+    if (guidance) {
+      addLog('INFO', 'WITHDRAW', guidance);
+    }
+    return;
+  }
+
+  // 기타 에러: ERROR 레벨
+  addLog('ERROR', 'WITHDRAW', logMessage, logDetail);
+  showToast('error', errorMessage);
+
+  // Rate Limit 처리
+  if (isRateLimitError(errorCode)) {
+    if (isWtsApiError(error)) {
+      const remainingReq = extractRemainingReq(error.detail);
+      if (remainingReq) {
+        addLog('INFO', 'WITHDRAW', `Remaining-Req: ${remainingReq}`);
+      }
+    }
+    addLog('INFO', 'WITHDRAW', '요청 제한으로 잠시 후 다시 시도하세요.');
+  }
+
+  // 네트워크 에러 처리
+  if (isNetworkError(errorCode)) {
+    addLog('INFO', 'WITHDRAW', '네트워크 연결을 확인하고 다시 시도하세요.');
+  }
 }

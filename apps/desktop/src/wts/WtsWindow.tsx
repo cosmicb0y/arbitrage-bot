@@ -18,7 +18,7 @@ import { useTransferStore } from './stores/transferStore';
 import { useConsoleStore } from './stores/consoleStore';
 import { useToastStore } from './stores/toastStore';
 import { useBalanceStore } from './stores/balanceStore';
-import { handleApiError } from './utils/errorHandler';
+import { handleApiError, handleWithdrawError } from './utils/errorHandler';
 import type {
   WithdrawParams,
   WithdrawResponse,
@@ -125,7 +125,8 @@ export function WtsWindow() {
         setIsWithdrawResultOpen(true);
         setWithdrawConfirmInfo(null);
       } else {
-        handleApiError(result.error, 'WITHDRAW', '출금 실패');
+        // WTS-5.5: handleWithdrawError - 액션 필요 에러는 WARN, 다이얼로그 유지
+        handleWithdrawError(result.error, '출금 실패');
       }
     } catch (error) {
       addLog('ERROR', 'WITHDRAW', `출금 요청 실패: ${error}`);

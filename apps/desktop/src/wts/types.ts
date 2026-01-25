@@ -444,6 +444,56 @@ export function isNetworkError(code: string): boolean {
 }
 
 // ============================================================================
+// Withdraw Error Classification (WTS-5.5)
+// ============================================================================
+
+/**
+ * 액션 필요 출금 에러 코드 (WARN 레벨)
+ * 사용자가 외부에서 조치 후 재시도 가능
+ */
+export const WITHDRAW_ACTION_REQUIRED_ERRORS = [
+  'two_factor_auth_required',
+  'unregistered_withdraw_address',
+  'withdraw_address_not_registered',
+] as const;
+
+/**
+ * 출금 한도 관련 에러 코드
+ * 조건 변경 필요
+ */
+export const WITHDRAW_LIMIT_ERRORS = [
+  'over_daily_limit',
+  'under_min_amount',
+  'insufficient_funds_withdraw',
+] as const;
+
+/**
+ * 출금 에러별 추가 안내 메시지
+ */
+export const WITHDRAW_ERROR_GUIDANCE: Record<string, string> = {
+  two_factor_auth_required: 'Upbit 모바일 앱에서 출금 인증을 완료한 후 다시 시도하세요.',
+  unregistered_withdraw_address: 'https://upbit.com > 입출금 > 출금 > 출금주소관리에서 주소를 등록하세요.',
+  withdraw_address_not_registered: 'https://upbit.com > 입출금 > 출금 > 출금주소관리에서 주소를 등록하세요.',
+  over_daily_limit: '출금 한도는 매일 00:00(KST)에 초기화됩니다.',
+};
+
+/**
+ * 액션 필요 출금 에러인지 확인
+ * @param code 에러 코드
+ */
+export function isWithdrawActionRequiredError(code: string): boolean {
+  return WITHDRAW_ACTION_REQUIRED_ERRORS.includes(code as typeof WITHDRAW_ACTION_REQUIRED_ERRORS[number]);
+}
+
+/**
+ * 출금 한도 관련 에러인지 확인
+ * @param code 에러 코드
+ */
+export function isWithdrawLimitError(code: string): boolean {
+  return WITHDRAW_LIMIT_ERRORS.includes(code as typeof WITHDRAW_LIMIT_ERRORS[number]);
+}
+
+// ============================================================================
 // Deposit API Types (Upbit) - WTS-4.1
 // ============================================================================
 

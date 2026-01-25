@@ -34,13 +34,23 @@ vi.mock('../hooks/useUpbitMarkets', () => ({
   useUpbitMarkets: vi.fn(),
 }));
 
-vi.mock('../stores/consoleStore', () => ({
-  useConsoleStore: vi.fn((selector) => selector({ addLog: mockAddLog })),
-}));
+vi.mock('../stores/consoleStore', () => {
+  const mockStore = { addLog: mockAddLog };
+  const useConsoleStore = Object.assign(
+    vi.fn((selector) => selector(mockStore)),
+    { getState: vi.fn(() => mockStore) }
+  );
+  return { useConsoleStore };
+});
 
-vi.mock('../stores/toastStore', () => ({
-  useToastStore: vi.fn((selector) => selector({ showToast: mockShowToast })),
-}));
+vi.mock('../stores/toastStore', () => {
+  const mockStore = { showToast: mockShowToast, toasts: [], removeToast: vi.fn(), clearToasts: vi.fn() };
+  const useToastStore = Object.assign(
+    vi.fn((selector) => selector(mockStore)),
+    { getState: vi.fn(() => mockStore) }
+  );
+  return { useToastStore };
+});
 
 vi.mock('../stores/balanceStore', () => ({
   useBalanceStore: vi.fn((selector) => selector({ fetchBalance: mockFetchBalance })),
@@ -92,6 +102,10 @@ vi.mock('../components/WithdrawResultDialog', () => ({
         check-status
       </button>
     ) : null,
+}));
+
+vi.mock('../components/ToastContainer', () => ({
+  ToastContainer: () => null,
 }));
 
 describe('WtsWindow withdraw flow', () => {
@@ -209,5 +223,132 @@ describe('WtsWindow withdraw flow', () => {
       'WITHDRAW',
       expect.stringContaining('출금 상태')
     );
+  });
+
+  // WTS-5.5: 2FA 및 출금 에러 처리
+  describe('WTS-5.5: 출금 에러 처리', () => {
+    it('2FA 에러 시 WARN 레벨로 기록하고 다이얼로그를 유지한다', async () => {
+      mockInvoke.mockResolvedValueOnce({
+        success: false,
+        error: {
+          code: 'two_factor_auth_required',
+          message: '2FA 필요',
+        },
+      });
+
+      render(<WtsWindow />);
+
+      fireEvent.click(screen.getByText('trigger-withdraw'));
+      fireEvent.click(screen.getByText('confirm-withdraw'));
+
+      await waitFor(() => {
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'WARN',
+          'WITHDRAW',
+          expect.stringContaining('2FA'),
+          expect.anything()
+        );
+      });
+
+      // 다이얼로그가 여전히 열려있어야 함 (재시도 가능)
+      expect(screen.getByText('confirm-withdraw')).toBeTruthy();
+    });
+
+    it('2FA 에러 시 추가 안내 메시지를 INFO 레벨로 기록한다', async () => {
+      mockInvoke.mockResolvedValueOnce({
+        success: false,
+        error: {
+          code: 'two_factor_auth_required',
+          message: '2FA 필요',
+        },
+      });
+
+      render(<WtsWindow />);
+
+      fireEvent.click(screen.getByText('trigger-withdraw'));
+      fireEvent.click(screen.getByText('confirm-withdraw'));
+
+      await waitFor(() => {
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'INFO',
+          'WITHDRAW',
+          expect.stringContaining('Upbit 모바일 앱')
+        );
+      });
+    });
+
+    it('미등록 주소 에러 시 WARN 레벨로 기록하고 다이얼로그를 유지한다', async () => {
+      mockInvoke.mockResolvedValueOnce({
+        success: false,
+        error: {
+          code: 'unregistered_withdraw_address',
+          message: '미등록 주소',
+        },
+      });
+
+      render(<WtsWindow />);
+
+      fireEvent.click(screen.getByText('trigger-withdraw'));
+      fireEvent.click(screen.getByText('confirm-withdraw'));
+
+      await waitFor(() => {
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'WARN',
+          'WITHDRAW',
+          expect.stringContaining('출금 주소'),
+          expect.anything()
+        );
+      });
+
+      // 다이얼로그가 여전히 열려있어야 함
+      expect(screen.getByText('confirm-withdraw')).toBeTruthy();
+    });
+
+    it('미등록 주소 에러 시 등록 안내 URL을 INFO 레벨로 기록한다', async () => {
+      mockInvoke.mockResolvedValueOnce({
+        success: false,
+        error: {
+          code: 'unregistered_withdraw_address',
+          message: '미등록 주소',
+        },
+      });
+
+      render(<WtsWindow />);
+
+      fireEvent.click(screen.getByText('trigger-withdraw'));
+      fireEvent.click(screen.getByText('confirm-withdraw'));
+
+      await waitFor(() => {
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'INFO',
+          'WITHDRAW',
+          expect.stringContaining('upbit.com')
+        );
+      });
+    });
+
+    it('under_min_amount 에러 시 ERROR 레벨로 기록한다', async () => {
+      mockInvoke.mockResolvedValueOnce({
+        success: false,
+        error: {
+          code: 'under_min_amount',
+          message: '최소 수량 미만',
+        },
+      });
+
+      render(<WtsWindow />);
+
+      fireEvent.click(screen.getByText('trigger-withdraw'));
+      fireEvent.click(screen.getByText('confirm-withdraw'));
+
+      await waitFor(() => {
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'ERROR',
+          'WITHDRAW',
+          expect.anything(),
+          expect.anything()
+        );
+      });
+    });
   });
 });

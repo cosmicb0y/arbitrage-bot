@@ -24,12 +24,38 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
+// Hoisted mock functions for stores
+const { mockAddLogFn, mockShowToastFn, mockFetchBalanceFn } = vi.hoisted(() => ({
+  mockAddLogFn: vi.fn(),
+  mockShowToastFn: vi.fn(),
+  mockFetchBalanceFn: vi.fn(),
+}));
+
 // Mock stores
 vi.mock('../../stores/balanceStore');
 vi.mock('../../stores/wtsStore');
 vi.mock('../../stores/orderbookStore');
-vi.mock('../../stores/consoleStore');
-vi.mock('../../stores/toastStore');
+
+// Mock consoleStore with getState
+vi.mock('../../stores/consoleStore', () => {
+  const state = { logs: [], addLog: mockAddLogFn, clearLogs: vi.fn() };
+  const useConsoleStore = Object.assign(
+    (selector?: (s: typeof state) => unknown) => (typeof selector === 'function' ? selector(state) : state),
+    { getState: () => state }
+  );
+  return { useConsoleStore };
+});
+
+// Mock toastStore with getState
+vi.mock('../../stores/toastStore', () => {
+  const state = { toasts: [], showToast: mockShowToastFn, removeToast: vi.fn(), clearToasts: vi.fn() };
+  const useToastStore = Object.assign(
+    (selector?: (s: typeof state) => unknown) => (typeof selector === 'function' ? selector(state) : state),
+    { getState: () => state }
+  );
+  return { useToastStore };
+});
+
 
 // Mock useUpbitOrderbookWs hook
 vi.mock('../../hooks/useUpbitOrderbookWs', () => ({
@@ -37,9 +63,10 @@ vi.mock('../../hooks/useUpbitOrderbookWs', () => ({
 }));
 
 describe('WTS-3.4 지정가 주문 통합 테스트', () => {
-  const mockAddLog = vi.fn();
-  const mockShowToast = vi.fn();
-  const mockFetchBalance = vi.fn();
+  // Use hoisted mocks
+  const mockAddLog = mockAddLogFn;
+  const mockShowToast = mockShowToastFn;
+  const mockFetchBalance = mockFetchBalanceFn;
 
   const mockBalances: BalanceEntry[] = [
     {
@@ -111,19 +138,10 @@ describe('WTS-3.4 지정가 주문 통합 테스트', () => {
       setWsError: vi.fn(),
     });
 
-    vi.mocked(useConsoleStore).mockImplementation((selector) => {
-      if (typeof selector === 'function') {
-        return selector({ logs: [], addLog: mockAddLog, clearLogs: vi.fn() });
-      }
-      return { logs: [], addLog: mockAddLog, clearLogs: vi.fn() };
-    });
-
-    vi.mocked(useToastStore).mockImplementation((selector) => {
-      if (typeof selector === 'function') {
-        return selector({ toasts: [], showToast: mockShowToast, removeToast: vi.fn(), clearToasts: vi.fn() });
-      }
-      return { toasts: [], showToast: mockShowToast, removeToast: vi.fn(), clearToasts: vi.fn() };
-    });
+    // Console and toast store mocks are set up via vi.mock() with hoisted functions
+    // Just clear the mocks in beforeEach
+    mockAddLog.mockClear();
+    mockShowToast.mockClear();
   });
 
   describe('Subtask 6.1: 지정가 매수 주문 전체 플로우 (AC #1-#5)', () => {
@@ -407,7 +425,8 @@ describe('WTS-3.4 지정가 주문 통합 테스트', () => {
         expect(mockAddLog).toHaveBeenCalledWith(
           'ERROR',
           'ORDER',
-          expect.stringContaining('주문 실패')
+          expect.stringContaining('주문 실패'),
+          expect.anything()
         );
         expect(mockShowToast).toHaveBeenCalledWith('error', expect.any(String));
       });

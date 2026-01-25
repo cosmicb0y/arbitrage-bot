@@ -133,6 +133,6 @@ development_status:
   wts-5-2-withdraw-tab-ui-form: done
   wts-5-3-withdraw-confirm-dialog: done
   wts-5-4-withdraw-execute-result: done
-  wts-5-5-2fa-withdraw-limit-guide: backlog
+  wts-5-5-2fa-withdraw-limit-guide: done
   wts-5-6-withdraw-error-network-handling: backlog
   wts-epic-5-retrospective: optional

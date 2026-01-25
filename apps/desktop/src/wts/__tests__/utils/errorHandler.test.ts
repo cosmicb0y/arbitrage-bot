@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { isWtsApiError, handleApiError, getErrorDetails } from '../../utils/errorHandler';
+import { isWtsApiError, handleApiError, getErrorDetails, handleWithdrawError } from '../../utils/errorHandler';
 import { useConsoleStore } from '../../stores/consoleStore';
 import { useToastStore } from '../../stores/toastStore';
 
@@ -225,6 +225,163 @@ describe('errorHandler', () => {
       expect(details.isNetwork).toBe(false);
       expect(details.isAuth).toBe(false);
       expect(details.isOrder).toBe(false);
+    });
+  });
+
+  describe('handleWithdrawError (WTS-5.5)', () => {
+    it('2FA 에러를 WARN 레벨로 기록한다', () => {
+      const error = { code: 'two_factor_auth_required', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'WARN',
+        'WITHDRAW',
+        expect.stringContaining('2FA'),
+        expect.anything()
+      );
+    });
+
+    it('2FA 에러 시 warning 토스트를 표시한다', () => {
+      const error = { code: 'two_factor_auth_required', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockShowToast).toHaveBeenCalledWith('warning', expect.stringContaining('2FA'));
+    });
+
+    it('2FA 에러 시 추가 안내 메시지를 INFO 레벨로 기록한다', () => {
+      const error = { code: 'two_factor_auth_required', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'WITHDRAW',
+        expect.stringContaining('Upbit 모바일 앱')
+      );
+    });
+
+    it('미등록 주소 에러를 WARN 레벨로 기록한다', () => {
+      const error = { code: 'unregistered_withdraw_address', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'WARN',
+        'WITHDRAW',
+        expect.stringContaining('출금 주소'),
+        expect.anything()
+      );
+    });
+
+    it('미등록 주소 에러 시 등록 안내 URL을 INFO 레벨로 기록한다', () => {
+      const error = { code: 'unregistered_withdraw_address', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'WITHDRAW',
+        expect.stringContaining('upbit.com')
+      );
+    });
+
+    it('withdraw_address_not_registered 에러를 WARN 레벨로 기록한다', () => {
+      const error = { code: 'withdraw_address_not_registered', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'WARN',
+        'WITHDRAW',
+        expect.stringContaining('출금 주소'),
+        expect.anything()
+      );
+    });
+
+    it('withdraw_address_not_registered 에러 시 등록 안내 URL을 INFO 레벨로 기록한다', () => {
+      const error = { code: 'withdraw_address_not_registered', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'WITHDRAW',
+        expect.stringContaining('upbit.com')
+      );
+    });
+
+    it('over_daily_limit 에러를 WARN 레벨로 기록한다', () => {
+      const error = { code: 'over_daily_limit', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'WARN',
+        'WITHDRAW',
+        expect.stringContaining('한도'),
+        expect.anything()
+      );
+    });
+
+    it('over_daily_limit 에러 시 초기화 시간 안내를 INFO 레벨로 기록한다', () => {
+      const error = { code: 'over_daily_limit', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'WITHDRAW',
+        expect.stringContaining('00:00')
+      );
+    });
+
+    it('under_min_amount 에러를 ERROR 레벨로 기록한다', () => {
+      const error = { code: 'under_min_amount', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'ERROR',
+        'WITHDRAW',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('under_min_amount 에러 시 error 토스트를 표시한다', () => {
+      const error = { code: 'under_min_amount', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockShowToast).toHaveBeenCalledWith('error', expect.anything());
+    });
+
+    it('알 수 없는 에러 코드는 ERROR 레벨로 기록한다', () => {
+      const error = { code: 'unknown_withdraw_error', message: 'test' };
+
+      handleWithdrawError(error);
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'ERROR',
+        'WITHDRAW',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('컨텍스트가 있으면 로그 메시지에 포함한다', () => {
+      const error = { code: 'two_factor_auth_required', message: 'test' };
+
+      handleWithdrawError(error, '출금 요청 실패');
+
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'WARN',
+        'WITHDRAW',
+        expect.stringContaining('출금 요청 실패'),
+        expect.anything()
+      );
     });
   });
 });
