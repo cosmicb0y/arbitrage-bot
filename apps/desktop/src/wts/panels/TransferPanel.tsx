@@ -14,10 +14,16 @@ import type {
   DepositAddressParams,
   DepositAddressResponse,
   GenerateAddressResponse,
+  WithdrawChanceResponse,
+  WithdrawChanceParams,
+  WithdrawAddressResponse,
+  WithdrawParams,
 } from '../types';
 
 interface TransferPanelProps {
   className?: string;
+  /** 출금 버튼 클릭 시 콜백 (WTS-5.3 확인 다이얼로그 연결용) */
+  onWithdrawClick?: (params: WithdrawParams) => void;
 }
 
 // 아이콘 컴포넌트
@@ -81,11 +87,14 @@ export const DEPOSIT_CURRENCIES = [
   { code: 'USDC', name: 'USD 코인', networks: ['ETH', 'SOL', 'ARB'] },
 ] as const;
 
+/** 출금 가능 자산 목록 (MVP) - 입금과 동일 */
+export const WITHDRAW_CURRENCIES = DEPOSIT_CURRENCIES;
+
 /**
  * Transfer 패널 컴포넌트
  * 입금/출금 기능을 제공하는 패널
  */
-export function TransferPanel({ className = '' }: TransferPanelProps) {
+export function TransferPanel({ className = '', onWithdrawClick }: TransferPanelProps) {
   const {
     activeTab,
     selectedCurrency,
@@ -110,6 +119,20 @@ export function TransferPanel({ className = '' }: TransferPanelProps) {
     setGenerating,
     setGenerateRetryCount,
     resetGenerateState,
+    // 출금 상태 (WTS-5.2)
+    withdrawChanceInfo,
+    withdrawAddresses,
+    selectedWithdrawAddress,
+    withdrawAmount,
+    isWithdrawLoading,
+    withdrawError,
+    setWithdrawChanceInfo,
+    setWithdrawAddresses,
+    setSelectedWithdrawAddress,
+    setWithdrawAmount,
+    setWithdrawLoading,
+    setWithdrawError,
+    resetWithdrawState,
   } = useTransferStore();
 
   const addLog = useConsoleStore((state) => state.addLog);
@@ -401,6 +424,207 @@ export function TransferPanel({ className = '' }: TransferPanelProps) {
     resetGenerateState,
   ]);
 
+  // ============================================================================
+  // 출금 관련 함수 (WTS-5.2)
+  // ============================================================================
+
+  // 출금 가능 정보 조회
+  const fetchWithdrawChance = useCallback(
+    async (currency: string, netType: string) => {
+      setWithdrawLoading(true);
+      setWithdrawError(null);
+
+      try {
+        const params: WithdrawChanceParams = { currency, net_type: netType };
+        const result = await invoke<WtsApiResult<WithdrawChanceResponse>>(
+          'wts_get_withdraw_chance',
+          { params }
+        );
+
+        if (result.success && result.data) {
+          setWithdrawChanceInfo(result.data);
+          addLog(
+            'INFO',
+            'WITHDRAW',
+            `출금 정보 조회 완료: ${currency}/${netType}`
+          );
+          // 출금 가능 정보 조회 성공 시 등록된 출금 주소도 조회
+          await fetchWithdrawAddresses(currency, netType);
+        } else {
+          handleApiError(result.error, 'WITHDRAW', '출금 정보 조회 실패');
+          setWithdrawError(result.error?.message || '출금 정보 조회 실패');
+        }
+      } catch (err) {
+        handleApiError(err, 'WITHDRAW', '출금 정보 조회 실패');
+        setWithdrawError('출금 정보 조회 실패');
+      } finally {
+        setWithdrawLoading(false);
+      }
+    },
+    [setWithdrawLoading, setWithdrawError, setWithdrawChanceInfo, addLog]
+  );
+
+  // 등록된 출금 주소 조회
+  const fetchWithdrawAddresses = useCallback(
+    async (currency: string, netType: string) => {
+      try {
+        const result = await invoke<WtsApiResult<WithdrawAddressResponse[]>>(
+          'wts_get_withdraw_addresses',
+          { params: { currency, net_type: netType } }
+        );
+
+        if (result.success && result.data) {
+          setWithdrawAddresses(result.data);
+          addLog(
+            'INFO',
+            'WITHDRAW',
+            `등록된 출금 주소 ${result.data.length}개 조회 완료`
+          );
+        } else {
+          // 주소가 없는 경우 빈 배열로 설정
+          setWithdrawAddresses([]);
+          if (result.error?.code !== 'withdraw_address_not_found') {
+            addLog('WARN', 'WITHDRAW', '출금 주소 조회 실패');
+          }
+        }
+      } catch (err) {
+        setWithdrawAddresses([]);
+        addLog('WARN', 'WITHDRAW', '출금 주소 조회 실패');
+      }
+    },
+    [setWithdrawAddresses, addLog]
+  );
+
+  // 출금 자산 선택 핸들러
+  const handleWithdrawCurrencyChange = useCallback(
+    async (currency: string) => {
+      if (!currency) {
+        setSelectedCurrency(null);
+        return;
+      }
+
+      setSelectedCurrency(currency);
+      addLog('INFO', 'WITHDRAW', `출금 자산 선택: ${currency}`);
+
+      // 자산에 해당하는 기본 네트워크로 출금 정보 조회
+      const currencyInfo = WITHDRAW_CURRENCIES.find((c) => c.code === currency);
+      if (!currencyInfo) {
+        return;
+      }
+
+      const defaultNetwork = currencyInfo.networks[0];
+      setSelectedNetwork(defaultNetwork);
+      await fetchWithdrawChance(currency, defaultNetwork);
+    },
+    [setSelectedCurrency, setSelectedNetwork, addLog, fetchWithdrawChance]
+  );
+
+  // 출금 네트워크 선택 핸들러
+  const handleWithdrawNetworkChange = useCallback(
+    async (netType: string) => {
+      if (!selectedCurrency) return;
+      setSelectedNetwork(netType);
+      await fetchWithdrawChance(selectedCurrency, netType);
+    },
+    [selectedCurrency, setSelectedNetwork, fetchWithdrawChance]
+  );
+
+  // 출금 주소 선택 핸들러
+  const handleSelectWithdrawAddress = useCallback(
+    (address: WithdrawAddressResponse | null) => {
+      setSelectedWithdrawAddress(address);
+      if (address) {
+        addLog('INFO', 'WITHDRAW', `출금 주소 선택: ${address.withdraw_address.slice(0, 10)}...`);
+      }
+    },
+    [setSelectedWithdrawAddress, addLog]
+  );
+
+  // % 버튼 핸들러
+  const handlePercentClick = useCallback(
+    (percent: number) => {
+      if (!withdrawChanceInfo) return;
+
+      const balance = parseFloat(withdrawChanceInfo.account_info.balance);
+      const locked = parseFloat(withdrawChanceInfo.account_info.locked);
+      const available = balance - locked;
+
+      if (available <= 0) {
+        addLog('WARN', 'WITHDRAW', '출금 가능 잔고가 없습니다');
+        return;
+      }
+
+      const amount = percent === 100 ? available : available * (percent / 100);
+
+      // 소수점 정밀도 적용 및 가용 잔고 초과 방지 (부동소수점 오차 대응)
+      const fixed = withdrawChanceInfo.withdraw_limit.fixed;
+      const safeAmount = Math.min(amount, available);
+      const formattedAmount = safeAmount.toFixed(fixed);
+
+      setWithdrawAmount(formattedAmount);
+    },
+    [withdrawChanceInfo, setWithdrawAmount, addLog]
+  );
+
+  // 출금 버튼 클릭 핸들러
+  const handleWithdrawButtonClick = useCallback(() => {
+    if (!selectedCurrency || !selectedNetwork || !selectedWithdrawAddress || !withdrawAmount) {
+      return;
+    }
+
+    const params: WithdrawParams = {
+      currency: selectedCurrency,
+      net_type: selectedNetwork,
+      amount: withdrawAmount,
+      address: selectedWithdrawAddress.withdraw_address,
+      secondary_address: selectedWithdrawAddress.secondary_address,
+    };
+
+    if (onWithdrawClick) {
+      onWithdrawClick(params);
+    }
+  }, [selectedCurrency, selectedNetwork, selectedWithdrawAddress, withdrawAmount, onWithdrawClick]);
+
+  // 출금 버튼 활성화 조건
+  const isWithdrawButtonEnabled = useCallback(() => {
+    if (!withdrawChanceInfo) return false;
+    if (!selectedWithdrawAddress) return false;
+    if (!withdrawAmount || parseFloat(withdrawAmount) <= 0) return false;
+    if (!withdrawChanceInfo.withdraw_limit.can_withdraw) return false;
+
+    const amount = parseFloat(withdrawAmount);
+    const minimum = parseFloat(withdrawChanceInfo.withdraw_limit.minimum);
+    const available =
+      parseFloat(withdrawChanceInfo.account_info.balance) -
+      parseFloat(withdrawChanceInfo.account_info.locked);
+
+    if (amount < minimum) return false;
+    if (amount > available) return false;
+
+    return true;
+  }, [withdrawChanceInfo, selectedWithdrawAddress, withdrawAmount]);
+
+  // 실수령액 계산
+  const receivableAmount = useCallback(() => {
+    if (!withdrawChanceInfo || !withdrawAmount) return null;
+
+    const amount = parseFloat(withdrawAmount);
+    if (isNaN(amount) || amount <= 0) return null;
+
+    const fee = parseFloat(withdrawChanceInfo.currency_info.withdraw_fee);
+    const result = amount - fee;
+
+    return result > 0
+      ? result.toFixed(withdrawChanceInfo.withdraw_limit.fixed)
+      : '0';
+  }, [withdrawChanceInfo, withdrawAmount]);
+
+  // 출금 주소 축약 표시 (앞 8자 ... 뒤 6자)
+  const formatAddress = (address: string) => {
+    if (address.length <= 16) return address;
+    return `${address.slice(0, 8)}...${address.slice(-6)}`;
+  };
+
   return (
     <div
       data-testid="transfer-panel"
@@ -673,9 +897,300 @@ export function TransferPanel({ className = '' }: TransferPanelProps) {
           )}
 
           {activeTab === 'withdraw' && (
-            <div className="flex items-center justify-center h-32 text-wts-muted text-sm">
-              출금 기능은 준비 중입니다
-            </div>
+            <>
+              {/* 자산 선택 드롭다운 */}
+              <label className="block text-xs">
+                <span className="text-wts-muted mb-1 block">자산</span>
+                <select
+                  value={selectedCurrency || ''}
+                  onChange={(e) => handleWithdrawCurrencyChange(e.target.value)}
+                  aria-label="출금 자산"
+                  className="w-full px-3 py-2 rounded border border-wts bg-wts-secondary
+                             text-wts-foreground text-sm
+                             focus:outline-none focus:border-wts-focus"
+                >
+                  <option value="">자산 선택</option>
+                  {WITHDRAW_CURRENCIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.code} - {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {/* 네트워크 선택 */}
+              {selectedCurrency && (
+                <div className="mt-3">
+                  <span className="text-wts-muted text-xs mb-1 block">
+                    네트워크 선택
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {WITHDRAW_CURRENCIES.find(
+                      (c) => c.code === selectedCurrency
+                    )?.networks.map((net) => (
+                      <button
+                        key={net}
+                        onClick={() => handleWithdrawNetworkChange(net)}
+                        disabled={isWithdrawLoading}
+                        className={`px-3 py-1 text-xs rounded border transition-colors
+                            ${
+                              selectedNetwork === net
+                                ? 'bg-wts-accent text-white border-wts-accent'
+                                : 'bg-wts-secondary text-wts-muted border-wts hover:border-wts-foreground'
+                            }
+                            ${isWithdrawLoading ? 'opacity-50 cursor-not-allowed' : ''}
+                          `}
+                      >
+                        {net}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 로딩 상태 */}
+              {isWithdrawLoading && (
+                <div className="text-center py-4 text-wts-muted text-sm">
+                  조회 중...
+                </div>
+              )}
+
+              {/* 에러 메시지 */}
+              {withdrawError && (
+                <div className="p-3 rounded bg-red-900/20 border border-red-500/30 text-red-400 text-xs">
+                  {withdrawError}
+                </div>
+              )}
+
+              {/* 출금 가능 정보 표시 */}
+              {withdrawChanceInfo && !isWithdrawLoading && (
+                <>
+                  {/* 지갑 상태 및 출금 가능 여부 */}
+                  {!withdrawChanceInfo.withdraw_limit.can_withdraw && (
+                    <div className="mt-3 p-3 rounded bg-red-900/20 border border-red-500/30 text-red-400 text-xs">
+                      <div className="flex items-center gap-1 mb-1">
+                        <WarningIcon className="w-3 h-3" />
+                        <span>출금 불가</span>
+                      </div>
+                      <div className="text-red-300">
+                        {withdrawChanceInfo.currency_info.wallet_state === 'paused'
+                          ? '지갑 점검 중입니다'
+                          : withdrawChanceInfo.currency_info.wallet_state === 'suspended'
+                          ? '출금이 일시 중단되었습니다'
+                          : '현재 출금이 불가능합니다'}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 출금 정보 카드 */}
+                  <div className="mt-3 p-3 rounded bg-wts-tertiary text-xs space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-wts-muted">출금 가능 잔고</span>
+                      <span className="text-wts-foreground font-mono">
+                        {(
+                          parseFloat(withdrawChanceInfo.account_info.balance) -
+                          parseFloat(withdrawChanceInfo.account_info.locked)
+                        ).toFixed(withdrawChanceInfo.withdraw_limit.fixed)}{' '}
+                        {withdrawChanceInfo.currency}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-wts-muted">출금 수수료</span>
+                      <span className="text-wts-foreground font-mono">
+                        {withdrawChanceInfo.currency_info.withdraw_fee}{' '}
+                        {withdrawChanceInfo.currency}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-wts-muted">최소 출금</span>
+                      <span className="text-wts-foreground font-mono">
+                        {withdrawChanceInfo.withdraw_limit.minimum}{' '}
+                        {withdrawChanceInfo.currency}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-wts-muted">1회 최대</span>
+                      <span className="text-wts-foreground font-mono">
+                        {withdrawChanceInfo.withdraw_limit.onetime}{' '}
+                        {withdrawChanceInfo.currency}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-wts-muted">일일 잔여 한도</span>
+                      <span className="text-wts-foreground font-mono">
+                        {withdrawChanceInfo.withdraw_limit.remaining_daily}{' '}
+                        {withdrawChanceInfo.currency}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-wts-muted">지갑 상태</span>
+                      <span
+                        className={
+                          withdrawChanceInfo.currency_info.wallet_state === 'working'
+                            ? 'text-green-500'
+                            : 'text-red-500'
+                        }
+                      >
+                        {withdrawChanceInfo.currency_info.wallet_state === 'working'
+                          ? '정상'
+                          : '중단'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 출금 주소 선택 */}
+                  <div className="mt-3">
+                    <span className="text-wts-muted text-xs mb-1 block">출금 주소</span>
+                    {withdrawAddresses.length > 0 ? (
+                      <select
+                        value={selectedWithdrawAddress?.withdraw_address || ''}
+                        onChange={(e) => {
+                          const addr = withdrawAddresses.find(
+                            (a) => a.withdraw_address === e.target.value
+                          );
+                          handleSelectWithdrawAddress(addr || null);
+                        }}
+                        aria-label="출금 주소"
+                        className="w-full px-3 py-2 rounded border border-wts bg-wts-secondary
+                                   text-wts-foreground text-sm font-mono
+                                   focus:outline-none focus:border-wts-focus"
+                      >
+                        <option value="">주소 선택</option>
+                        {withdrawAddresses.map((addr) => (
+                          <option key={addr.withdraw_address} value={addr.withdraw_address}>
+                            {formatAddress(addr.withdraw_address)}
+                            {addr.secondary_address && ` (Tag: ${addr.secondary_address})`}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="p-3 rounded bg-yellow-900/20 border border-yellow-500/30 text-xs">
+                        <div className="flex items-center gap-1 text-yellow-400 mb-1">
+                          <WarningIcon className="w-3 h-3" />
+                          <span>등록된 출금 주소 없음</span>
+                        </div>
+                        <div className="text-yellow-200 mb-2">
+                          Upbit에서 출금 주소를 먼저 등록해주세요
+                        </div>
+                        <a
+                          href="https://upbit.com/mypage/address"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-wts-accent hover:underline"
+                        >
+                          Upbit 출금 주소 등록하기 →
+                        </a>
+                      </div>
+                    )}
+
+                    {/* 선택된 주소의 보조 주소 표시 */}
+                    {selectedWithdrawAddress?.secondary_address && (
+                      <div className="mt-2 p-2 rounded bg-wts-tertiary text-xs">
+                        <span className="text-wts-muted">Memo/Tag: </span>
+                        <span className="font-mono text-wts-foreground">
+                          {selectedWithdrawAddress.secondary_address}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 수량 입력 */}
+                  {selectedWithdrawAddress && (
+                    <div className="mt-3">
+                      <span className="text-wts-muted text-xs mb-1 block">출금 수량</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={withdrawAmount}
+                        onChange={(e) => {
+                          // 숫자와 소수점만 허용
+                          const value = e.target.value.replace(/[^0-9.]/g, '');
+                          setWithdrawAmount(value);
+                        }}
+                        placeholder="0.00"
+                        aria-label="출금 수량"
+                        className="w-full px-3 py-2 rounded border border-wts bg-wts-secondary
+                                   text-wts-foreground text-sm font-mono
+                                   focus:outline-none focus:border-wts-focus"
+                      />
+                      {/* % 버튼 */}
+                      <div className="flex gap-2 mt-2">
+                        {[25, 50, 75, 100].map((percent) => (
+                          <button
+                            key={percent}
+                            onClick={() => handlePercentClick(percent)}
+                            className="flex-1 px-2 py-1 text-xs rounded bg-wts-secondary
+                                       hover:bg-wts-tertiary text-wts-muted
+                                       transition-colors"
+                          >
+                            {percent === 100 ? 'MAX' : `${percent}%`}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* 입력값 유효성 검사 메시지 */}
+                      {withdrawAmount && parseFloat(withdrawAmount) > 0 && (
+                        <>
+                          {parseFloat(withdrawAmount) <
+                            parseFloat(withdrawChanceInfo.withdraw_limit.minimum) && (
+                            <div className="mt-1 text-red-400 text-xs">
+                              최소 출금 수량은 {withdrawChanceInfo.withdraw_limit.minimum}{' '}
+                              {withdrawChanceInfo.currency} 입니다
+                            </div>
+                          )}
+                          {parseFloat(withdrawAmount) >
+                            parseFloat(withdrawChanceInfo.account_info.balance) -
+                              parseFloat(withdrawChanceInfo.account_info.locked) && (
+                            <div className="mt-1 text-red-400 text-xs">
+                              출금 가능 잔고를 초과했습니다
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 실수령액 표시 */}
+                  {selectedWithdrawAddress && withdrawAmount && (
+                    <div className="mt-3 p-3 rounded bg-wts-tertiary text-xs">
+                      <div className="flex justify-between items-center">
+                        <span className="text-wts-muted">실수령액</span>
+                        <span
+                          className={`font-mono text-lg ${
+                            receivableAmount() && parseFloat(receivableAmount()!) > 0
+                              ? 'text-green-400'
+                              : 'text-red-400'
+                          }`}
+                        >
+                          {receivableAmount() || '0'} {withdrawChanceInfo.currency}
+                        </span>
+                      </div>
+                      {receivableAmount() &&
+                        parseFloat(receivableAmount()!) <= 0 && (
+                          <div className="mt-1 text-red-400 text-xs flex items-center gap-1">
+                            <WarningIcon className="w-3 h-3" />
+                            수수료 차감 후 실수령액이 0 이하입니다
+                          </div>
+                        )}
+                    </div>
+                  )}
+
+                  {/* 출금 버튼 */}
+                  {selectedWithdrawAddress && (
+                    <button
+                      onClick={handleWithdrawButtonClick}
+                      disabled={!isWithdrawButtonEnabled()}
+                      className="mt-3 w-full py-2 rounded font-medium
+                                 bg-wts-accent text-white
+                                 disabled:opacity-50 disabled:cursor-not-allowed
+                                 hover:bg-opacity-90 transition-colors"
+                    >
+                      출금
+                    </button>
+                  )}
+                </>
+              )}
+            </>
           )}
         </div>
       </div>

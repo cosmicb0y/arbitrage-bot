@@ -5,7 +5,12 @@ import { TransferPanel } from '../../panels/TransferPanel';
 import { useTransferStore, MAX_GENERATE_RETRIES } from '../../stores/transferStore';
 import { useConsoleStore } from '../../stores/consoleStore';
 import { useToastStore } from '../../stores/toastStore';
-import type { DepositChanceResponse, DepositAddressResponse } from '../../types';
+import type {
+  DepositChanceResponse,
+  DepositAddressResponse,
+  WithdrawChanceResponse,
+  WithdrawAddressResponse,
+} from '../../types';
 
 // Mock Tauri invoke
 vi.mock('@tauri-apps/api/core', () => ({
@@ -33,6 +38,14 @@ describe('TransferPanel', () => {
   const mockReset = vi.fn();
   const mockAddLog = vi.fn();
   const mockShowToast = vi.fn();
+  // 출금 관련 mock (WTS-5.2)
+  const mockSetWithdrawChanceInfo = vi.fn();
+  const mockSetWithdrawAddresses = vi.fn();
+  const mockSetSelectedWithdrawAddress = vi.fn();
+  const mockSetWithdrawAmount = vi.fn();
+  const mockSetWithdrawLoading = vi.fn();
+  const mockSetWithdrawError = vi.fn();
+  const mockResetWithdrawState = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -50,6 +63,13 @@ describe('TransferPanel', () => {
       addressError: null,
       isGenerating: false,
       generateRetryCount: 0,
+      // 출금 상태 (WTS-5.2)
+      withdrawChanceInfo: null,
+      withdrawAddresses: [],
+      selectedWithdrawAddress: null,
+      withdrawAmount: '',
+      isWithdrawLoading: false,
+      withdrawError: null,
       setActiveTab: mockSetActiveTab,
       setSelectedCurrency: mockSetSelectedCurrency,
       setSelectedNetwork: mockSetSelectedNetwork,
@@ -62,6 +82,14 @@ describe('TransferPanel', () => {
       setGenerating: mockSetGenerating,
       setGenerateRetryCount: mockSetGenerateRetryCount,
       resetGenerateState: mockResetGenerateState,
+      // 출금 액션 (WTS-5.2)
+      setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+      setWithdrawAddresses: mockSetWithdrawAddresses,
+      setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+      setWithdrawAmount: mockSetWithdrawAmount,
+      setWithdrawLoading: mockSetWithdrawLoading,
+      setWithdrawError: mockSetWithdrawError,
+      resetWithdrawState: mockResetWithdrawState,
       reset: mockReset,
     });
 
@@ -721,6 +749,580 @@ describe('TransferPanel', () => {
       // 스피너 클래스 확인
       const spinner = document.querySelector('.animate-spin');
       expect(spinner).toBeTruthy();
+    });
+  });
+
+  // ============================================================================
+  // 출금 탭 테스트 (WTS-5.2)
+  // ============================================================================
+
+  describe('출금 탭 (WTS-5.2)', () => {
+    const mockWithdrawChanceInfo: WithdrawChanceResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      member_level: {
+        security_level: 3,
+        fee_level: 0,
+        email_verified: true,
+        identity_auth_verified: true,
+        bank_account_verified: true,
+        two_factor_auth_verified: true,
+        locked: false,
+      },
+      currency_info: {
+        code: 'BTC',
+        withdraw_fee: '0.0005',
+        is_coin: true,
+        wallet_state: 'working',
+        wallet_support: ['default'],
+      },
+      account_info: {
+        balance: '1.5',
+        locked: '0.1',
+        avg_buy_price: '50000000',
+        avg_buy_price_modified: false,
+        unit_currency: 'KRW',
+      },
+      withdraw_limit: {
+        currency: 'BTC',
+        minimum: '0.001',
+        onetime: '10',
+        daily: '100',
+        remaining_daily: '99.5',
+        remaining_daily_krw: '4975000000',
+        fixed: 8,
+        can_withdraw: true,
+      },
+    };
+
+    const mockWithdrawAddress: WithdrawAddressResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      network_name: 'Bitcoin',
+      withdraw_address: '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa',
+      secondary_address: null,
+    };
+
+    const mockSetGenerating = vi.fn();
+    const mockSetGenerateRetryCount = vi.fn();
+    const mockResetGenerateState = vi.fn();
+
+    beforeEach(() => {
+      mockSetGenerating.mockClear();
+      mockSetGenerateRetryCount.mockClear();
+      mockResetGenerateState.mockClear();
+    });
+
+    it('출금 탭 선택 시 자산 선택 드롭다운이 표시된다 (AC #1)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: null,
+        selectedNetwork: null,
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: null,
+        withdrawAddresses: [],
+        selectedWithdrawAddress: null,
+        withdrawAmount: '',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByLabelText('출금 자산')).toBeTruthy();
+    });
+
+    it('자산 선택 시 네트워크 버튼이 표시된다 (AC #2)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: null,
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: null,
+        withdrawAddresses: [],
+        selectedWithdrawAddress: null,
+        withdrawAmount: '',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('네트워크 선택')).toBeTruthy();
+      expect(screen.getByText('BTC')).toBeTruthy();
+    });
+
+    it('출금 가능 정보가 조회되면 잔고, 수수료, 한도가 표시된다 (AC #5, #6, #7)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: mockWithdrawChanceInfo,
+        withdrawAddresses: [mockWithdrawAddress],
+        selectedWithdrawAddress: null,
+        withdrawAmount: '',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('출금 가능 잔고')).toBeTruthy();
+      expect(screen.getByText('출금 수수료')).toBeTruthy();
+      expect(screen.getByText('최소 출금')).toBeTruthy();
+    });
+
+    it('등록된 출금 주소가 드롭다운으로 표시된다 (AC #3)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: mockWithdrawChanceInfo,
+        withdrawAddresses: [mockWithdrawAddress],
+        selectedWithdrawAddress: null,
+        withdrawAmount: '',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByLabelText('출금 주소')).toBeTruthy();
+    });
+
+    it('등록된 출금 주소가 없을 때 안내 메시지가 표시된다 (AC #9)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: mockWithdrawChanceInfo,
+        withdrawAddresses: [], // 빈 배열
+        selectedWithdrawAddress: null,
+        withdrawAmount: '',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText(/Upbit에서 출금 주소를 먼저 등록해주세요/)).toBeTruthy();
+      expect(screen.getByText(/Upbit 출금 주소 등록하기/)).toBeTruthy();
+    });
+
+    it('출금 주소 선택 후 수량 입력 필드가 표시된다 (AC #4)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: mockWithdrawChanceInfo,
+        withdrawAddresses: [mockWithdrawAddress],
+        selectedWithdrawAddress: mockWithdrawAddress,
+        withdrawAmount: '',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByLabelText('출금 수량')).toBeTruthy();
+    });
+
+    it('% 버튼이 표시된다 (AC #8)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: mockWithdrawChanceInfo,
+        withdrawAddresses: [mockWithdrawAddress],
+        selectedWithdrawAddress: mockWithdrawAddress,
+        withdrawAmount: '',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('25%')).toBeTruthy();
+      expect(screen.getByText('50%')).toBeTruthy();
+      expect(screen.getByText('75%')).toBeTruthy();
+      expect(screen.getByText('MAX')).toBeTruthy();
+    });
+
+    it('출금 불가 상태일 때 안내가 표시된다 (AC #10)', () => {
+      const withdrawNotAllowed: WithdrawChanceResponse = {
+        ...mockWithdrawChanceInfo,
+        withdraw_limit: {
+          ...mockWithdrawChanceInfo.withdraw_limit,
+          can_withdraw: false,
+        },
+      };
+
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: withdrawNotAllowed,
+        withdrawAddresses: [mockWithdrawAddress],
+        selectedWithdrawAddress: null,
+        withdrawAmount: '',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('출금 불가')).toBeTruthy();
+    });
+
+    it('수량 입력 후 실수령액이 표시된다 (AC #6)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: mockWithdrawChanceInfo,
+        withdrawAddresses: [mockWithdrawAddress],
+        selectedWithdrawAddress: mockWithdrawAddress,
+        withdrawAmount: '0.5',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('실수령액')).toBeTruthy();
+      expect(screen.getByText('0.49950000 BTC')).toBeTruthy();
+    });
+
+    it('수수료보다 적은 금액 입력 시 실수령액이 0으로 표시되고 경고가 나타난다 (AC #6)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: mockWithdrawChanceInfo,
+        withdrawAddresses: [mockWithdrawAddress],
+        selectedWithdrawAddress: mockWithdrawAddress,
+        withdrawAmount: '0.0001', // 수수료(0.0005)보다 적음
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('0 BTC')).toBeTruthy();
+      expect(screen.getByText(/수수료 차감 후 실수령액이 0 이하입니다/)).toBeTruthy();
+    });
+
+    it('출금 버튼이 표시된다', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'withdraw',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: null,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        withdrawChanceInfo: mockWithdrawChanceInfo,
+        withdrawAddresses: [mockWithdrawAddress],
+        selectedWithdrawAddress: mockWithdrawAddress,
+        withdrawAmount: '0.5',
+        isWithdrawLoading: false,
+        withdrawError: null,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        setWithdrawChanceInfo: mockSetWithdrawChanceInfo,
+        setWithdrawAddresses: mockSetWithdrawAddresses,
+        setSelectedWithdrawAddress: mockSetSelectedWithdrawAddress,
+        setWithdrawAmount: mockSetWithdrawAmount,
+        setWithdrawLoading: mockSetWithdrawLoading,
+        setWithdrawError: mockSetWithdrawError,
+        resetWithdrawState: mockResetWithdrawState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByRole('button', { name: '출금' })).toBeTruthy();
     });
   });
 });

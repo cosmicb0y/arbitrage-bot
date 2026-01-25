@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import type { DepositChanceResponse, DepositAddressResponse } from '../types';
+import type {
+  DepositChanceResponse,
+  DepositAddressResponse,
+  WithdrawChanceResponse,
+  WithdrawAddressResponse,
+} from '../types';
 
 /** 최대 주소 생성 재시도 횟수 */
 export const MAX_GENERATE_RETRIES = 5;
@@ -36,6 +41,20 @@ export interface TransferState {
   /** 생성 재시도 횟수 (0-5) */
   generateRetryCount: number;
 
+  // 출금 상태 (WTS-5.2)
+  /** 출금 가능 정보 */
+  withdrawChanceInfo: WithdrawChanceResponse | null;
+  /** 등록된 출금 주소 목록 */
+  withdrawAddresses: WithdrawAddressResponse[];
+  /** 선택된 출금 주소 */
+  selectedWithdrawAddress: WithdrawAddressResponse | null;
+  /** 출금 수량 */
+  withdrawAmount: string;
+  /** 출금 로딩 상태 */
+  isWithdrawLoading: boolean;
+  /** 출금 에러 */
+  withdrawError: string | null;
+
   // Actions
   /** 활성 탭 설정 */
   setActiveTab: (tab: 'deposit' | 'withdraw') => void;
@@ -64,6 +83,22 @@ export interface TransferState {
   /** 생성 상태 초기화 (isGenerating, generateRetryCount, addressError) */
   resetGenerateState: () => void;
 
+  // 출금 Actions (WTS-5.2)
+  /** 출금 가능 정보 설정 */
+  setWithdrawChanceInfo: (info: WithdrawChanceResponse | null) => void;
+  /** 출금 주소 목록 설정 */
+  setWithdrawAddresses: (addresses: WithdrawAddressResponse[]) => void;
+  /** 선택된 출금 주소 설정 */
+  setSelectedWithdrawAddress: (address: WithdrawAddressResponse | null) => void;
+  /** 출금 수량 설정 */
+  setWithdrawAmount: (amount: string) => void;
+  /** 출금 로딩 설정 */
+  setWithdrawLoading: (loading: boolean) => void;
+  /** 출금 에러 설정 */
+  setWithdrawError: (error: string | null) => void;
+  /** 출금 상태 초기화 */
+  resetWithdrawState: () => void;
+
   /** 상태 초기화 */
   reset: () => void;
 }
@@ -87,10 +122,19 @@ export const useTransferStore = create<TransferState>()((set) => ({
   isGenerating: false,
   generateRetryCount: 0,
 
+  // 출금 초기 상태 (WTS-5.2)
+  withdrawChanceInfo: null,
+  withdrawAddresses: [],
+  selectedWithdrawAddress: null,
+  withdrawAmount: '',
+  isWithdrawLoading: false,
+  withdrawError: null,
+
   setActiveTab: (activeTab) => set({ activeTab }),
 
   setSelectedCurrency: (selectedCurrency) =>
-    set({
+    set((state) => ({
+      ...state,
       selectedCurrency,
       selectedNetwork: null,
       networkInfo: null,
@@ -101,10 +145,18 @@ export const useTransferStore = create<TransferState>()((set) => ({
       // 생성 상태도 초기화
       isGenerating: false,
       generateRetryCount: 0,
-    }),
+      // 출금 상태도 초기화 (WTS-5.2)
+      withdrawChanceInfo: null,
+      withdrawAddresses: [],
+      selectedWithdrawAddress: null,
+      withdrawAmount: '',
+      isWithdrawLoading: false,
+      withdrawError: null,
+    })),
 
   setSelectedNetwork: (selectedNetwork) =>
-    set({
+    set((state) => ({
+      ...state,
       selectedNetwork,
       // 네트워크 변경 시 주소 관련 상태 초기화 (재조회 필요)
       depositAddress: null,
@@ -113,7 +165,14 @@ export const useTransferStore = create<TransferState>()((set) => ({
       // 생성 상태도 초기화
       isGenerating: false,
       generateRetryCount: 0,
-    }),
+      // 출금 상태도 초기화 (WTS-5.2)
+      withdrawChanceInfo: null,
+      withdrawAddresses: [],
+      selectedWithdrawAddress: null,
+      withdrawAmount: '',
+      isWithdrawLoading: false,
+      withdrawError: null,
+    })),
 
   setNetworkInfo: (networkInfo) => set({ networkInfo }),
 
@@ -138,6 +197,30 @@ export const useTransferStore = create<TransferState>()((set) => ({
       // addressError는 초기화하지 않음 (에러 표시 유지를 위해)
     }),
 
+  // 출금 액션 (WTS-5.2)
+  setWithdrawChanceInfo: (withdrawChanceInfo) => set({ withdrawChanceInfo }),
+
+  setWithdrawAddresses: (withdrawAddresses) => set({ withdrawAddresses }),
+
+  setSelectedWithdrawAddress: (selectedWithdrawAddress) =>
+    set({ selectedWithdrawAddress }),
+
+  setWithdrawAmount: (withdrawAmount) => set({ withdrawAmount }),
+
+  setWithdrawLoading: (isWithdrawLoading) => set({ isWithdrawLoading }),
+
+  setWithdrawError: (withdrawError) => set({ withdrawError }),
+
+  resetWithdrawState: () =>
+    set({
+      withdrawChanceInfo: null,
+      withdrawAddresses: [],
+      selectedWithdrawAddress: null,
+      withdrawAmount: '',
+      isWithdrawLoading: false,
+      withdrawError: null,
+    }),
+
   reset: () =>
     set({
       activeTab: 'deposit',
@@ -151,5 +234,12 @@ export const useTransferStore = create<TransferState>()((set) => ({
       addressError: null,
       isGenerating: false,
       generateRetryCount: 0,
+      // 출금 상태도 초기화 (WTS-5.2)
+      withdrawChanceInfo: null,
+      withdrawAddresses: [],
+      selectedWithdrawAddress: null,
+      withdrawAmount: '',
+      isWithdrawLoading: false,
+      withdrawError: null,
     }),
 }));

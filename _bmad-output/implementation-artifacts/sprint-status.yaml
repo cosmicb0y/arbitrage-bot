@@ -130,7 +130,7 @@ development_status:
   # WTS Epic 5: 출금 기능
   wts-epic-5: in-progress
   wts-5-1-withdraw-api-rust-backend: done
-  wts-5-2-withdraw-tab-ui-form: backlog
+  wts-5-2-withdraw-tab-ui-form: done
   wts-5-3-withdraw-confirm-dialog: backlog
   wts-5-4-withdraw-execute-result: backlog
   wts-5-5-2fa-withdraw-limit-guide: backlog

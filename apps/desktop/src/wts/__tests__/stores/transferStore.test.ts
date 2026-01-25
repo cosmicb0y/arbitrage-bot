@@ -4,7 +4,12 @@ import {
   MAX_GENERATE_RETRIES,
   GENERATE_RETRY_INTERVAL,
 } from '../../stores/transferStore';
-import type { DepositChanceResponse, DepositAddressResponse } from '../../types';
+import type {
+  DepositChanceResponse,
+  DepositAddressResponse,
+  WithdrawChanceResponse,
+  WithdrawAddressResponse,
+} from '../../types';
 
 describe('useTransferStore', () => {
   beforeEach(() => {
@@ -381,6 +386,261 @@ describe('useTransferStore', () => {
         const state = useTransferStore.getState();
         expect(state.isGenerating).toBe(false);
         expect(state.generateRetryCount).toBe(0);
+      });
+    });
+  });
+
+  // ============================================================================
+  // 출금 상태 관리 (WTS-5.2)
+  // ============================================================================
+
+  describe('출금 상태 관리 (WTS-5.2)', () => {
+    beforeEach(() => {
+      useTransferStore.getState().reset();
+    });
+
+    const mockWithdrawChanceInfo: WithdrawChanceResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      member_level: {
+        security_level: 3,
+        fee_level: 0,
+        email_verified: true,
+        identity_auth_verified: true,
+        bank_account_verified: true,
+        two_factor_auth_verified: true,
+        locked: false,
+      },
+      currency_info: {
+        code: 'BTC',
+        withdraw_fee: '0.0005',
+        is_coin: true,
+        wallet_state: 'working',
+        wallet_support: ['default'],
+      },
+      account_info: {
+        balance: '1.5',
+        locked: '0.1',
+        avg_buy_price: '50000000',
+        avg_buy_price_modified: false,
+        unit_currency: 'KRW',
+      },
+      withdraw_limit: {
+        currency: 'BTC',
+        minimum: '0.001',
+        onetime: '10',
+        daily: '100',
+        remaining_daily: '99.5',
+        remaining_daily_krw: '4975000000',
+        fixed: 8,
+        can_withdraw: true,
+      },
+    };
+
+    const mockWithdrawAddress: WithdrawAddressResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      network_name: 'Bitcoin',
+      withdraw_address: '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa',
+      secondary_address: null,
+    };
+
+    describe('초기 상태', () => {
+      it('기본 withdrawChanceInfo는 null이다', () => {
+        expect(useTransferStore.getState().withdrawChanceInfo).toBeNull();
+      });
+
+      it('기본 withdrawAddresses는 빈 배열이다', () => {
+        expect(useTransferStore.getState().withdrawAddresses).toEqual([]);
+      });
+
+      it('기본 selectedWithdrawAddress는 null이다', () => {
+        expect(useTransferStore.getState().selectedWithdrawAddress).toBeNull();
+      });
+
+      it('기본 withdrawAmount는 빈 문자열이다', () => {
+        expect(useTransferStore.getState().withdrawAmount).toBe('');
+      });
+
+      it('기본 isWithdrawLoading은 false이다', () => {
+        expect(useTransferStore.getState().isWithdrawLoading).toBe(false);
+      });
+
+      it('기본 withdrawError는 null이다', () => {
+        expect(useTransferStore.getState().withdrawError).toBeNull();
+      });
+    });
+
+    describe('setWithdrawChanceInfo', () => {
+      it('출금 가능 정보를 설정한다', () => {
+        useTransferStore.getState().setWithdrawChanceInfo(mockWithdrawChanceInfo);
+        expect(useTransferStore.getState().withdrawChanceInfo).toEqual(mockWithdrawChanceInfo);
+      });
+
+      it('출금 가능 정보를 null로 설정할 수 있다', () => {
+        useTransferStore.getState().setWithdrawChanceInfo(mockWithdrawChanceInfo);
+        useTransferStore.getState().setWithdrawChanceInfo(null);
+        expect(useTransferStore.getState().withdrawChanceInfo).toBeNull();
+      });
+    });
+
+    describe('setWithdrawAddresses', () => {
+      it('출금 주소 목록을 설정한다', () => {
+        const addresses = [mockWithdrawAddress];
+        useTransferStore.getState().setWithdrawAddresses(addresses);
+        expect(useTransferStore.getState().withdrawAddresses).toEqual(addresses);
+      });
+
+      it('빈 배열로 설정할 수 있다', () => {
+        useTransferStore.getState().setWithdrawAddresses([mockWithdrawAddress]);
+        useTransferStore.getState().setWithdrawAddresses([]);
+        expect(useTransferStore.getState().withdrawAddresses).toEqual([]);
+      });
+    });
+
+    describe('setSelectedWithdrawAddress', () => {
+      it('선택된 출금 주소를 설정한다', () => {
+        useTransferStore.getState().setSelectedWithdrawAddress(mockWithdrawAddress);
+        expect(useTransferStore.getState().selectedWithdrawAddress).toEqual(mockWithdrawAddress);
+      });
+
+      it('선택된 출금 주소를 null로 설정할 수 있다', () => {
+        useTransferStore.getState().setSelectedWithdrawAddress(mockWithdrawAddress);
+        useTransferStore.getState().setSelectedWithdrawAddress(null);
+        expect(useTransferStore.getState().selectedWithdrawAddress).toBeNull();
+      });
+    });
+
+    describe('setWithdrawAmount', () => {
+      it('출금 수량을 설정한다', () => {
+        useTransferStore.getState().setWithdrawAmount('0.5');
+        expect(useTransferStore.getState().withdrawAmount).toBe('0.5');
+      });
+
+      it('빈 문자열로 설정할 수 있다', () => {
+        useTransferStore.getState().setWithdrawAmount('0.5');
+        useTransferStore.getState().setWithdrawAmount('');
+        expect(useTransferStore.getState().withdrawAmount).toBe('');
+      });
+    });
+
+    describe('setWithdrawLoading', () => {
+      it('출금 로딩 상태를 true로 설정한다', () => {
+        useTransferStore.getState().setWithdrawLoading(true);
+        expect(useTransferStore.getState().isWithdrawLoading).toBe(true);
+      });
+
+      it('출금 로딩 상태를 false로 설정한다', () => {
+        useTransferStore.getState().setWithdrawLoading(true);
+        useTransferStore.getState().setWithdrawLoading(false);
+        expect(useTransferStore.getState().isWithdrawLoading).toBe(false);
+      });
+    });
+
+    describe('setWithdrawError', () => {
+      it('출금 에러 메시지를 설정한다', () => {
+        useTransferStore.getState().setWithdrawError('출금 실패');
+        expect(useTransferStore.getState().withdrawError).toBe('출금 실패');
+      });
+
+      it('출금 에러를 null로 설정할 수 있다', () => {
+        useTransferStore.getState().setWithdrawError('출금 실패');
+        useTransferStore.getState().setWithdrawError(null);
+        expect(useTransferStore.getState().withdrawError).toBeNull();
+      });
+    });
+
+    describe('resetWithdrawState', () => {
+      it('모든 출금 상태를 초기화한다', () => {
+        // 출금 상태 설정
+        useTransferStore.getState().setWithdrawChanceInfo(mockWithdrawChanceInfo);
+        useTransferStore.getState().setWithdrawAddresses([mockWithdrawAddress]);
+        useTransferStore.getState().setSelectedWithdrawAddress(mockWithdrawAddress);
+        useTransferStore.getState().setWithdrawAmount('0.5');
+        useTransferStore.getState().setWithdrawLoading(true);
+        useTransferStore.getState().setWithdrawError('에러');
+
+        // 출금 상태 초기화
+        useTransferStore.getState().resetWithdrawState();
+
+        const state = useTransferStore.getState();
+        expect(state.withdrawChanceInfo).toBeNull();
+        expect(state.withdrawAddresses).toEqual([]);
+        expect(state.selectedWithdrawAddress).toBeNull();
+        expect(state.withdrawAmount).toBe('');
+        expect(state.isWithdrawLoading).toBe(false);
+        expect(state.withdrawError).toBeNull();
+      });
+
+      it('입금 상태에는 영향을 주지 않는다', () => {
+        // 입금 상태 설정
+        useTransferStore.getState().setSelectedCurrency('BTC');
+        useTransferStore.getState().setSelectedNetwork('BTC');
+
+        // 출금 상태 초기화
+        useTransferStore.getState().resetWithdrawState();
+
+        // 입금 상태는 유지
+        expect(useTransferStore.getState().selectedCurrency).toBe('BTC');
+        expect(useTransferStore.getState().selectedNetwork).toBe('BTC');
+      });
+    });
+
+    describe('자산/네트워크 변경 시 출금 상태 초기화', () => {
+      it('자산 변경 시 출금 상태가 초기화된다', () => {
+        // 출금 상태 설정
+        useTransferStore.getState().setWithdrawChanceInfo(mockWithdrawChanceInfo);
+        useTransferStore.getState().setWithdrawAddresses([mockWithdrawAddress]);
+        useTransferStore.getState().setSelectedWithdrawAddress(mockWithdrawAddress);
+        useTransferStore.getState().setWithdrawAmount('0.5');
+
+        // 자산 변경
+        useTransferStore.getState().setSelectedCurrency('ETH');
+
+        const state = useTransferStore.getState();
+        expect(state.withdrawChanceInfo).toBeNull();
+        expect(state.withdrawAddresses).toEqual([]);
+        expect(state.selectedWithdrawAddress).toBeNull();
+        expect(state.withdrawAmount).toBe('');
+      });
+
+      it('네트워크 변경 시 출금 상태가 초기화된다', () => {
+        // 출금 상태 설정
+        useTransferStore.getState().setWithdrawChanceInfo(mockWithdrawChanceInfo);
+        useTransferStore.getState().setWithdrawAddresses([mockWithdrawAddress]);
+        useTransferStore.getState().setSelectedWithdrawAddress(mockWithdrawAddress);
+        useTransferStore.getState().setWithdrawAmount('0.5');
+
+        // 네트워크 변경
+        useTransferStore.getState().setSelectedNetwork('TRX');
+
+        const state = useTransferStore.getState();
+        expect(state.withdrawChanceInfo).toBeNull();
+        expect(state.withdrawAddresses).toEqual([]);
+        expect(state.selectedWithdrawAddress).toBeNull();
+        expect(state.withdrawAmount).toBe('');
+      });
+    });
+
+    describe('reset에 출금 상태 포함', () => {
+      it('reset 호출 시 출금 상태도 초기화된다', () => {
+        // 출금 상태 설정
+        useTransferStore.getState().setWithdrawChanceInfo(mockWithdrawChanceInfo);
+        useTransferStore.getState().setWithdrawAddresses([mockWithdrawAddress]);
+        useTransferStore.getState().setSelectedWithdrawAddress(mockWithdrawAddress);
+        useTransferStore.getState().setWithdrawAmount('0.5');
+        useTransferStore.getState().setWithdrawLoading(true);
+        useTransferStore.getState().setWithdrawError('에러');
+
+        useTransferStore.getState().reset();
+
+        const state = useTransferStore.getState();
+        expect(state.withdrawChanceInfo).toBeNull();
+        expect(state.withdrawAddresses).toEqual([]);
+        expect(state.selectedWithdrawAddress).toBeNull();
+        expect(state.withdrawAmount).toBe('');
+        expect(state.isWithdrawLoading).toBe(false);
+        expect(state.withdrawError).toBeNull();
       });
     });
   });
