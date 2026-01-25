@@ -122,14 +122,14 @@ development_status:
   # WTS Epic 4: 입금 기능
   wts-epic-4: in-progress
   wts-4-1-deposit-api-rust-backend: done
-  wts-4-2-deposit-tab-ui-asset-network: review
-  wts-4-3-deposit-address-display-copy: backlog
-  wts-4-4-deposit-address-async-generation: backlog
+  wts-4-2-deposit-tab-ui-asset-network: done
+  wts-4-3-deposit-address-display-copy: done
+  wts-4-4-deposit-address-async-generation: done
   wts-epic-4-retrospective: optional
 
   # WTS Epic 5: 출금 기능
-  wts-epic-5: backlog
-  wts-5-1-withdraw-api-rust-backend: backlog
+  wts-epic-5: in-progress
+  wts-5-1-withdraw-api-rust-backend: done
   wts-5-2-withdraw-tab-ui-form: backlog
   wts-5-3-withdraw-confirm-dialog: backlog
   wts-5-4-withdraw-execute-result: backlog
