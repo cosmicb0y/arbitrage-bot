@@ -1213,10 +1213,6 @@ async fn spawn_live_feeds(
                 CoinbaseAdapter::connections_needed(symbols_to_subscribe.len())
             );
 
-            // Track initial subscriptions to prevent duplicate subscription on market discovery
-            subscription_manager
-                .track_initial_subscriptions(Exchange::Coinbase, symbols_to_subscribe.clone());
-
             // Create connection pool and connect all symbols
             let mut coinbase_pool = CoinbaseConnectionPool::new(credentials);
             let mut pool_senders = Vec::new();
@@ -1224,8 +1220,12 @@ async fn spawn_live_feeds(
                 .connect_all(&symbols_to_subscribe, feed_tx.clone(), &mut pool_senders)
                 .await;
 
+            // Track initial subscriptions to prevent duplicate subscription on market discovery
+            // NOTE: Must be AFTER connect_all() to match Binance pattern and avoid race condition
+            subscription_manager
+                .track_initial_subscriptions(Exchange::Coinbase, symbols_to_subscribe.clone());
+
             // Register pool with subscription manager for dynamic subscriptions
-            // NOTE: Symbols already tracked via track_initial_subscriptions will be skipped (diff only)
             subscription_manager.register_exchange_pool(Exchange::Coinbase, pool_senders);
 
             // Add connection handles and start feed runners

@@ -282,6 +282,16 @@ impl SubscriptionManager {
         // Calculate diff: new_markets - current = to_subscribe
         let to_subscribe: Vec<String> = new_set.difference(&current).cloned().collect();
 
+        // Defensive check: Pool registered but no tracked subscriptions indicates race condition
+        if self.pool_senders.contains_key(&exchange) && current.is_empty() && !new_set.is_empty() {
+            warn!(
+                "{:?}: Pool registered but no tracked subscriptions (current=0, new={}). \
+                 Possible race condition - check initialization order.",
+                exchange,
+                new_set.len()
+            );
+        }
+
         // Debug logging to trace subscription diff issues
         if !to_subscribe.is_empty() {
             info!(
