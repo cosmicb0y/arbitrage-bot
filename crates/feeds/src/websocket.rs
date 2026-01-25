@@ -619,11 +619,12 @@ impl WsClient {
                         )));
                     }
                     if msgs.len() > 1 && i < msgs.len() - 1 {
-                        // Binance has stricter rate limits, use longer delay
-                        let delay = if self.config.exchange == Exchange::Binance {
-                            250
-                        } else {
-                            50
+                        // Exchange-specific rate limits for subscriptions
+                        let delay = match self.config.exchange {
+                            Exchange::Binance => 250,
+                            // Coinbase L2 limit: 30 streams/sec → 330ms between batched messages
+                            Exchange::Coinbase => 330,
+                            _ => 50,
                         };
                         tokio::time::sleep(Duration::from_millis(delay)).await;
                     }
@@ -631,6 +632,10 @@ impl WsClient {
                 debug!("{:?}: Subscription complete", self.config.exchange);
             }
         }
+
+        // Track time since subscription to detect slow/missing responses
+        let subscription_time = std::time::Instant::now();
+        let mut first_message_received = false;
 
         // Set up ping interval
         let ping_interval = Duration::from_millis(self.config.ping_interval_ms);
@@ -647,9 +652,10 @@ impl WsClient {
         let mut awaiting_pong = false;
         let mut ping_sent_time = std::time::Instant::now();
 
-        // For Gate.io debugging
+        // For debugging message frequency
         let mut last_ping_time = std::time::Instant::now();
         let mut message_count = 0u64;
+        let mut last_message_log_time = std::time::Instant::now();
 
         if self.config.exchange == Exchange::GateIO {
             debug!(
@@ -733,9 +739,40 @@ impl WsClient {
 
             match result {
                 SelectResult::WsMessage => {
-                    // Already handled above
+                    // Log time to first message after subscription
+                    if !first_message_received {
+                        first_message_received = true;
+                        info!(
+                            "{:?}: First message received {:?} after subscription",
+                            self.config.exchange,
+                            subscription_time.elapsed()
+                        );
+                    }
                 }
                 SelectResult::PingTick => {
+                    // Warn if no messages received after subscription
+                    if !first_message_received && subscription_time.elapsed().as_secs() >= 10 {
+                        warn!(
+                            "{:?}: No messages received {:?} after subscription! Check if symbols are valid.",
+                            self.config.exchange,
+                            subscription_time.elapsed()
+                        );
+                    }
+
+                    // Log message frequency for debugging connection issues
+                    let elapsed = last_message_log_time.elapsed();
+                    if elapsed.as_secs() >= 30 {
+                        info!(
+                            "{:?}: Stats - {} messages in {:?}, last_msg: {:?} ago, awaiting_pong: {}",
+                            self.config.exchange,
+                            message_count,
+                            elapsed,
+                            last_message_time.elapsed(),
+                            awaiting_pong
+                        );
+                        last_message_log_time = std::time::Instant::now();
+                    }
+
                     Self::handle_ping(
                         &self.config.exchange,
                         &mut write,
@@ -811,6 +848,38 @@ impl WsClient {
             Some(Ok(Message::Text(text))) => {
                 *message_count += 1;
 
+                // Log first few messages and subscription responses for debugging
+                if *message_count <= 5 {
+                    debug!(
+                        "{:?}: Message #{}: {}",
+                        exchange,
+                        message_count,
+                        &text[..text.len().min(200)]
+                    );
+                }
+
+                // Log subscription responses and errors
+                // Exclude GateIO update messages which contain "result" but are not subscription responses
+                if (text.contains("\"result\"") || text.contains("\"error\""))
+                    && !text.contains("\"event\":\"update\"")
+                {
+                    info!(
+                        "{:?}: Subscription response: {}",
+                        exchange,
+                        &text[..text.len().min(500)]
+                    );
+                }
+
+                // DEBUG: Specifically detect Coinbase L2 stream limit error
+                if *exchange == Exchange::Coinbase
+                    && text.contains("too many L2 streams")
+                {
+                    error!(
+                        "Coinbase L2 LIMIT ERROR DETECTED: {}",
+                        &text[..text.len().min(1000)]
+                    );
+                }
+
                 // Gate.io debugging
                 if *exchange == Exchange::GateIO {
                     // Log errors only
@@ -823,8 +892,20 @@ impl WsClient {
                     }
                 }
 
-                // Handle Gate.io application-level pong response (ignore it)
+                // Bybit debugging: log op messages
+                if *exchange == Exchange::Bybit
+                    && text.contains("\"op\"")
+                    && !text.contains("orderbook")
+                {
+                    debug!(
+                        "Bybit op message: {}",
+                        &text[..text.len().min(300)]
+                    );
+                }
+
+                // Handle Gate.io application-level pong response
                 if *exchange == Exchange::GateIO && text.contains("\"channel\":\"spot.pong\"") {
+                    *awaiting_pong = false;
                     debug!(
                         "Gate.io: Received pong response (latency: {:?})",
                         last_ping_time.elapsed()
@@ -833,14 +914,19 @@ impl WsClient {
                 }
 
                 // Handle Bybit application-level pong response
-                // Bybit responds with {"success":true,"ret_msg":"pong","conn_id":"...","op":"pong"}
-                if *exchange == Exchange::Bybit && text.contains("\"op\":\"pong\"") {
-                    *awaiting_pong = false;
-                    debug!(
-                        "Bybit: Received pong response (latency: {:?})",
-                        ping_sent_time.elapsed()
-                    );
-                    return Ok(());
+                // Bybit responds with {"success":true,"ret_msg":"pong","conn_id":"...","op":"ping"}
+                // Note: "op" echoes the request ("ping"), actual pong indicator is in "ret_msg"
+                if *exchange == Exchange::Bybit {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if json.get("ret_msg").and_then(|v| v.as_str()) == Some("pong") {
+                            *awaiting_pong = false;
+                            debug!(
+                                "Bybit: Received pong response (latency: {:?})",
+                                ping_sent_time.elapsed()
+                            );
+                            return Ok(());
+                        }
+                    }
                 }
 
                 // Handle Coinbase heartbeats channel messages (connection keep-alive)
@@ -905,7 +991,15 @@ impl WsClient {
                 );
             }
             Some(Ok(Message::Close(frame))) => {
-                debug!("{:?}: Received close frame: {:?}", exchange, frame);
+                // Log close frame details at WARN level for debugging connection drops
+                if let Some(ref cf) = frame {
+                    warn!(
+                        "{:?}: Received close frame - code: {}, reason: '{}'",
+                        exchange, cf.code, cf.reason
+                    );
+                } else {
+                    warn!("{:?}: Received close frame with no details", exchange);
+                }
                 // Return a special marker - we use Ok but caller should handle graceful close
                 return Err(FeedError::Disconnected(
                     "Server closed connection".to_string(),
@@ -979,6 +1073,7 @@ impl WsClient {
             *ping_sent_time = std::time::Instant::now();
         } else {
             // Other exchanges use WebSocket protocol-level ping
+            debug!("{:?}: Sending WebSocket PING", exchange);
             if let Err(e) = write.send(Message::Ping(vec![])).await {
                 error!("{:?}: Failed to send PING: {}", exchange, e);
                 return Err(FeedError::ConnectionFailed(format!("PING failed: {}", e)));
