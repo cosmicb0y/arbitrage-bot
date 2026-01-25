@@ -701,3 +701,61 @@ export function isWithdrawPending(state: WithdrawState): boolean {
 export function isWithdrawFailed(state: WithdrawState): boolean {
   return ['rejected', 'canceled'].includes(state);
 }
+
+/** 출금 상태 한국어 메시지 매핑 */
+export const WITHDRAW_STATE_MESSAGES: Record<WithdrawState, string> = {
+  submitting: '출금 요청 제출 중...',
+  submitted: '출금 요청이 제출되었습니다',
+  almost_accepted: '출금 요청이 곧 승인됩니다',
+  accepted: '출금 요청이 승인되었습니다',
+  processing: '블록체인 전송 처리 중...',
+  done: '출금이 완료되었습니다',
+  rejected: '출금 요청이 거부되었습니다',
+  canceled: '출금이 취소되었습니다',
+};
+
+// ============================================================================
+// Withdraw Confirm Dialog Types (WTS-5.3)
+// ============================================================================
+
+/** 출금 확인 다이얼로그에 표시할 정보 */
+export interface WithdrawConfirmInfo {
+  /** 자산 코드 (예: "BTC") */
+  currency: string;
+  /** 네트워크 타입 (예: "BTC") */
+  net_type: string;
+  /** 출금 주소 */
+  address: string;
+  /** 보조 주소 (XRP tag, EOS memo 등) */
+  secondary_address: string | null;
+  /** 출금 수량 */
+  amount: string;
+  /** 출금 수수료 */
+  fee: string;
+  /** 실수령액 (amount - fee) */
+  receivable: string;
+}
+
+// ============================================================================
+// Withdraw Result Dialog Types (WTS-5.4)
+// ============================================================================
+
+/** 출금 결과 다이얼로그에 표시할 정보 */
+export interface WithdrawResultInfo {
+  /** 출금 고유 식별자 */
+  uuid: string;
+  /** 자산 코드 */
+  currency: string;
+  /** 네트워크 타입 */
+  net_type: string;
+  /** 출금 상태 */
+  state: WithdrawState;
+  /** 출금 수량 */
+  amount: string;
+  /** 출금 수수료 */
+  fee: string;
+  /** 트랜잭션 ID (블록체인 TXID, 처리 전에는 null) */
+  txid: string | null;
+  /** 출금 생성 시각 */
+  created_at: string;
+}

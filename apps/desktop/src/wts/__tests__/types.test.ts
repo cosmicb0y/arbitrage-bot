@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   UPBIT_DEFAULT_MARKETS,
   UPBIT_ORDER_ERROR_MESSAGES,
+  WITHDRAW_STATE_MESSAGES,
   getOrderErrorMessage,
   isRateLimitError,
   isNetworkError,
   isDepositAvailable,
   isAddressGenerating,
+  isWithdrawComplete,
+  isWithdrawPending,
+  isWithdrawFailed,
   type Market,
   type MarketCode,
   type OrderbookEntry,
@@ -20,6 +24,9 @@ import {
   type DepositNetwork,
   type GenerateAddressResponse,
   type GenerateAddressCreating,
+  type WithdrawConfirmInfo,
+  type WithdrawResultInfo,
+  type WithdrawState,
 } from '../types';
 
 describe('Market Types', () => {
@@ -312,6 +319,23 @@ describe('Error Message Types', () => {
       expect(UPBIT_ORDER_ERROR_MESSAGES['address_generation_failed']).toContain('생성');
     });
   });
+
+  describe('Withdraw Error Messages (WTS-5.1)', () => {
+    it('unregistered_withdraw_address 에러 코드에 대한 메시지가 정의되어 있다', () => {
+      expect(UPBIT_ORDER_ERROR_MESSAGES['unregistered_withdraw_address']).toBeDefined();
+      expect(UPBIT_ORDER_ERROR_MESSAGES['unregistered_withdraw_address']).toContain('출금 주소');
+    });
+
+    it('insufficient_funds_withdraw 에러 코드에 대한 메시지가 정의되어 있다', () => {
+      expect(UPBIT_ORDER_ERROR_MESSAGES['insufficient_funds_withdraw']).toBeDefined();
+      expect(UPBIT_ORDER_ERROR_MESSAGES['insufficient_funds_withdraw']).toContain('출금');
+    });
+
+    it('two_factor_auth_required 에러 코드에 대한 메시지가 정의되어 있다', () => {
+      expect(UPBIT_ORDER_ERROR_MESSAGES['two_factor_auth_required']).toBeDefined();
+      expect(UPBIT_ORDER_ERROR_MESSAGES['two_factor_auth_required']).toContain('2FA');
+    });
+  });
 });
 
 describe('Deposit API Types (WTS-4.1)', () => {
@@ -491,6 +515,215 @@ describe('Deposit API Types (WTS-4.1)', () => {
       };
 
       expect(isAddressGenerating(response)).toBe(false);
+    });
+  });
+});
+
+describe('WithdrawConfirmInfo Types (WTS-5.3)', () => {
+  describe('WithdrawConfirmInfo', () => {
+    it('WithdrawConfirmInfo 타입은 currency, net_type, address, secondary_address, amount, fee, receivable 속성을 가진다', () => {
+      const info: WithdrawConfirmInfo = {
+        currency: 'BTC',
+        net_type: 'BTC',
+        address: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
+        secondary_address: null,
+        amount: '0.1',
+        fee: '0.0005',
+        receivable: '0.0995',
+      };
+
+      expect(info.currency).toBe('BTC');
+      expect(info.net_type).toBe('BTC');
+      expect(info.address).toBe('bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh');
+      expect(info.secondary_address).toBeNull();
+      expect(info.amount).toBe('0.1');
+      expect(info.fee).toBe('0.0005');
+      expect(info.receivable).toBe('0.0995');
+    });
+
+    it('secondary_address는 XRP 태그 등에 사용된다', () => {
+      const info: WithdrawConfirmInfo = {
+        currency: 'XRP',
+        net_type: 'XRP',
+        address: 'rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh',
+        secondary_address: '123456789',
+        amount: '100',
+        fee: '0.25',
+        receivable: '99.75',
+      };
+
+      expect(info.secondary_address).toBe('123456789');
+    });
+
+    it('모든 금액 필드는 문자열 타입이다', () => {
+      const info: WithdrawConfirmInfo = {
+        currency: 'ETH',
+        net_type: 'ETH',
+        address: '0x1234567890abcdef1234567890abcdef12345678',
+        secondary_address: null,
+        amount: '1.5',
+        fee: '0.01',
+        receivable: '1.49',
+      };
+
+      expect(typeof info.amount).toBe('string');
+      expect(typeof info.fee).toBe('string');
+      expect(typeof info.receivable).toBe('string');
+    });
+  });
+});
+
+describe('WithdrawResultInfo Types (WTS-5.4)', () => {
+  describe('WithdrawResultInfo', () => {
+    it('WithdrawResultInfo 타입은 uuid, currency, net_type, state, amount, fee, txid, created_at 속성을 가진다', () => {
+      const info: WithdrawResultInfo = {
+        uuid: 'withdraw-uuid-12345',
+        currency: 'BTC',
+        net_type: 'BTC',
+        state: 'processing',
+        amount: '0.1',
+        fee: '0.0005',
+        txid: null,
+        created_at: '2026-01-25T10:00:00Z',
+      };
+
+      expect(info.uuid).toBe('withdraw-uuid-12345');
+      expect(info.currency).toBe('BTC');
+      expect(info.net_type).toBe('BTC');
+      expect(info.state).toBe('processing');
+      expect(info.amount).toBe('0.1');
+      expect(info.fee).toBe('0.0005');
+      expect(info.txid).toBeNull();
+      expect(info.created_at).toBe('2026-01-25T10:00:00Z');
+    });
+
+    it('txid는 블록체인 전송 후 생성된다', () => {
+      const info: WithdrawResultInfo = {
+        uuid: 'withdraw-uuid-12345',
+        currency: 'BTC',
+        net_type: 'BTC',
+        state: 'done',
+        amount: '0.1',
+        fee: '0.0005',
+        txid: 'abc123def456ghi789jkl012mno345pqr678stu901vwx234',
+        created_at: '2026-01-25T10:00:00Z',
+      };
+
+      expect(info.txid).toBe('abc123def456ghi789jkl012mno345pqr678stu901vwx234');
+    });
+
+    it('모든 출금 상태를 지원한다', () => {
+      const states: WithdrawState[] = [
+        'submitting',
+        'submitted',
+        'almost_accepted',
+        'rejected',
+        'accepted',
+        'processing',
+        'done',
+        'canceled',
+      ];
+
+      states.forEach((state) => {
+        const info: WithdrawResultInfo = {
+          uuid: 'test-uuid',
+          currency: 'BTC',
+          net_type: 'BTC',
+          state,
+          amount: '0.1',
+          fee: '0.0005',
+          txid: null,
+          created_at: '2026-01-25T10:00:00Z',
+        };
+
+        expect(info.state).toBe(state);
+      });
+    });
+  });
+
+  describe('WITHDRAW_STATE_MESSAGES', () => {
+    it('모든 출금 상태에 대한 한국어 메시지가 정의되어 있다', () => {
+      const states: WithdrawState[] = [
+        'submitting',
+        'submitted',
+        'almost_accepted',
+        'rejected',
+        'accepted',
+        'processing',
+        'done',
+        'canceled',
+      ];
+
+      states.forEach((state) => {
+        expect(WITHDRAW_STATE_MESSAGES[state]).toBeDefined();
+        expect(typeof WITHDRAW_STATE_MESSAGES[state]).toBe('string');
+        expect(WITHDRAW_STATE_MESSAGES[state].length).toBeGreaterThan(0);
+      });
+    });
+
+    it('submitting 상태 메시지', () => {
+      expect(WITHDRAW_STATE_MESSAGES['submitting']).toContain('제출');
+    });
+
+    it('submitted 상태 메시지', () => {
+      expect(WITHDRAW_STATE_MESSAGES['submitted']).toContain('제출');
+    });
+
+    it('processing 상태 메시지', () => {
+      expect(WITHDRAW_STATE_MESSAGES['processing']).toContain('처리');
+    });
+
+    it('done 상태 메시지', () => {
+      expect(WITHDRAW_STATE_MESSAGES['done']).toContain('완료');
+    });
+
+    it('rejected 상태 메시지', () => {
+      expect(WITHDRAW_STATE_MESSAGES['rejected']).toContain('거부');
+    });
+
+    it('canceled 상태 메시지', () => {
+      expect(WITHDRAW_STATE_MESSAGES['canceled']).toContain('취소');
+    });
+  });
+
+  describe('isWithdrawComplete', () => {
+    it('done 상태는 완료이다', () => {
+      expect(isWithdrawComplete('done')).toBe(true);
+    });
+
+    it('다른 상태는 완료가 아니다', () => {
+      expect(isWithdrawComplete('submitting')).toBe(false);
+      expect(isWithdrawComplete('processing')).toBe(false);
+      expect(isWithdrawComplete('rejected')).toBe(false);
+    });
+  });
+
+  describe('isWithdrawPending', () => {
+    it('진행 중 상태를 인식한다', () => {
+      expect(isWithdrawPending('submitting')).toBe(true);
+      expect(isWithdrawPending('submitted')).toBe(true);
+      expect(isWithdrawPending('almost_accepted')).toBe(true);
+      expect(isWithdrawPending('accepted')).toBe(true);
+      expect(isWithdrawPending('processing')).toBe(true);
+    });
+
+    it('완료/실패 상태는 진행 중이 아니다', () => {
+      expect(isWithdrawPending('done')).toBe(false);
+      expect(isWithdrawPending('rejected')).toBe(false);
+      expect(isWithdrawPending('canceled')).toBe(false);
+    });
+  });
+
+  describe('isWithdrawFailed', () => {
+    it('실패 상태를 인식한다', () => {
+      expect(isWithdrawFailed('rejected')).toBe(true);
+      expect(isWithdrawFailed('canceled')).toBe(true);
+    });
+
+    it('다른 상태는 실패가 아니다', () => {
+      expect(isWithdrawFailed('submitting')).toBe(false);
+      expect(isWithdrawFailed('processing')).toBe(false);
+      expect(isWithdrawFailed('done')).toBe(false);
     });
   });
 });
