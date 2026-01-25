@@ -396,26 +396,39 @@ describe('Deposit API Types (WTS-4.1)', () => {
   });
 
   describe('DepositChanceResponse', () => {
-    it('DepositChanceResponse 타입은 currency, net_type, network, deposit_state, minimum 속성을 가진다', () => {
+    it('DepositChanceResponse 타입은 실제 Upbit API 응답 형식을 따른다', () => {
       const response: DepositChanceResponse = {
         currency: 'BTC',
         net_type: 'BTC',
-        network: {
-          name: 'Bitcoin',
-          net_type: 'BTC',
-          priority: 1,
-          deposit_state: 'normal',
-          confirm_count: 3,
-        },
-        deposit_state: 'normal',
-        minimum: '0.001',
+        is_deposit_possible: true,
+        deposit_impossible_reason: null,
+        minimum_deposit_amount: 0.001,
+        minimum_deposit_confirmations: 3,
+        decimal_precision: 8,
       };
 
       expect(response.currency).toBe('BTC');
       expect(response.net_type).toBe('BTC');
-      expect(response.network.name).toBe('Bitcoin');
-      expect(response.deposit_state).toBe('normal');
-      expect(response.minimum).toBe('0.001');
+      expect(response.is_deposit_possible).toBe(true);
+      expect(response.deposit_impossible_reason).toBeNull();
+      expect(response.minimum_deposit_amount).toBe(0.001);
+      expect(response.minimum_deposit_confirmations).toBe(3);
+      expect(response.decimal_precision).toBe(8);
+    });
+
+    it('입금 불가능한 경우 사유가 포함된다', () => {
+      const response: DepositChanceResponse = {
+        currency: 'ETH',
+        net_type: 'ETH',
+        is_deposit_possible: false,
+        deposit_impossible_reason: '네트워크 점검 중',
+        minimum_deposit_amount: 0.01,
+        minimum_deposit_confirmations: 12,
+        decimal_precision: 18,
+      };
+
+      expect(response.is_deposit_possible).toBe(false);
+      expect(response.deposit_impossible_reason).toBe('네트워크 점검 중');
     });
   });
 

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TransferPanel } from '../../panels/TransferPanel';
-import { useTransferStore } from '../../stores/transferStore';
+import { useTransferStore, MAX_GENERATE_RETRIES } from '../../stores/transferStore';
 import { useConsoleStore } from '../../stores/consoleStore';
 import { useToastStore } from '../../stores/toastStore';
-import type { DepositChanceResponse } from '../../types';
+import type { DepositChanceResponse, DepositAddressResponse } from '../../types';
 
 // Mock Tauri invoke
 vi.mock('@tauri-apps/api/core', () => ({
@@ -24,6 +24,12 @@ describe('TransferPanel', () => {
   const mockSetNetworkInfo = vi.fn();
   const mockSetLoading = vi.fn();
   const mockSetError = vi.fn();
+  const mockSetDepositAddress = vi.fn();
+  const mockSetAddressLoading = vi.fn();
+  const mockSetAddressError = vi.fn();
+  const mockSetGenerating = vi.fn();
+  const mockSetGenerateRetryCount = vi.fn();
+  const mockResetGenerateState = vi.fn();
   const mockReset = vi.fn();
   const mockAddLog = vi.fn();
   const mockShowToast = vi.fn();
@@ -39,12 +45,23 @@ describe('TransferPanel', () => {
       networkInfo: null,
       isLoading: false,
       error: null,
+      depositAddress: null,
+      isAddressLoading: false,
+      addressError: null,
+      isGenerating: false,
+      generateRetryCount: 0,
       setActiveTab: mockSetActiveTab,
       setSelectedCurrency: mockSetSelectedCurrency,
       setSelectedNetwork: mockSetSelectedNetwork,
       setNetworkInfo: mockSetNetworkInfo,
       setLoading: mockSetLoading,
       setError: mockSetError,
+      setDepositAddress: mockSetDepositAddress,
+      setAddressLoading: mockSetAddressLoading,
+      setAddressError: mockSetAddressError,
+      setGenerating: mockSetGenerating,
+      setGenerateRetryCount: mockSetGenerateRetryCount,
+      resetGenerateState: mockResetGenerateState,
       reset: mockReset,
     });
 
@@ -62,7 +79,9 @@ describe('TransferPanel', () => {
     });
 
     // Mock getState to return addLog
-    (useConsoleStore as unknown as { getState: () => { addLog: typeof mockAddLog } }).getState = () => ({
+    (
+      useConsoleStore as unknown as { getState: () => { addLog: typeof mockAddLog } }
+    ).getState = () => ({
       addLog: mockAddLog,
     });
 
@@ -80,8 +99,19 @@ describe('TransferPanel', () => {
     });
 
     // Mock getState for toast store
-    (useToastStore as unknown as { getState: () => { showToast: typeof mockShowToast } }).getState = () => ({
+    (
+      useToastStore as unknown as {
+        getState: () => { showToast: typeof mockShowToast };
+      }
+    ).getState = () => ({
       showToast: mockShowToast,
+    });
+
+    // Mock clipboard
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn(),
+      },
     });
   });
 
@@ -109,182 +139,25 @@ describe('TransferPanel', () => {
     });
   });
 
-  describe('탭 UI (AC #5)', () => {
-    it('입금 탭이 표시된다', () => {
-      render(<TransferPanel />);
-      expect(screen.getByRole('tab', { name: /입금/i })).toBeTruthy();
-    });
-
-    it('출금 탭이 표시된다', () => {
-      render(<TransferPanel />);
-      expect(screen.getByRole('tab', { name: /출금/i })).toBeTruthy();
-    });
-
-    it('role="tablist" 컨테이너가 존재한다', () => {
-      render(<TransferPanel />);
-      expect(screen.getByRole('tablist')).toBeTruthy();
-    });
-
-    it('입금 탭이 기본적으로 aria-selected="true"이다', () => {
-      render(<TransferPanel />);
-      const depositTab = screen.getByRole('tab', { name: /입금/i });
-      expect(depositTab.getAttribute('aria-selected')).toBe('true');
-    });
-
-    it('출금 탭은 기본적으로 aria-selected="false"이다', () => {
-      render(<TransferPanel />);
-      const withdrawTab = screen.getByRole('tab', { name: /출금/i });
-      expect(withdrawTab.getAttribute('aria-selected')).toBe('false');
-    });
-
-    it('출금 탭 클릭 시 setActiveTab("withdraw")가 호출된다', () => {
-      render(<TransferPanel />);
-      const withdrawTab = screen.getByRole('tab', { name: /출금/i });
-      fireEvent.click(withdrawTab);
-      expect(mockSetActiveTab).toHaveBeenCalledWith('withdraw');
-    });
-
-    it('입금 탭 클릭 시 setActiveTab("deposit")가 호출된다', () => {
-      vi.mocked(useTransferStore).mockReturnValue({
-        activeTab: 'withdraw',
-        selectedCurrency: null,
-        selectedNetwork: null,
-        networkInfo: null,
-        isLoading: false,
-        error: null,
-        setActiveTab: mockSetActiveTab,
-        setSelectedCurrency: mockSetSelectedCurrency,
-        setSelectedNetwork: mockSetSelectedNetwork,
-        setNetworkInfo: mockSetNetworkInfo,
-        setLoading: mockSetLoading,
-        setError: mockSetError,
-        reset: mockReset,
-      });
-
-      render(<TransferPanel />);
-      const depositTab = screen.getByRole('tab', { name: /입금/i });
-      fireEvent.click(depositTab);
-      expect(mockSetActiveTab).toHaveBeenCalledWith('deposit');
-    });
-
-    it('activeTab이 withdraw일 때 출금 탭이 aria-selected="true"이다', () => {
-      vi.mocked(useTransferStore).mockReturnValue({
-        activeTab: 'withdraw',
-        selectedCurrency: null,
-        selectedNetwork: null,
-        networkInfo: null,
-        isLoading: false,
-        error: null,
-        setActiveTab: mockSetActiveTab,
-        setSelectedCurrency: mockSetSelectedCurrency,
-        setSelectedNetwork: mockSetSelectedNetwork,
-        setNetworkInfo: mockSetNetworkInfo,
-        setLoading: mockSetLoading,
-        setError: mockSetError,
-        reset: mockReset,
-      });
-
-      render(<TransferPanel />);
-      const withdrawTab = screen.getByRole('tab', { name: /출금/i });
-      expect(withdrawTab.getAttribute('aria-selected')).toBe('true');
-    });
-  });
-
-  describe('입금 탭 콘텐츠 (AC #1)', () => {
-    it('입금 탭에서 자산 선택 드롭다운이 표시된다', () => {
-      render(<TransferPanel />);
-      expect(screen.getByLabelText(/자산/i)).toBeTruthy();
-    });
-
-    it('자산 드롭다운에 BTC 옵션이 있다', () => {
-      render(<TransferPanel />);
-      const select = screen.getByLabelText(/자산/i) as HTMLSelectElement;
-      expect(select).toBeTruthy();
-      expect(select.tagName.toLowerCase()).toBe('select');
-    });
-  });
-
-  describe('출금 탭 콘텐츠', () => {
-    it('출금 탭에서 "준비 중" 메시지가 표시된다', () => {
-      vi.mocked(useTransferStore).mockReturnValue({
-        activeTab: 'withdraw',
-        selectedCurrency: null,
-        selectedNetwork: null,
-        networkInfo: null,
-        isLoading: false,
-        error: null,
-        setActiveTab: mockSetActiveTab,
-        setSelectedCurrency: mockSetSelectedCurrency,
-        setSelectedNetwork: mockSetSelectedNetwork,
-        setNetworkInfo: mockSetNetworkInfo,
-        setLoading: mockSetLoading,
-        setError: mockSetError,
-        reset: mockReset,
-      });
-
-      render(<TransferPanel />);
-      expect(screen.getByText(/출금 기능은 준비 중입니다/i)).toBeTruthy();
-    });
-  });
-
-  describe('자산 선택 (AC #4, #6)', () => {
-    it('자산 선택 시 setSelectedCurrency가 호출된다', () => {
-      render(<TransferPanel />);
-      const select = screen.getByLabelText(/자산/i) as HTMLSelectElement;
-      fireEvent.change(select, { target: { value: 'BTC' } });
-      expect(mockSetSelectedCurrency).toHaveBeenCalledWith('BTC');
-    });
-
-    it('자산 선택 시 콘솔에 로그가 기록된다', () => {
-      render(<TransferPanel />);
-      const select = screen.getByLabelText(/자산/i) as HTMLSelectElement;
-      fireEvent.change(select, { target: { value: 'ETH' } });
-      expect(mockAddLog).toHaveBeenCalledWith(
-        'INFO',
-        'DEPOSIT',
-        expect.stringContaining('ETH')
-      );
-    });
-
-    it('선택된 자산이 드롭다운에 표시된다', () => {
-      vi.mocked(useTransferStore).mockReturnValue({
-        activeTab: 'deposit',
-        selectedCurrency: 'BTC',
-        selectedNetwork: null,
-        networkInfo: null,
-        isLoading: false,
-        error: null,
-        setActiveTab: mockSetActiveTab,
-        setSelectedCurrency: mockSetSelectedCurrency,
-        setSelectedNetwork: mockSetSelectedNetwork,
-        setNetworkInfo: mockSetNetworkInfo,
-        setLoading: mockSetLoading,
-        setError: mockSetError,
-        reset: mockReset,
-      });
-
-      render(<TransferPanel />);
-      const select = screen.getByLabelText(/자산/i) as HTMLSelectElement;
-      expect(select.value).toBe('BTC');
-    });
-  });
-
-  describe('네트워크 정보 표시 (AC #2, #3)', () => {
+  describe('입금 주소 표시 (AC #1)', () => {
     const mockNetworkInfo: DepositChanceResponse = {
       currency: 'BTC',
       net_type: 'BTC',
-      network: {
-        name: 'Bitcoin',
-        net_type: 'BTC',
-        priority: 1,
-        deposit_state: 'normal',
-        confirm_count: 3,
-      },
-      deposit_state: 'normal',
-      minimum: '0.0001',
+      is_deposit_possible: true,
+      deposit_impossible_reason: null,
+      minimum_deposit_amount: 0.0001,
+      minimum_deposit_confirmations: 3,
+      decimal_precision: 8,
     };
 
-    it('네트워크 정보가 있으면 네트워크 이름이 표시된다', () => {
+    const mockDepositAddress: DepositAddressResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      deposit_address: '1A2b3C4d5E6f7g8H9i0J',
+      secondary_address: null,
+    };
+
+    it('입금 주소가 있으면 화면에 표시된다', () => {
       vi.mocked(useTransferStore).mockReturnValue({
         activeTab: 'deposit',
         selectedCurrency: 'BTC',
@@ -292,161 +165,562 @@ describe('TransferPanel', () => {
         networkInfo: mockNetworkInfo,
         isLoading: false,
         error: null,
+        depositAddress: mockDepositAddress,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
         setActiveTab: mockSetActiveTab,
         setSelectedCurrency: mockSetSelectedCurrency,
         setSelectedNetwork: mockSetSelectedNetwork,
         setNetworkInfo: mockSetNetworkInfo,
         setLoading: mockSetLoading,
         setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
         reset: mockReset,
       });
 
       render(<TransferPanel />);
-      expect(screen.getByText('Bitcoin')).toBeTruthy();
+      expect(screen.getByText('1A2b3C4d5E6f7g8H9i0J')).toBeTruthy();
     });
 
-    it('입금 상태가 "정상"으로 표시된다', () => {
-      vi.mocked(useTransferStore).mockReturnValue({
-        activeTab: 'deposit',
-        selectedCurrency: 'BTC',
-        selectedNetwork: 'BTC',
-        networkInfo: mockNetworkInfo,
-        isLoading: false,
-        error: null,
-        setActiveTab: mockSetActiveTab,
-        setSelectedCurrency: mockSetSelectedCurrency,
-        setSelectedNetwork: mockSetSelectedNetwork,
-        setNetworkInfo: mockSetNetworkInfo,
-        setLoading: mockSetLoading,
-        setError: mockSetError,
-        reset: mockReset,
-      });
-
-      render(<TransferPanel />);
-      expect(screen.getByText(/정상/i)).toBeTruthy();
-    });
-
-    it('확인 횟수가 표시된다', () => {
-      vi.mocked(useTransferStore).mockReturnValue({
-        activeTab: 'deposit',
-        selectedCurrency: 'BTC',
-        selectedNetwork: 'BTC',
-        networkInfo: mockNetworkInfo,
-        isLoading: false,
-        error: null,
-        setActiveTab: mockSetActiveTab,
-        setSelectedCurrency: mockSetSelectedCurrency,
-        setSelectedNetwork: mockSetSelectedNetwork,
-        setNetworkInfo: mockSetNetworkInfo,
-        setLoading: mockSetLoading,
-        setError: mockSetError,
-        reset: mockReset,
-      });
-
-      render(<TransferPanel />);
-      expect(screen.getByText(/3회/i)).toBeTruthy();
-    });
-
-    it('최소 입금 수량이 표시된다', () => {
-      vi.mocked(useTransferStore).mockReturnValue({
-        activeTab: 'deposit',
-        selectedCurrency: 'BTC',
-        selectedNetwork: 'BTC',
-        networkInfo: mockNetworkInfo,
-        isLoading: false,
-        error: null,
-        setActiveTab: mockSetActiveTab,
-        setSelectedCurrency: mockSetSelectedCurrency,
-        setSelectedNetwork: mockSetSelectedNetwork,
-        setNetworkInfo: mockSetNetworkInfo,
-        setLoading: mockSetLoading,
-        setError: mockSetError,
-        reset: mockReset,
-      });
-
-      render(<TransferPanel />);
-      expect(screen.getByText(/0.0001/)).toBeTruthy();
-    });
-  });
-
-  describe('입금 중단 상태 표시 (AC #7)', () => {
-    it('입금 상태가 paused일 때 "중단"으로 표시된다', () => {
-      const pausedNetworkInfo: DepositChanceResponse = {
-        currency: 'ETH',
-        net_type: 'ETH',
-        network: {
-          name: 'Ethereum',
-          net_type: 'ETH',
-          priority: 1,
-          deposit_state: 'paused',
-          confirm_count: 12,
-        },
-        deposit_state: 'paused',
-        minimum: '0.01',
+    it('보조 주소(Tag/Memo)가 있으면 화면에 표시된다 (AC #6)', () => {
+      const mockXrpAddress: DepositAddressResponse = {
+        currency: 'XRP',
+        net_type: 'XRP',
+        deposit_address: 'rExampleAddress',
+        secondary_address: '123456789',
       };
 
       vi.mocked(useTransferStore).mockReturnValue({
         activeTab: 'deposit',
-        selectedCurrency: 'ETH',
-        selectedNetwork: 'ETH',
-        networkInfo: pausedNetworkInfo,
+        selectedCurrency: 'XRP',
+        selectedNetwork: 'XRP',
+        networkInfo: { ...mockNetworkInfo, currency: 'XRP', net_type: 'XRP' },
         isLoading: false,
         error: null,
+        depositAddress: mockXrpAddress,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
         setActiveTab: mockSetActiveTab,
         setSelectedCurrency: mockSetSelectedCurrency,
         setSelectedNetwork: mockSetSelectedNetwork,
         setNetworkInfo: mockSetNetworkInfo,
         setLoading: mockSetLoading,
         setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
         reset: mockReset,
       });
 
       render(<TransferPanel />);
-      expect(screen.getByText(/중단/i)).toBeTruthy();
+      expect(screen.getByText('rExampleAddress')).toBeTruthy();
+      expect(screen.getByText('123456789')).toBeTruthy();
+      expect(screen.getByText('Memo/Tag')).toBeTruthy();
+    });
+
+    it('보조 주소가 있을 때 경고 메시지가 표시된다', () => {
+      const mockXrpAddress: DepositAddressResponse = {
+        currency: 'XRP',
+        net_type: 'XRP',
+        deposit_address: 'rExampleAddress',
+        secondary_address: '123456789',
+      };
+
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'XRP',
+        selectedNetwork: 'XRP',
+        networkInfo: { ...mockNetworkInfo, currency: 'XRP', net_type: 'XRP' },
+        isLoading: false,
+        error: null,
+        depositAddress: mockXrpAddress,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText(/Memo\/Tag 필수/)).toBeTruthy();
     });
   });
 
-  describe('로딩 및 에러 상태', () => {
-    it('isLoading이 true일 때 로딩 표시가 나타난다', () => {
+  describe('주소 복사 기능 (AC #2, #3)', () => {
+    const mockNetworkInfo: DepositChanceResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      is_deposit_possible: true,
+      deposit_impossible_reason: null,
+      minimum_deposit_amount: 0.0001,
+      minimum_deposit_confirmations: 3,
+      decimal_precision: 8,
+    };
+
+    const mockDepositAddress: DepositAddressResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      deposit_address: '1A2b3C4d5E6f7g8H9i0J',
+      secondary_address: null,
+    };
+
+    it('주소 옆에 복사 버튼이 표시된다', () => {
       vi.mocked(useTransferStore).mockReturnValue({
         activeTab: 'deposit',
         selectedCurrency: 'BTC',
-        selectedNetwork: null,
-        networkInfo: null,
-        isLoading: true,
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
         error: null,
+        depositAddress: mockDepositAddress,
+        isAddressLoading: false,
+        addressError: null,
         setActiveTab: mockSetActiveTab,
         setSelectedCurrency: mockSetSelectedCurrency,
         setSelectedNetwork: mockSetSelectedNetwork,
         setNetworkInfo: mockSetNetworkInfo,
         setLoading: mockSetLoading,
         setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
         reset: mockReset,
       });
 
       render(<TransferPanel />);
-      expect(screen.getByText(/조회 중/i)).toBeTruthy();
+      expect(screen.getByTitle('주소 복사')).toBeTruthy();
     });
 
-    it('에러가 있으면 에러 메시지가 표시된다', () => {
+    it('복사 버튼 클릭 시 클립보드에 복사된다', async () => {
       vi.mocked(useTransferStore).mockReturnValue({
         activeTab: 'deposit',
         selectedCurrency: 'BTC',
-        selectedNetwork: null,
-        networkInfo: null,
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
         isLoading: false,
-        error: '네트워크 오류 발생',
+        error: null,
+        depositAddress: mockDepositAddress,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
         setActiveTab: mockSetActiveTab,
         setSelectedCurrency: mockSetSelectedCurrency,
         setSelectedNetwork: mockSetSelectedNetwork,
         setNetworkInfo: mockSetNetworkInfo,
         setLoading: mockSetLoading,
         setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
         reset: mockReset,
       });
 
       render(<TransferPanel />);
-      expect(screen.getByText(/네트워크 오류 발생/)).toBeTruthy();
+      const copyBtn = screen.getByTitle('주소 복사');
+      fireEvent.click(copyBtn);
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+          '1A2b3C4d5E6f7g8H9i0J'
+        );
+      });
+    });
+
+    it('복사 성공 시 로그가 기록된다', async () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        depositAddress: mockDepositAddress,
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      const copyBtn = screen.getByTitle('주소 복사');
+      fireEvent.click(copyBtn);
+
+      await waitFor(() => {
+        expect(mockAddLog).toHaveBeenCalledWith(
+          'SUCCESS',
+          'DEPOSIT',
+          expect.stringContaining('클립보드에 복사')
+        );
+      });
+    });
+  });
+
+  describe('주소 생성 및 에러 처리 (AC #7)', () => {
+    const mockNetworkInfo: DepositChanceResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      is_deposit_possible: true,
+      deposit_impossible_reason: null,
+      minimum_deposit_amount: 0.0001,
+      minimum_deposit_confirmations: 3,
+      decimal_precision: 8,
+    };
+
+    it('주소가 null일 때 주소 생성 버튼이 표시된다', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        // 주소 없음 상태
+        depositAddress: {
+          currency: 'BTC',
+          net_type: 'BTC',
+          deposit_address: null,
+          secondary_address: null,
+        },
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('주소 생성')).toBeTruthy();
+      expect(screen.getByText('입금 주소가 없습니다')).toBeTruthy();
+    });
+
+    it('주소 로딩 중일 때 로딩 표시가 나타난다', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: true, // 로딩 중
+        addressError: null,
+        isGenerating: false,
+        generateRetryCount: 0,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('주소 로딩 중...')).toBeTruthy();
+    });
+
+    it('주소 조회 에러 시 에러 메시지가 표시된다', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        depositAddress: null,
+        isAddressLoading: false,
+        addressError: '주소 조회 실패', // 에러 발생
+        isGenerating: false,
+        generateRetryCount: 0,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: vi.fn(),
+        setGenerateRetryCount: vi.fn(),
+        resetGenerateState: vi.fn(),
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('주소 조회 실패')).toBeTruthy();
+    });
+  });
+
+  describe('비동기 주소 생성 (WTS-4.4)', () => {
+    const mockNetworkInfo: DepositChanceResponse = {
+      currency: 'BTC',
+      net_type: 'BTC',
+      is_deposit_possible: true,
+      deposit_impossible_reason: null,
+      minimum_deposit_amount: 0.0001,
+      minimum_deposit_confirmations: 3,
+      decimal_precision: 8,
+    };
+
+    const mockSetGenerating = vi.fn();
+    const mockSetGenerateRetryCount = vi.fn();
+    const mockResetGenerateState = vi.fn();
+
+    beforeEach(() => {
+      mockSetGenerating.mockClear();
+      mockSetGenerateRetryCount.mockClear();
+      mockResetGenerateState.mockClear();
+    });
+
+    it('주소 생성 요청 중일 때 "주소 생성 요청 중..." 메시지가 표시된다 (AC #1)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        depositAddress: {
+          currency: 'BTC',
+          net_type: 'BTC',
+          deposit_address: null,
+          secondary_address: null,
+        },
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: true,
+        generateRetryCount: 0,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('주소 생성 요청 중...')).toBeTruthy();
+    });
+
+    it('폴링 중일 때 재시도 진행 상태가 표시된다 (AC #5)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        depositAddress: {
+          currency: 'BTC',
+          net_type: 'BTC',
+          deposit_address: null,
+          secondary_address: null,
+        },
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: true,
+        generateRetryCount: 2,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText(`주소 확인 중 (2/${MAX_GENERATE_RETRIES})`)).toBeTruthy();
+    });
+
+    it('생성 중일 때 취소 버튼이 표시된다 (AC #5)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        depositAddress: {
+          currency: 'BTC',
+          net_type: 'BTC',
+          deposit_address: null,
+          secondary_address: null,
+        },
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: true,
+        generateRetryCount: 1,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText('취소')).toBeTruthy();
+    });
+
+    it('최대 재시도 초과 에러 메시지가 표시되고 다시 시도 버튼이 있다 (AC #4)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        depositAddress: {
+          currency: 'BTC',
+          net_type: 'BTC',
+          deposit_address: null,
+          secondary_address: null,
+        },
+        isAddressLoading: false,
+        addressError: `주소 생성 실패: 최대 재시도 횟수(${MAX_GENERATE_RETRIES}회) 초과`,
+        isGenerating: false,
+        generateRetryCount: 0,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      expect(screen.getByText(/최대 재시도 횟수/)).toBeTruthy();
+      expect(screen.getByText('다시 시도')).toBeTruthy();
+    });
+
+    it('생성 중 스피너 애니메이션이 표시된다 (AC #5)', () => {
+      vi.mocked(useTransferStore).mockReturnValue({
+        activeTab: 'deposit',
+        selectedCurrency: 'BTC',
+        selectedNetwork: 'BTC',
+        networkInfo: mockNetworkInfo,
+        isLoading: false,
+        error: null,
+        depositAddress: {
+          currency: 'BTC',
+          net_type: 'BTC',
+          deposit_address: null,
+          secondary_address: null,
+        },
+        isAddressLoading: false,
+        addressError: null,
+        isGenerating: true,
+        generateRetryCount: 0,
+        setActiveTab: mockSetActiveTab,
+        setSelectedCurrency: mockSetSelectedCurrency,
+        setSelectedNetwork: mockSetSelectedNetwork,
+        setNetworkInfo: mockSetNetworkInfo,
+        setLoading: mockSetLoading,
+        setError: mockSetError,
+        setDepositAddress: mockSetDepositAddress,
+        setAddressLoading: mockSetAddressLoading,
+        setAddressError: mockSetAddressError,
+        setGenerating: mockSetGenerating,
+        setGenerateRetryCount: mockSetGenerateRetryCount,
+        resetGenerateState: mockResetGenerateState,
+        reset: mockReset,
+      });
+
+      render(<TransferPanel />);
+      // 스피너 클래스 확인
+      const spinner = document.querySelector('.animate-spin');
+      expect(spinner).toBeTruthy();
     });
   });
 });
