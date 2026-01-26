@@ -143,10 +143,10 @@ describe('useConnectionCheck', () => {
 
     renderHook(() => useConnectionCheck());
 
-    await waitFor(() => {
-      expect(mockSetConnectionStatus).toHaveBeenCalledWith('disconnected');
-    });
+    // Advance timers to resolve pending promises
+    await vi.advanceTimersToNextTimerAsync();
 
+    expect(mockSetConnectionStatus).toHaveBeenCalledWith('disconnected');
     expect(timeoutSpy).toHaveBeenCalled();
     expect(timeoutSpy.mock.calls[0][1]).toBe(1000);
 

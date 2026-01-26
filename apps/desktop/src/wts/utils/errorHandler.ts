@@ -189,11 +189,21 @@ export function handleWithdrawError(
     errorMessage = getOrderErrorMessage(error.code, error.message);
     logDetail = error.detail ? { ...error.detail, code: error.code, message: error.message } : error;
   } else if (error instanceof Error) {
-    errorMessage = error.message;
     logDetail = { name: error.name, message: error.message };
+    if (isNetworkMessage(error.message)) {
+      errorCode = 'network_error';
+      errorMessage = getOrderErrorMessage(errorCode, error.message);
+    } else {
+      errorMessage = error.message;
+    }
   } else if (typeof error === 'string') {
-    errorMessage = error;
     logDetail = error;
+    if (isNetworkMessage(error)) {
+      errorCode = 'network_error';
+      errorMessage = getOrderErrorMessage(errorCode, error);
+    } else {
+      errorMessage = error;
+    }
   }
 
   if (isRateLimitError(errorCode)) {

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { WtsWindow } from '../WtsWindow';
 
 const {
@@ -82,7 +82,19 @@ vi.mock('../panels', () => ({
 }));
 
 vi.mock('../components/WithdrawConfirmDialog', () => ({
-  WithdrawConfirmDialog: ({ isOpen, onConfirm, onCancel }: { isOpen: boolean; onConfirm: () => void; onCancel: () => void }) =>
+  WithdrawConfirmDialog: ({
+    isOpen,
+    onConfirm,
+    onCancel,
+    retryable,
+    onRetry,
+  }: {
+    isOpen: boolean;
+    onConfirm: () => void;
+    onCancel: () => void;
+    retryable?: boolean;
+    onRetry?: () => void;
+  }) =>
     isOpen ? (
       <div>
         <button type="button" onClick={onConfirm}>
@@ -91,6 +103,11 @@ vi.mock('../components/WithdrawConfirmDialog', () => ({
         <button type="button" onClick={onCancel}>
           cancel-withdraw
         </button>
+        {retryable && onRetry && (
+          <button type="button" onClick={onRetry}>
+            retry-withdraw
+          </button>
+        )}
       </div>
     ) : null,
 }));
@@ -107,6 +124,283 @@ vi.mock('../components/WithdrawResultDialog', () => ({
 vi.mock('../components/ToastContainer', () => ({
   ToastContainer: () => null,
 }));
+
+const advanceRetryDelay = async () => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+};
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// WTS-5.6: withdrawWithRetry 헬퍼 테스트
+describe('withdrawWithRetry (WTS-5.6)', () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    mockAddLog.mockReset();
+    mockShowToast.mockReset();
+    mockFetchBalance.mockReset();
+  });
+
+  it('성공 시 재시도 없이 결과를 반환한다', async () => {
+    const mockResult = {
+      success: true,
+      data: {
+        type: 'withdraw',
+        uuid: 'withdraw-uuid-123',
+        currency: 'BTC',
+        net_type: 'BTC',
+        txid: null,
+        state: 'processing',
+        created_at: '2026-01-25T10:00:00Z',
+        done_at: null,
+        amount: '0.1',
+        fee: '0.0005',
+        transaction_type: 'default',
+      },
+    };
+    mockInvoke.mockResolvedValueOnce(mockResult);
+
+    render(<WtsWindow />);
+
+    fireEvent.click(screen.getByText('trigger-withdraw'));
+    fireEvent.click(screen.getByText('confirm-withdraw'));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    // 성공 로그 확인
+    await waitFor(() => {
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'SUCCESS',
+        'WITHDRAW',
+        expect.stringContaining('출금 요청 완료')
+      );
+    });
+
+    // 재시도 로그가 없어야 함
+    expect(mockAddLog).not.toHaveBeenCalledWith(
+      'INFO',
+      'WITHDRAW',
+      expect.stringContaining('재시도 중')
+    );
+  });
+
+  it('네트워크 에러 시 1회 자동 재시도를 수행하고 재시도 로그를 기록한다', async () => {
+    vi.useFakeTimers();
+    mockInvoke
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          type: 'withdraw',
+          uuid: 'withdraw-uuid-123',
+          currency: 'BTC',
+          net_type: 'BTC',
+          txid: null,
+          state: 'processing',
+          created_at: '2026-01-25T10:00:00Z',
+          done_at: null,
+          amount: '0.1',
+          fee: '0.0005',
+          transaction_type: 'default',
+        },
+      });
+
+    render(<WtsWindow />);
+
+    fireEvent.click(screen.getByText('trigger-withdraw'));
+    fireEvent.click(screen.getByText('confirm-withdraw'));
+
+    await advanceRetryDelay();
+
+    // 재시도 INFO 로그 확인 (AC #7)
+    await waitFor(() => {
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'WITHDRAW',
+        expect.stringContaining('재시도 중')
+      );
+    });
+
+    // 재시도 성공 로그 확인 (AC #8)
+    await waitFor(() => {
+      expect(mockAddLog).toHaveBeenCalledWith('SUCCESS', 'WITHDRAW', '재시도 성공');
+    });
+
+    // 총 2회 호출 확인
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('비네트워크 에러 시 재시도하지 않는다', async () => {
+    mockInvoke.mockResolvedValueOnce({
+      success: false,
+      error: { code: 'insufficient_funds_withdraw', message: '잔고 부족' },
+    });
+
+    render(<WtsWindow />);
+
+    fireEvent.click(screen.getByText('trigger-withdraw'));
+    fireEvent.click(screen.getByText('confirm-withdraw'));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    // 에러 처리 확인
+    await waitFor(() => {
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'ERROR',
+        'WITHDRAW',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    // 재시도 로그가 없어야 함
+    expect(mockAddLog).not.toHaveBeenCalledWith(
+      'INFO',
+      'WITHDRAW',
+      expect.stringContaining('재시도 중')
+    );
+  });
+
+  it('재시도 실패 시 에러 처리 흐름으로 전달된다', async () => {
+    vi.useFakeTimers();
+    mockInvoke
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      });
+
+    render(<WtsWindow />);
+
+    fireEvent.click(screen.getByText('trigger-withdraw'));
+    fireEvent.click(screen.getByText('confirm-withdraw'));
+
+    await advanceRetryDelay();
+
+    // 재시도 로그 확인
+    await waitFor(() => {
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'INFO',
+        'WITHDRAW',
+        expect.stringContaining('재시도 중')
+      );
+    });
+
+    // 총 2회 호출 확인 (원래 + 재시도 1회)
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+    });
+
+    // 재시도 성공 로그는 없어야 함
+    expect(mockAddLog).not.toHaveBeenCalledWith('SUCCESS', 'WITHDRAW', '재시도 성공');
+  });
+
+  it('자동 재시도 실패 후 수동 재시도 버튼이 표시된다 (AC #6)', async () => {
+    vi.useFakeTimers();
+    mockInvoke
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      });
+
+    render(<WtsWindow />);
+
+    fireEvent.click(screen.getByText('trigger-withdraw'));
+    fireEvent.click(screen.getByText('confirm-withdraw'));
+
+    await advanceRetryDelay();
+
+    // 자동 재시도 완료 대기
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+    });
+
+    // 수동 재시도 버튼 표시 확인
+    expect(screen.getByText('retry-withdraw')).toBeTruthy();
+  });
+});
+
+// WTS-5.6: 에러 메시지 및 통합 테스트
+describe('Withdraw error messages (WTS-5.6 AC #1-4)', () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    mockAddLog.mockReset();
+    mockShowToast.mockReset();
+    mockFetchBalance.mockReset();
+  });
+
+  it('네트워크 에러 시 한국어 에러 메시지가 토스트로 표시된다 (AC #1, #3)', async () => {
+    vi.useFakeTimers();
+    mockInvoke
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      });
+
+    render(<WtsWindow />);
+
+    fireEvent.click(screen.getByText('trigger-withdraw'));
+    fireEvent.click(screen.getByText('confirm-withdraw'));
+
+    await advanceRetryDelay();
+
+    // 에러 토스트 표시 확인
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith('error', expect.any(String));
+    });
+  });
+
+  it('네트워크 에러 시 콘솔에 ERROR 레벨로 기록된다 (AC #2)', async () => {
+    vi.useFakeTimers();
+    mockInvoke
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'network_error', message: 'test error' },
+      });
+
+    render(<WtsWindow />);
+
+    fireEvent.click(screen.getByText('trigger-withdraw'));
+    fireEvent.click(screen.getByText('confirm-withdraw'));
+
+    await advanceRetryDelay();
+
+    // ERROR 레벨 로그 확인
+    await waitFor(() => {
+      expect(mockAddLog).toHaveBeenCalledWith(
+        'ERROR',
+        'WITHDRAW',
+        expect.any(String),
+        expect.anything()
+      );
+    });
+  });
+});
 
 describe('WtsWindow withdraw flow', () => {
   beforeEach(() => {

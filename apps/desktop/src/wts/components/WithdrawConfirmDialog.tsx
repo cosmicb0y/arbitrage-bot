@@ -12,6 +12,12 @@ interface WithdrawConfirmDialogProps {
   onCancel: () => void;
   /** 로딩 상태 (API 호출 중) */
   isLoading?: boolean;
+  /** WTS-5.6: 재시도 가능 상태 */
+  retryable?: boolean;
+  /** WTS-5.6: 재시도 콜백 */
+  onRetry?: () => void;
+  /** WTS-5.6: 재시도 로딩 상태 */
+  retryLoading?: boolean;
 }
 
 /**
@@ -49,6 +55,9 @@ export function WithdrawConfirmDialog({
   onConfirm,
   onCancel,
   isLoading = false,
+  retryable = false,
+  onRetry,
+  retryLoading = false,
 }: WithdrawConfirmDialogProps) {
   const {
     currency,
@@ -257,7 +266,7 @@ export function WithdrawConfirmDialog({
         <div className="px-4 py-3 border-t border-wts flex gap-2">
           <button
             onClick={onCancel}
-            disabled={isLoading}
+            disabled={isLoading || retryLoading}
             className="flex-1 py-2 text-sm font-medium rounded
                        bg-wts-tertiary text-wts-muted
                        hover:bg-wts-secondary hover:text-wts-foreground
@@ -266,31 +275,52 @@ export function WithdrawConfirmDialog({
           >
             취소
           </button>
-          <button
-            onClick={handleConfirmClick}
-            disabled={!isConfirmEnabled || isLoading}
-            className="flex-1 py-2 text-sm font-medium rounded text-white
-                       bg-wts-accent hover:bg-wts-accent/80
-                       disabled:opacity-50 disabled:cursor-not-allowed
-                       transition-colors"
-          >
-            {isLoading ? (
-              <span className="inline-flex items-center justify-center gap-2">
-                <span
-                  data-testid="withdraw-loading-spinner"
-                  aria-hidden="true"
-                  className="animate-spin"
-                >
-                  ⏳
+          {/* WTS-5.6: 수동 재시도 버튼 (AC #6) */}
+          {retryable && onRetry ? (
+            <button
+              onClick={onRetry}
+              disabled={retryLoading}
+              className="flex-1 py-2 text-sm font-medium rounded text-white
+                         bg-yellow-600 hover:bg-yellow-500
+                         disabled:opacity-50 disabled:cursor-not-allowed
+                         transition-colors"
+            >
+              {retryLoading ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <span aria-hidden="true" className="animate-spin">⏳</span>
+                  재시도 중...
                 </span>
-                처리중...
-              </span>
-            ) : isConfirmEnabled ? (
-              '출금'
-            ) : (
-              `출금 (${countdown}초)`
-            )}
-          </button>
+              ) : (
+                '다시 시도'
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={handleConfirmClick}
+              disabled={!isConfirmEnabled || isLoading}
+              className="flex-1 py-2 text-sm font-medium rounded text-white
+                         bg-wts-accent hover:bg-wts-accent/80
+                         disabled:opacity-50 disabled:cursor-not-allowed
+                         transition-colors"
+            >
+              {isLoading ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <span
+                    data-testid="withdraw-loading-spinner"
+                    aria-hidden="true"
+                    className="animate-spin"
+                  >
+                    ⏳
+                  </span>
+                  처리중...
+                </span>
+              ) : isConfirmEnabled ? (
+                '출금'
+              ) : (
+                `출금 (${countdown}초)`
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -63,7 +63,7 @@ workflow_status:
     required: true
     workflows:
       - id: "prd"
-        status: "required"
+        status: "_bmad-output/planning-artifacts/prd.md"
         agent: "pm"
         command: "/bmad:bmm:workflows:prd"
         output: "Product Requirements Document with FRs and NFRs"
@@ -102,7 +102,7 @@ workflow_status:
     required: true
     workflows:
       - id: "sprint-planning"
-        status: "required"
+        status: "_bmad-output/implementation-artifacts/sprint-status.yaml"
         agent: "sm"
         command: "/bmad:bmm:workflows:sprint-planning"
         note: "Creates sprint plan - subsequent work tracked there"

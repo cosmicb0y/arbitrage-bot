@@ -6,9 +6,14 @@ import {
   WITHDRAW_ACTION_REQUIRED_ERRORS,
   WITHDRAW_LIMIT_ERRORS,
   WITHDRAW_ERROR_GUIDANCE,
+  NETWORK_ERROR_CODES,
+  NETWORK_ERROR_MESSAGES,
+  NETWORK_RETRYABLE_ERROR_CODES,
+  NETWORK_RETRYABLE_ERROR_MESSAGES,
   getOrderErrorMessage,
   isRateLimitError,
   isNetworkError,
+  isNetworkRetryableError,
   isDepositAvailable,
   isAddressGenerating,
   isWithdrawComplete,
@@ -809,6 +814,179 @@ describe('Withdraw Error Classification (WTS-5.5)', () => {
 
     it('알 수 없는 에러 코드는 false를 반환한다', () => {
       expect(isWithdrawLimitError('unknown_error')).toBe(false);
+    });
+  });
+});
+
+describe('Network Error Retry Helpers (WTS-5.6)', () => {
+  describe('NETWORK_ERROR_CODES', () => {
+    it('network_error가 포함되어 있다', () => {
+      expect(NETWORK_ERROR_CODES).toContain('network_error');
+    });
+
+    it('timeout_error가 포함되어 있다', () => {
+      expect(NETWORK_ERROR_CODES).toContain('timeout_error');
+    });
+
+    it('connection_error가 포함되어 있다', () => {
+      expect(NETWORK_ERROR_CODES).toContain('connection_error');
+    });
+  });
+
+  describe('NETWORK_ERROR_MESSAGES', () => {
+    it('network_error에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_ERROR_MESSAGES['network_error']).toBeDefined();
+      expect(NETWORK_ERROR_MESSAGES['network_error']).toContain('네트워크');
+    });
+
+    it('timeout_error에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_ERROR_MESSAGES['timeout_error']).toBeDefined();
+      expect(NETWORK_ERROR_MESSAGES['timeout_error']).toContain('시간');
+    });
+
+    it('connection_error에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_ERROR_MESSAGES['connection_error']).toBeDefined();
+      expect(NETWORK_ERROR_MESSAGES['connection_error']).toContain('연결');
+    });
+  });
+
+  describe('NETWORK_RETRYABLE_ERROR_CODES', () => {
+    it('network_error가 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('network_error');
+    });
+
+    it('timeout_error가 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('timeout_error');
+    });
+
+    it('connection_error가 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('connection_error');
+    });
+
+    it('timeout이 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('timeout');
+    });
+
+    it('connection_refused가 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('connection_refused');
+    });
+
+    it('connection_reset이 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('connection_reset');
+    });
+
+    it('econnrefused가 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('econnrefused');
+    });
+
+    it('econnreset이 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('econnreset');
+    });
+
+    it('etimedout이 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('etimedout');
+    });
+
+    it('enetunreach가 포함되어 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_CODES).toContain('enetunreach');
+    });
+  });
+
+  describe('isNetworkRetryableError', () => {
+    it('network_error는 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('network_error')).toBe(true);
+    });
+
+    it('timeout_error는 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('timeout_error')).toBe(true);
+    });
+
+    it('connection_error는 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('connection_error')).toBe(true);
+    });
+
+    it('timeout은 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('timeout')).toBe(true);
+    });
+
+    it('connection_refused는 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('connection_refused')).toBe(true);
+    });
+
+    it('connection_reset은 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('connection_reset')).toBe(true);
+    });
+
+    it('econnrefused는 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('econnrefused')).toBe(true);
+    });
+
+    it('econnreset은 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('econnreset')).toBe(true);
+    });
+
+    it('etimedout은 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('etimedout')).toBe(true);
+    });
+
+    it('enetunreach는 재시도 가능하다', () => {
+      expect(isNetworkRetryableError('enetunreach')).toBe(true);
+    });
+
+    it('insufficient_funds_withdraw는 재시도 불가능하다', () => {
+      expect(isNetworkRetryableError('insufficient_funds_withdraw')).toBe(false);
+    });
+
+    it('two_factor_auth_required는 재시도 불가능하다', () => {
+      expect(isNetworkRetryableError('two_factor_auth_required')).toBe(false);
+    });
+
+    it('대소문자 구분 없이 동작한다', () => {
+      expect(isNetworkRetryableError('TIMEOUT')).toBe(true);
+      expect(isNetworkRetryableError('Network_Error')).toBe(true);
+      expect(isNetworkRetryableError('ECONNREFUSED')).toBe(true);
+    });
+  });
+
+  describe('NETWORK_RETRYABLE_ERROR_MESSAGES', () => {
+    it('network_error에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['network_error']).toBeDefined();
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['network_error']).toContain('네트워크');
+    });
+
+    it('timeout에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['timeout']).toBeDefined();
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['timeout']).toContain('시간');
+    });
+
+    it('connection_refused에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['connection_refused']).toBeDefined();
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['connection_refused']).toContain('연결');
+    });
+
+    it('connection_reset에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['connection_reset']).toBeDefined();
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['connection_reset']).toContain('끊어');
+    });
+
+    it('econnrefused에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['econnrefused']).toBeDefined();
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['econnrefused']).toContain('연결');
+    });
+
+    it('econnreset에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['econnreset']).toBeDefined();
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['econnreset']).toContain('끊어');
+    });
+
+    it('etimedout에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['etimedout']).toBeDefined();
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['etimedout']).toContain('시간');
+    });
+
+    it('enetunreach에 대한 한국어 메시지가 있다', () => {
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['enetunreach']).toBeDefined();
+      expect(NETWORK_RETRYABLE_ERROR_MESSAGES['enetunreach']).toContain('네트워크');
     });
   });
 });

@@ -444,6 +444,67 @@ export function isNetworkError(code: string): boolean {
 }
 
 // ============================================================================
+// Network Error Codes (WTS-5.6)
+// ============================================================================
+
+/**
+ * 네트워크 에러 코드
+ * - Upbit API 표준 에러 코드
+ * - 시스템 네트워크 에러 코드
+ */
+export const NETWORK_ERROR_CODES = [
+  'network_error',
+  'timeout_error',
+  'connection_error',
+  'timeout',
+  'connection_refused',
+  'connection_reset',
+  'econnrefused',
+  'econnreset',
+  'etimedout',
+  'enetunreach',
+] as const;
+
+export type NetworkErrorCode = (typeof NETWORK_ERROR_CODES)[number];
+
+/**
+ * 네트워크 에러별 한국어 메시지
+ */
+export const NETWORK_ERROR_MESSAGES: Record<NetworkErrorCode, string> = {
+  network_error: '네트워크 연결을 확인하세요.',
+  timeout_error: '요청 시간이 초과되었습니다. 네트워크 상태를 확인하세요.',
+  connection_error: '서버에 연결할 수 없습니다. 네트워크 상태를 확인하세요.',
+  timeout: '요청 시간이 초과되었습니다. 다시 시도하세요.',
+  connection_refused: '서버에 연결할 수 없습니다.',
+  connection_reset: '연결이 끊어졌습니다. 다시 시도하세요.',
+  econnrefused: '서버에 연결할 수 없습니다.',
+  econnreset: '연결이 끊어졌습니다.',
+  etimedout: '요청 시간이 초과되었습니다.',
+  enetunreach: '네트워크에 연결할 수 없습니다.',
+};
+
+/**
+ * 재시도 가능한 네트워크 에러 코드 (WTS-5.6)
+ * NETWORK_ERROR_CODES와 동일 (호환 유지)
+ */
+export const NETWORK_RETRYABLE_ERROR_CODES = NETWORK_ERROR_CODES;
+
+/**
+ * 재시도 가능한 네트워크 에러별 한국어 메시지 (WTS-5.6)
+ * NETWORK_ERROR_MESSAGES와 동일 (호환 유지)
+ */
+export const NETWORK_RETRYABLE_ERROR_MESSAGES = NETWORK_ERROR_MESSAGES;
+
+/**
+ * 재시도 가능한 네트워크 에러인지 확인
+ * @param code 에러 코드
+ * @returns 재시도 가능 여부
+ */
+export function isNetworkRetryableError(code: string): boolean {
+  return NETWORK_ERROR_CODES.includes(code.toLowerCase() as NetworkErrorCode);
+}
+
+// ============================================================================
 // Withdraw Error Classification (WTS-5.5)
 // ============================================================================
 
