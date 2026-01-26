@@ -408,12 +408,15 @@ pub async fn generate_deposit_address(
 ) -> Result<GenerateAddressResponse, UpbitApiError> {
     let (access_key, secret_key) = load_api_keys()?;
 
-    // JSON 바디 생성
+    // JSON 바디 생성 (POST 요청에 사용)
     let body = serde_json::to_string(&params)
         .map_err(|e| UpbitApiError::ParseError(e.to_string()))?;
 
-    // 쿼리 해시 포함 JWT 생성
-    let token = generate_jwt_token_with_query(&access_key, &secret_key, &body)
+    // Query string 형식으로 변환 (JWT 해시에 사용)
+    let query_string = format!("currency={}&net_type={}", params.currency, params.net_type);
+
+    // Query string으로 JWT 생성 (Upbit API 요구사항)
+    let token = generate_jwt_token_with_query(&access_key, &secret_key, &query_string)
         .map_err(UpbitApiError::JwtError)?;
 
     let client = reqwest::Client::builder()
@@ -848,6 +851,17 @@ pub async fn get_withdraw(params: GetWithdrawParams) -> Result<WithdrawResponse,
         .json::<WithdrawResponse>()
         .await
         .map_err(|e| UpbitApiError::ParseError(e.to_string()))
+}
+
+/// Upbit WebSocket 연결용 JWT 토큰을 생성합니다.
+///
+/// # Returns
+/// * `Ok(String)` - 생성된 JWT 토큰
+/// * `Err(UpbitApiError)` - API 키 로드 또는 토큰 생성 실패 시 에러
+pub async fn generate_ws_token() -> Result<String, UpbitApiError> {
+    let (access_key, secret_key) = load_api_keys()?;
+
+    generate_jwt_token(&access_key, &secret_key).map_err(UpbitApiError::JwtError)
 }
 
 /// Upbit API 연결 상태를 확인합니다.
