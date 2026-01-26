@@ -147,7 +147,7 @@ export function WtsWindow() {
     (params: WithdrawParams) => {
       if (!withdrawChanceInfo) return;
 
-      const fee = withdrawChanceInfo.currency_info.withdraw_fee;
+      const fee = withdrawChanceInfo.currency.withdraw_fee;
       const amount = parseFloat(params.amount);
       const feeNum = parseFloat(fee);
       const receivable = (amount - feeNum).toFixed(

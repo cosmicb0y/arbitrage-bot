@@ -734,6 +734,7 @@ export interface WithdrawMemberLevel {
   bank_account_verified: boolean;
   two_factor_auth_verified: boolean;
   locked: boolean;
+  wallet_locked: boolean;
 }
 
 /** 자산 정보 (출금용) */
@@ -747,6 +748,7 @@ export interface WithdrawCurrencyInfo {
 
 /** 계좌 정보 (출금용) */
 export interface WithdrawAccountInfo {
+  currency: string;
   balance: string;
   locked: string;
   avg_buy_price: string;
@@ -768,11 +770,9 @@ export interface WithdrawLimitInfo {
 
 /** 출금 가능 정보 응답 */
 export interface WithdrawChanceResponse {
-  currency: string;
-  net_type: string;
   member_level: WithdrawMemberLevel;
-  currency_info: WithdrawCurrencyInfo;
-  account_info: WithdrawAccountInfo;
+  currency: WithdrawCurrencyInfo;
+  account: WithdrawAccountInfo;
   withdraw_limit: WithdrawLimitInfo;
 }
 

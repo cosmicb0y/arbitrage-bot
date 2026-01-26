@@ -60,7 +60,7 @@ vi.mock('../stores/transferStore', () => ({
   useTransferStore: vi.fn((selector) =>
     selector({
       withdrawChanceInfo: {
-        currency_info: { withdraw_fee: '0.0005' },
+        currency: { withdraw_fee: '0.0005' },
         withdraw_limit: { fixed: 8 },
       },
     })

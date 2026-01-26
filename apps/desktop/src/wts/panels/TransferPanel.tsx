@@ -545,8 +545,8 @@ export function TransferPanel({ className = '', onWithdrawClick }: TransferPanel
     (percent: number) => {
       if (!withdrawChanceInfo) return;
 
-      const balance = parseFloat(withdrawChanceInfo.account_info.balance);
-      const locked = parseFloat(withdrawChanceInfo.account_info.locked);
+      const balance = parseFloat(withdrawChanceInfo.account.balance);
+      const locked = parseFloat(withdrawChanceInfo.account.locked);
       const available = balance - locked;
 
       if (available <= 0) {
@@ -595,8 +595,8 @@ export function TransferPanel({ className = '', onWithdrawClick }: TransferPanel
     const amount = parseFloat(withdrawAmount);
     const minimum = parseFloat(withdrawChanceInfo.withdraw_limit.minimum);
     const available =
-      parseFloat(withdrawChanceInfo.account_info.balance) -
-      parseFloat(withdrawChanceInfo.account_info.locked);
+      parseFloat(withdrawChanceInfo.account.balance) -
+      parseFloat(withdrawChanceInfo.account.locked);
 
     if (amount < minimum) return false;
     if (amount > available) return false;
@@ -611,7 +611,7 @@ export function TransferPanel({ className = '', onWithdrawClick }: TransferPanel
     const amount = parseFloat(withdrawAmount);
     if (isNaN(amount) || amount <= 0) return null;
 
-    const fee = parseFloat(withdrawChanceInfo.currency_info.withdraw_fee);
+    const fee = parseFloat(withdrawChanceInfo.currency.withdraw_fee);
     const result = amount - fee;
 
     return result > 0
@@ -973,9 +973,9 @@ export function TransferPanel({ className = '', onWithdrawClick }: TransferPanel
                         <span>출금 불가</span>
                       </div>
                       <div className="text-red-300">
-                        {withdrawChanceInfo.currency_info.wallet_state === 'paused'
+                        {withdrawChanceInfo.currency.wallet_state === 'paused'
                           ? '지갑 점검 중입니다'
-                          : withdrawChanceInfo.currency_info.wallet_state === 'suspended'
+                          : withdrawChanceInfo.currency.wallet_state === 'suspended'
                           ? '출금이 일시 중단되었습니다'
                           : '현재 출금이 불가능합니다'}
                       </div>
@@ -988,50 +988,50 @@ export function TransferPanel({ className = '', onWithdrawClick }: TransferPanel
                       <span className="text-wts-muted">출금 가능 잔고</span>
                       <span className="text-wts-foreground font-mono">
                         {(
-                          parseFloat(withdrawChanceInfo.account_info.balance) -
-                          parseFloat(withdrawChanceInfo.account_info.locked)
+                          parseFloat(withdrawChanceInfo.account.balance) -
+                          parseFloat(withdrawChanceInfo.account.locked)
                         ).toFixed(withdrawChanceInfo.withdraw_limit.fixed)}{' '}
-                        {withdrawChanceInfo.currency}
+                        {withdrawChanceInfo.currency.code}
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-wts-muted">출금 수수료</span>
                       <span className="text-wts-foreground font-mono">
-                        {withdrawChanceInfo.currency_info.withdraw_fee}{' '}
-                        {withdrawChanceInfo.currency}
+                        {withdrawChanceInfo.currency.withdraw_fee}{' '}
+                        {withdrawChanceInfo.currency.code}
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-wts-muted">최소 출금</span>
                       <span className="text-wts-foreground font-mono">
                         {withdrawChanceInfo.withdraw_limit.minimum}{' '}
-                        {withdrawChanceInfo.currency}
+                        {withdrawChanceInfo.currency.code}
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-wts-muted">1회 최대</span>
                       <span className="text-wts-foreground font-mono">
                         {withdrawChanceInfo.withdraw_limit.onetime}{' '}
-                        {withdrawChanceInfo.currency}
+                        {withdrawChanceInfo.currency.code}
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-wts-muted">일일 잔여 한도</span>
                       <span className="text-wts-foreground font-mono">
                         {withdrawChanceInfo.withdraw_limit.remaining_daily}{' '}
-                        {withdrawChanceInfo.currency}
+                        {withdrawChanceInfo.currency.code}
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-wts-muted">지갑 상태</span>
                       <span
                         className={
-                          withdrawChanceInfo.currency_info.wallet_state === 'working'
+                          withdrawChanceInfo.currency.wallet_state === 'working'
                             ? 'text-green-500'
                             : 'text-red-500'
                         }
                       >
-                        {withdrawChanceInfo.currency_info.wallet_state === 'working'
+                        {withdrawChanceInfo.currency.wallet_state === 'working'
                           ? '정상'
                           : '중단'}
                       </span>
@@ -1135,12 +1135,12 @@ export function TransferPanel({ className = '', onWithdrawClick }: TransferPanel
                             parseFloat(withdrawChanceInfo.withdraw_limit.minimum) && (
                             <div className="mt-1 text-red-400 text-xs">
                               최소 출금 수량은 {withdrawChanceInfo.withdraw_limit.minimum}{' '}
-                              {withdrawChanceInfo.currency} 입니다
+                              {withdrawChanceInfo.currency.code} 입니다
                             </div>
                           )}
                           {parseFloat(withdrawAmount) >
-                            parseFloat(withdrawChanceInfo.account_info.balance) -
-                              parseFloat(withdrawChanceInfo.account_info.locked) && (
+                            parseFloat(withdrawChanceInfo.account.balance) -
+                              parseFloat(withdrawChanceInfo.account.locked) && (
                             <div className="mt-1 text-red-400 text-xs">
                               출금 가능 잔고를 초과했습니다
                             </div>
@@ -1162,7 +1162,7 @@ export function TransferPanel({ className = '', onWithdrawClick }: TransferPanel
                               : 'text-red-400'
                           }`}
                         >
-                          {receivableAmount() || '0'} {withdrawChanceInfo.currency}
+                          {receivableAmount() || '0'} {withdrawChanceInfo.currency.code}
                         </span>
                       </div>
                       {receivableAmount() &&

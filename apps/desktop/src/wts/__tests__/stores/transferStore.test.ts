@@ -400,8 +400,6 @@ describe('useTransferStore', () => {
     });
 
     const mockWithdrawChanceInfo: WithdrawChanceResponse = {
-      currency: 'BTC',
-      net_type: 'BTC',
       member_level: {
         security_level: 3,
         fee_level: 0,
@@ -410,15 +408,17 @@ describe('useTransferStore', () => {
         bank_account_verified: true,
         two_factor_auth_verified: true,
         locked: false,
+        wallet_locked: false,
       },
-      currency_info: {
+      currency: {
         code: 'BTC',
         withdraw_fee: '0.0005',
         is_coin: true,
         wallet_state: 'working',
         wallet_support: ['default'],
       },
-      account_info: {
+      account: {
+        currency: 'BTC',
         balance: '1.5',
         locked: '0.1',
         avg_buy_price: '50000000',
