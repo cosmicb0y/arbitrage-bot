@@ -474,11 +474,16 @@ export function TransferPanel({ className = '', onWithdrawClick }: TransferPanel
         );
 
         if (result.success && result.data) {
-          setWithdrawAddresses(result.data);
+          // Upbit API는 쿼리 파라미터와 관계없이 모든 등록된 주소를 반환하므로
+          // 선택된 currency와 netType에 맞는 주소만 필터링
+          const filteredAddresses = result.data.filter(
+            (addr) => addr.currency === currency && addr.net_type === netType
+          );
+          setWithdrawAddresses(filteredAddresses);
           addLog(
             'INFO',
             'WITHDRAW',
-            `등록된 출금 주소 ${result.data.length}개 조회 완료`
+            `등록된 출금 주소 ${filteredAddresses.length}개 조회 완료`
           );
         } else {
           // 주소가 없는 경우 빈 배열로 설정
