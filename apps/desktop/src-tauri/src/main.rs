@@ -82,6 +82,9 @@ fn main() {
             wts::wts_get_withdraw_chance,
             wts::wts_get_withdraw_addresses,
             wts::wts_get_withdraw,
+            wts::wts_generate_ws_token,
+            wts::wts_start_myorder_ws,
+            wts::wts_stop_myorder_ws,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

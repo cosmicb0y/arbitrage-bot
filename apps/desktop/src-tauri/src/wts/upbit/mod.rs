@@ -4,7 +4,9 @@
 
 pub mod auth;
 pub mod client;
+pub mod myorder_ws;
 pub mod types;
 
 pub use client::*;
+pub use myorder_ws::{start_myorder_ws, stop_myorder_ws};
 pub use types::*;

@@ -232,3 +232,51 @@ pub async fn wts_get_withdraw(params: GetWithdrawParams) -> WtsApiResult<Withdra
         Err(e) => WtsApiResult::err(e),
     }
 }
+
+/// Upbit WebSocket 연결용 JWT 토큰을 생성합니다.
+///
+/// # Returns
+/// * `WtsApiResult<String>` - 성공 시 WebSocket 토큰, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_generate_ws_token() -> WtsApiResult<String> {
+    match upbit::generate_ws_token().await {
+        Ok(token) => WtsApiResult::ok(token),
+        Err(e) => WtsApiResult::err(e),
+    }
+}
+
+// ============================================================================
+// myOrder WebSocket Commands (Rust-based WebSocket for private API)
+// ============================================================================
+
+/// Upbit myOrder WebSocket 연결을 시작합니다.
+///
+/// 브라우저 WebSocket API는 커스텀 HTTP 헤더를 지원하지 않으므로,
+/// Rust에서 WebSocket 연결을 관리하고 Tauri 이벤트로 메시지를 전달합니다.
+///
+/// # Events emitted:
+/// - `wts:myorder:status` - 연결 상태 ("connected", "disconnected", "error")
+/// - `wts:myorder:message` - 주문 업데이트 메시지 (JSON 문자열)
+/// - `wts:myorder:error` - 에러 메시지
+///
+/// # Returns
+/// * `WtsApiResult<()>` - 성공 시 빈 값, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_start_myorder_ws(app: tauri::AppHandle) -> WtsApiResult<()> {
+    match upbit::start_myorder_ws(app).await {
+        Ok(()) => WtsApiResult::ok(()),
+        Err(e) => WtsApiResult::err_message(e),
+    }
+}
+
+/// Upbit myOrder WebSocket 연결을 중지합니다.
+///
+/// # Returns
+/// * `WtsApiResult<()>` - 성공 시 빈 값, 실패 시 에러 정보
+#[tauri::command]
+pub async fn wts_stop_myorder_ws() -> WtsApiResult<()> {
+    match upbit::stop_myorder_ws().await {
+        Ok(()) => WtsApiResult::ok(()),
+        Err(e) => WtsApiResult::err_message(e),
+    }
+}
