@@ -172,6 +172,19 @@ impl<T> WtsApiResult<T> {
             }),
         }
     }
+
+    /// 문자열 에러 메시지로 에러 응답 생성
+    pub fn err_message(message: String) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(WtsApiErrorResponse {
+                code: "error".to_string(),
+                message,
+                detail: None,
+            }),
+        }
+    }
 }
 
 // ============================================================================

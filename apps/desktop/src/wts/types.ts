@@ -360,6 +360,45 @@ export interface UpbitOrderbookResponse {
 }
 
 // ============================================================================
+// MyOrder WebSocket Types (Open Orders)
+// ============================================================================
+
+/** Upbit myOrder WebSocket 주문 상태 */
+export type UpbitMyOrderState = 'wait' | 'trade' | 'done' | 'cancel';
+
+/** Upbit myOrder WebSocket 응답 */
+export interface UpbitMyOrderResponse {
+  /** 응답 타입 (항상 'myOrder') */
+  type: 'myOrder';
+  /** 주문 고유 식별자 */
+  uuid: string;
+  /** 주문 방향: bid(매수) | ask(매도) */
+  side: 'ask' | 'bid';
+  /** 주문 유형: limit, price, market */
+  ord_type: string;
+  /** 주문 가격 */
+  price: number;
+  /** 주문 상태 */
+  state: UpbitMyOrderState;
+  /** 마켓 코드 (예: KRW-BTC) */
+  market: string;
+  /** 주문 수량 */
+  volume: number;
+  /** 미체결 수량 */
+  remaining_volume: number;
+  /** 체결 수량 */
+  executed_volume: number;
+  /** 체결 평균가 */
+  avg_price: number;
+  /** 체결 횟수 */
+  trades_count: number;
+  /** 주문 생성 시각 (타임스탬프 ms) */
+  order_timestamp: number;
+  /** 이벤트 발생 시각 (타임스탬프 ms) */
+  timestamp: number;
+}
+
+// ============================================================================
 // Order Error Codes (Upbit)
 // ============================================================================
 

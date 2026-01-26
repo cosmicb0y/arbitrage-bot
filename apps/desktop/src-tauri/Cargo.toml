@@ -17,6 +17,7 @@ tauri-plugin-shell = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
+native-tls = "0.2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
