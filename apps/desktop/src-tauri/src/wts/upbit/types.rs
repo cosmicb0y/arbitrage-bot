@@ -403,15 +403,13 @@ pub struct WithdrawChanceParams {
 /// 출금 가능 정보 응답
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WithdrawChanceResponse {
-    /// 자산 코드
-    pub currency: String,
-    /// 네트워크 타입
-    pub net_type: String,
     /// 회원 레벨 정보
     pub member_level: WithdrawMemberLevel,
-    /// 자산 정보
+    /// 자산 정보 (API 필드명: "currency")
+    #[serde(rename = "currency")]
     pub currency_info: WithdrawCurrencyInfo,
-    /// 계좌 정보
+    /// 계좌 정보 (API 필드명: "account")
+    #[serde(rename = "account")]
     pub account_info: WithdrawAccountInfo,
     /// 출금 한도 정보
     pub withdraw_limit: WithdrawLimitInfo,
@@ -427,6 +425,7 @@ pub struct WithdrawMemberLevel {
     pub bank_account_verified: bool,
     pub two_factor_auth_verified: bool,
     pub locked: bool,
+    pub wallet_locked: bool,
 }
 
 /// 자산 정보 (출금용)
@@ -442,6 +441,7 @@ pub struct WithdrawCurrencyInfo {
 /// 계좌 정보 (출금용)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WithdrawAccountInfo {
+    pub currency: String,
     pub balance: String,
     pub locked: String,
     pub avg_buy_price: String,
@@ -1136,9 +1136,8 @@ mod tests {
 
     #[test]
     fn test_withdraw_chance_response_deserialize() {
+        // 실제 Upbit API 응답 구조에 맞춤
         let json = r#"{
-            "currency": "BTC",
-            "net_type": "BTC",
             "member_level": {
                 "security_level": 3,
                 "fee_level": 1,
@@ -1146,16 +1145,18 @@ mod tests {
                 "identity_auth_verified": true,
                 "bank_account_verified": true,
                 "two_factor_auth_verified": true,
-                "locked": false
+                "locked": false,
+                "wallet_locked": false
             },
-            "currency_info": {
+            "currency": {
                 "code": "BTC",
                 "withdraw_fee": "0.0005",
                 "is_coin": true,
                 "wallet_state": "working",
                 "wallet_support": ["deposit", "withdraw"]
             },
-            "account_info": {
+            "account": {
+                "currency": "BTC",
                 "balance": "1.0",
                 "locked": "0.0",
                 "avg_buy_price": "50000000",
@@ -1175,21 +1176,21 @@ mod tests {
         }"#;
 
         let response: WithdrawChanceResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.currency, "BTC");
-        assert_eq!(response.net_type, "BTC");
 
         // member_level
         assert_eq!(response.member_level.security_level, 3);
         assert!(response.member_level.two_factor_auth_verified);
         assert!(!response.member_level.locked);
+        assert!(!response.member_level.wallet_locked);
 
-        // currency_info
+        // currency_info (API 필드명: "currency")
         assert_eq!(response.currency_info.code, "BTC");
         assert_eq!(response.currency_info.withdraw_fee, "0.0005");
         assert!(response.currency_info.is_coin);
         assert_eq!(response.currency_info.wallet_state, "working");
 
-        // account_info
+        // account_info (API 필드명: "account")
+        assert_eq!(response.account_info.currency, "BTC");
         assert_eq!(response.account_info.balance, "1.0");
         assert_eq!(response.account_info.locked, "0.0");
 

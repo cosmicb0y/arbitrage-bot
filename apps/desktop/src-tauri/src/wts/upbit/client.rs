@@ -570,6 +570,12 @@ pub async fn withdraw_coin(params: WithdrawParams) -> Result<WithdrawResponse, U
 pub async fn get_withdraw_chance(
     params: WithdrawChanceParams,
 ) -> Result<WithdrawChanceResponse, UpbitApiError> {
+    tracing::info!(
+        "[DEBUG] get_withdraw_chance: CALLED with currency={}, net_type={}",
+        params.currency,
+        params.net_type
+    );
+
     let (access_key, secret_key) = load_api_keys()?;
 
     // 쿼리 문자열 생성
@@ -594,6 +600,10 @@ pub async fn get_withdraw_chance(
 
     // Rate Limit 체크 (HTTP 429)
     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        tracing::warn!(
+            "[DEBUG] get_withdraw_chance: RATE LIMITED - remaining_req: {:?}",
+            extract_remaining_req(response.headers())
+        );
         return Err(UpbitApiError::RateLimitExceeded {
             remaining_req: extract_remaining_req(response.headers()),
         });
@@ -607,14 +617,43 @@ pub async fn get_withdraw_chance(
             .await
             .unwrap_or_else(|_| serde_json::json!({}));
 
+        tracing::warn!(
+            "[DEBUG] get_withdraw_chance: API error - status: {}, body: {}",
+            status,
+            error_body
+        );
+
         return Err(parse_upbit_error(status, error_body));
     }
 
-    // 성공 응답 파싱
-    response
-        .json::<WithdrawChanceResponse>()
+    // 성공 응답 파싱 - raw body 로깅 추가
+    let body_text = response
+        .text()
         .await
-        .map_err(|e| UpbitApiError::ParseError(e.to_string()))
+        .map_err(|e| UpbitApiError::ParseError(e.to_string()))?;
+
+    tracing::info!(
+        "[DEBUG] get_withdraw_chance: RAW RESPONSE - {}",
+        &body_text[..body_text.len().min(500)]
+    );
+
+    let result: Result<WithdrawChanceResponse, _> = serde_json::from_str(&body_text).map_err(|e| {
+        UpbitApiError::ParseError(format!(
+            "{}: {}",
+            e,
+            &body_text[..body_text.len().min(200)]
+        ))
+    });
+
+    match &result {
+        Ok(data) => tracing::info!(
+            "[DEBUG] get_withdraw_chance: SUCCESS - member_level: {:?}",
+            data.member_level
+        ),
+        Err(e) => tracing::warn!("[DEBUG] get_withdraw_chance: PARSE ERROR - {:?}", e),
+    }
+
+    result
 }
 
 /// Upbit에 등록된 출금 허용 주소 목록을 조회합니다.
@@ -628,6 +667,12 @@ pub async fn get_withdraw_chance(
 pub async fn get_withdraw_addresses(
     params: WithdrawChanceParams,
 ) -> Result<Vec<WithdrawAddressResponse>, UpbitApiError> {
+    tracing::info!(
+        "[DEBUG] get_withdraw_addresses: CALLED with currency={}, net_type={}",
+        params.currency,
+        params.net_type
+    );
+
     let (access_key, secret_key) = load_api_keys()?;
 
     // 쿼리 문자열 생성
@@ -665,14 +710,33 @@ pub async fn get_withdraw_addresses(
             .await
             .unwrap_or_else(|_| serde_json::json!({}));
 
+        tracing::warn!(
+            "[DEBUG] get_withdraw_addresses: API error - status: {}, body: {}",
+            status,
+            error_body
+        );
+
         return Err(parse_upbit_error(status, error_body));
     }
 
-    // 성공 응답 파싱
-    response
-        .json::<Vec<WithdrawAddressResponse>>()
+    // 성공 응답 파싱 (디버그 로깅 포함)
+    let body_text = response
+        .text()
         .await
-        .map_err(|e| UpbitApiError::ParseError(e.to_string()))
+        .map_err(|e| UpbitApiError::NetworkError(e.to_string()))?;
+
+    tracing::info!(
+        "[DEBUG] get_withdraw_addresses: raw response (first 1000 chars):\n{}",
+        &body_text[..body_text.len().min(1000)]
+    );
+
+    serde_json::from_str::<Vec<WithdrawAddressResponse>>(&body_text).map_err(|e| {
+        tracing::error!(
+            "[DEBUG] get_withdraw_addresses: parse error: {}\nBody was: {}",
+            e, body_text
+        );
+        UpbitApiError::ParseError(e.to_string())
+    })
 }
 
 /// Upbit 출금 상태를 조회합니다.
