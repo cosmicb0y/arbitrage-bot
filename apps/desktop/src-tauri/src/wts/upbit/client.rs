@@ -212,6 +212,41 @@ pub async fn get_balance() -> Result<Vec<BalanceEntry>, UpbitApiError> {
         .map_err(|e| UpbitApiError::ParseError(e.to_string()))
 }
 
+/// OrderParams를 Upbit API query string 형식으로 변환합니다.
+///
+/// Upbit API는 JWT 해시 생성 시 JSON이 아닌 query string 형식을 요구합니다.
+/// 파라미터 순서: market → side → volume(옵션) → price(옵션) → ord_type
+fn order_params_to_query_string(params: &OrderParams) -> String {
+    let side_str = match params.side {
+        super::types::OrderSide::Bid => "bid",
+        super::types::OrderSide::Ask => "ask",
+    };
+    let ord_type_str = match params.ord_type {
+        super::types::UpbitOrderType::Limit => "limit",
+        super::types::UpbitOrderType::Price => "price",
+        super::types::UpbitOrderType::Market => "market",
+    };
+
+    let mut parts = vec![
+        format!("market={}", params.market),
+        format!("side={}", side_str),
+    ];
+
+    // volume은 지정가/시장가 매도에서 사용
+    if let Some(ref volume) = params.volume {
+        parts.push(format!("volume={}", volume));
+    }
+
+    // price는 지정가/시장가 매수에서 사용
+    if let Some(ref price) = params.price {
+        parts.push(format!("price={}", price));
+    }
+
+    parts.push(format!("ord_type={}", ord_type_str));
+
+    parts.join("&")
+}
+
 /// Upbit 주문을 실행합니다.
 ///
 /// # Arguments
@@ -223,15 +258,18 @@ pub async fn get_balance() -> Result<Vec<BalanceEntry>, UpbitApiError> {
 pub async fn place_order(params: OrderParams) -> Result<OrderResponse, UpbitApiError> {
     let (access_key, secret_key) = load_api_keys()?;
 
-    // JSON 바디 생성
+    // JSON 바디 생성 (POST 요청에 사용)
     let body = serde_json::to_string(&params)
         .map_err(|e| UpbitApiError::ParseError(e.to_string()))?;
+
+    // Query string 형식으로 변환 (JWT 해시에 사용)
+    let query_string = order_params_to_query_string(&params);
 
     // Rate Limit(8회/초) 준수
     enforce_order_rate_limit().await;
 
-    // 쿼리 해시 포함 JWT 생성
-    let token = generate_jwt_token_with_query(&access_key, &secret_key, &body)
+    // Query string으로 JWT 생성 (Upbit API 요구사항)
+    let token = generate_jwt_token_with_query(&access_key, &secret_key, &query_string)
         .map_err(UpbitApiError::JwtError)?;
 
     let client = reqwest::Client::builder()
@@ -1089,5 +1127,60 @@ mod tests {
         let result = get_withdraw(params).await;
 
         assert!(matches!(result, Err(UpbitApiError::MissingApiKey)));
+    }
+
+    // ============================================================================
+    // Order Query String Tests
+    // ============================================================================
+
+    #[test]
+    fn test_order_params_to_query_string_limit_bid() {
+        // 지정가 매수: market, side, volume, price, ord_type
+        let params = OrderParams {
+            market: "KRW-BTC".to_string(),
+            side: OrderSide::Bid,
+            volume: Some("0.01".to_string()),
+            price: Some("100000000".to_string()),
+            ord_type: UpbitOrderType::Limit,
+        };
+
+        let query = super::order_params_to_query_string(&params);
+        assert_eq!(
+            query,
+            "market=KRW-BTC&side=bid&volume=0.01&price=100000000&ord_type=limit"
+        );
+    }
+
+    #[test]
+    fn test_order_params_to_query_string_market_bid() {
+        // 시장가 매수: market, side, price (총액), ord_type
+        let params = OrderParams {
+            market: "KRW-BTC".to_string(),
+            side: OrderSide::Bid,
+            volume: None,
+            price: Some("10000".to_string()),
+            ord_type: UpbitOrderType::Price,
+        };
+
+        let query = super::order_params_to_query_string(&params);
+        assert_eq!(query, "market=KRW-BTC&side=bid&price=10000&ord_type=price");
+    }
+
+    #[test]
+    fn test_order_params_to_query_string_market_ask() {
+        // 시장가 매도: market, side, volume, ord_type
+        let params = OrderParams {
+            market: "KRW-BTC".to_string(),
+            side: OrderSide::Ask,
+            volume: Some("0.01".to_string()),
+            price: None,
+            ord_type: UpbitOrderType::Market,
+        };
+
+        let query = super::order_params_to_query_string(&params);
+        assert_eq!(
+            query,
+            "market=KRW-BTC&side=ask&volume=0.01&ord_type=market"
+        );
     }
 }
